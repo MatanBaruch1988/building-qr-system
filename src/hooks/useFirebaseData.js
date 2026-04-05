@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import { db, functions, auth } from '../services/firebase'
+import { db, auth } from '../services/firebase'
 import { collection, onSnapshot } from 'firebase/firestore'
-import { httpsCallable } from 'firebase/functions'
 import { signInAnonymously } from 'firebase/auth'
+import { apiCall } from '../services/api'
 import { cacheLocations, getCachedLocations, cacheWorkers, getCachedWorkers } from '../services/dataCache'
 import { isOnline } from '../services/offlineStorage'
 
@@ -13,7 +13,6 @@ export function useLocations() {
     let unsub = null
 
     function startListener() {
-      // Don't start if already listening
       if (unsub) return
 
       unsub = onSnapshot(
@@ -25,17 +24,13 @@ export function useLocations() {
         },
         (error) => {
           console.error('Locations listener error:', error)
-          // Firestore SDK handles reconnection automatically,
-          // but if fatal, clean up
           unsub = null
         }
       )
     }
 
-    // Always try to start - Firestore SDK queues if offline
     startListener()
 
-    // Listen for reconnection to restart if listener died
     const handleOnline = () => {
       if (!unsub) startListener()
     }
@@ -73,7 +68,6 @@ export function useWorkers() {
       )
     }
 
-    // Always try to start - Firestore SDK queues if offline
     startListener()
 
     const handleOnline = () => {
@@ -97,21 +91,15 @@ export function usePublicWorkerList() {
   useEffect(() => {
     async function fetchWorkers() {
       try {
-        // Ensure anonymous auth session exists before calling authenticated Cloud Function.
-        // This is needed because workers must see the list BEFORE entering their PIN.
-        // Only sign in anonymously if no user is currently authenticated,
-        // to avoid destroying an existing custom token session.
         if (!auth.currentUser) {
           await signInAnonymously(auth)
         }
 
-        const getList = httpsCallable(functions, 'getWorkerList')
-        const result = await getList()
-        setWorkers(result.data)
-        cacheWorkers(result.data)
+        const data = await apiCall('get-worker-list')
+        setWorkers(data)
+        cacheWorkers(data)
       } catch (error) {
         console.error('Error fetching worker list:', error)
-        // Keep using cached data
       } finally {
         setLoading(false)
       }

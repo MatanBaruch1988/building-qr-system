@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { db, functions } from '../services/firebase'
+import { db } from '../services/firebase'
 import { collection, addDoc, deleteDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
-import { httpsCallable } from 'firebase/functions'
+import { apiCall } from '../services/api'
 import { generateQRCodeString, generateQRCodeDataURL } from '../utils/qrGenerator'
 import { getCurrentPosition, isGeolocationAvailable } from '../services/geolocation'
 import { GEOFENCE_CONFIG } from '../utils/distance'
@@ -185,8 +185,10 @@ function AdminPanel({ locations, workers }) {
         await updateDoc(doc(db, 'workers', editingWorker.id), { ...safeWorkerData })
         // Hash the PIN server-side if code was provided
         if (pin) {
-          const hashPIN = httpsCallable(functions, 'hashWorkerPIN')
-          await hashPIN({ workerId: editingWorker.id, pin })
+          await apiCall('hash-worker-pin', {
+            method: 'POST',
+            body: JSON.stringify({ workerId: editingWorker.id, pin })
+          })
         }
         setMessage({ type: 'success', text: 'נותן השירות עודכן בהצלחה!' })
       } else {
@@ -196,8 +198,10 @@ function AdminPanel({ locations, workers }) {
           createdAt: serverTimestamp()
         })
         // Hash the PIN server-side (also deletes any plaintext code field)
-        const hashPIN = httpsCallable(functions, 'hashWorkerPIN')
-        await hashPIN({ workerId: docRef.id, pin })
+        await apiCall('hash-worker-pin', {
+          method: 'POST',
+          body: JSON.stringify({ workerId: docRef.id, pin })
+        })
         setMessage({ type: 'success', text: 'נותן השירות נוסף בהצלחה!' })
       }
 

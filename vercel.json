@@ -1,5 +1,12 @@
 {
   "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cleanup-old-scans",
+      "schedule": "0 3 * * *"
+    }
   ]
 }
