@@ -1,0 +1,36 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Locations - readable by any authenticated user, writable only by admin
+    match /locations/{locationId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth.token.admin == true;
+    }
+
+    // Workers - only admin can read (prevents PIN exposure) and write
+    match /workers/{workerId} {
+      allow read: if request.auth.token.admin == true;
+      allow write: if request.auth.token.admin == true;
+    }
+
+    // Scans - authenticated users can read; create only if workerId claim matches
+    match /scans/{scanId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.workerId == request.auth.token.workerId;
+      allow update, delete: if request.auth.token.admin == true;
+    }
+
+    // Failed scans - admin reads, any authenticated user can create
+    match /failedScans/{scanId} {
+      allow read: if request.auth.token.admin == true;
+      allow create: if request.auth != null;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
