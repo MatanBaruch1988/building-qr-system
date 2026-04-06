@@ -1,14 +1,12 @@
 import React, { useState } from 'react'
 import { useLocations, useWorkers } from '../hooks/useFirebaseData'
-import { useAdminAuth } from '../hooks/useAdminAuth'
 import AdminPanel from '../components/AdminPanel'
 import ScansHistory from '../components/ScansHistory'
 
-function AdminApp() {
+function AdminApp({ user, logout }) {
   const [view, setView] = useState('management') // 'management' | 'history'
   const locations = useLocations()
   const workers = useWorkers()
-  const { user, logout } = useAdminAuth()
 
   const handleLogout = async () => {
     if (window.confirm('האם להתנתק מהמערכת?')) {

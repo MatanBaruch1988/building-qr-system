@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { db, auth } from '../services/firebase'
 import { collection, onSnapshot } from 'firebase/firestore'
-import { signInAnonymously } from 'firebase/auth'
+import { signInAnonymously, onAuthStateChanged } from 'firebase/auth'
 import { apiCall } from '../services/api'
 import { cacheLocations, getCachedLocations, cacheWorkers, getCachedWorkers } from '../services/dataCache'
 import { isOnline } from '../services/offlineStorage'
@@ -31,13 +31,14 @@ export function useLocations() {
 
     startListener()
 
-    const handleOnline = () => {
-      if (!unsub) startListener()
-    }
+    const handleOnline = () => { if (!unsub) startListener() }
     window.addEventListener('online', handleOnline)
+
+    const unsubAuth = onAuthStateChanged(auth, () => { if (!unsub) startListener() })
 
     return () => {
       if (unsub) unsub()
+      unsubAuth()
       window.removeEventListener('online', handleOnline)
     }
   }, [])
@@ -70,13 +71,14 @@ export function useWorkers() {
 
     startListener()
 
-    const handleOnline = () => {
-      if (!unsub) startListener()
-    }
+    const handleOnline = () => { if (!unsub) startListener() }
     window.addEventListener('online', handleOnline)
+
+    const unsubAuth = onAuthStateChanged(auth, () => { if (!unsub) startListener() })
 
     return () => {
       if (unsub) unsub()
+      unsubAuth()
       window.removeEventListener('online', handleOnline)
     }
   }, [])

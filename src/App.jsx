@@ -30,8 +30,8 @@ function ProtectedAdminRoute({ children }) {
     return <AdminLogin onLogin={login} loading={loading} error={error} />
   }
 
-  // Render admin content if authenticated
-  return children
+  // Render admin content if authenticated — pass user/logout as props
+  return React.cloneElement(children, { user, logout })
 }
 
 function App() {
