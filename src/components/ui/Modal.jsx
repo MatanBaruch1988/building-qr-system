@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 
 function Modal({ show, onClose, title, children, footer }) {
   const modalRef = useRef(null)
@@ -67,7 +68,7 @@ function Modal({ show, onClose, title, children, footer }) {
 
   if (!show) return null
 
-  return (
+  return createPortal(
     <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <div className="modal" onClick={e => e.stopPropagation()} ref={modalRef}>
         <div className="modal-header">
@@ -83,7 +84,8 @@ function Modal({ show, onClose, title, children, footer }) {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
