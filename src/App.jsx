@@ -7,7 +7,7 @@ import { useAdminAuth } from './hooks/useAdminAuth'
 
 // Protected route component for admin
 function ProtectedAdminRoute({ children }) {
-  const { user, loading, error, login, isAuthenticated } = useAdminAuth()
+  const { user, loading, error, login, logout, isAuthenticated } = useAdminAuth()
 
   // Show loading spinner while checking auth
   if (loading) {
