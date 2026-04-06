@@ -39,7 +39,8 @@ function LocationManagement({
                   className="list-item"
                   style={{
                     cursor: 'pointer',
-                    background: selectedLocation?.id === location.id ? '#e8f0fe' : undefined
+                    background: selectedLocation?.id === location.id ? 'rgba(0,122,255,0.15)' : undefined,
+                    borderColor: selectedLocation?.id === location.id ? 'rgba(0,122,255,0.4)' : undefined
                   }}
                   onClick={() => onSelectLocation(location)}
                 >
@@ -95,8 +96,8 @@ function LocationManagement({
                 </div>
               </>
             )}
-            <p style={{ marginTop: '15px', fontSize: '0.9rem', color: '#666' }}>
-              קואורדינטות: {selectedLocation.latitude.toFixed(5)}, {selectedLocation.longitude.toFixed(5)}
+            <p style={{ marginTop: '15px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+              קואורדינטות: {selectedLocation.latitude?.toFixed(5)}, {selectedLocation.longitude?.toFixed(5)}
             </p>
           </div>
         ) : (

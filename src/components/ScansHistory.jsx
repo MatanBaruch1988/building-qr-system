@@ -128,7 +128,7 @@ function ScansHistory({ readOnly = false, workerNameFilter = '', workerIdFilter 
           <select
             value={workerFilter}
             onChange={e => setWorkerFilter(e.target.value)}
-            style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #ddd', fontSize: '1rem' }}
+            style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-mid)', background: 'var(--surface-2)', color: 'var(--text-primary)', fontSize: '1rem' }}
           >
             <option value="">כל נותני השירות</option>
             {uniqueWorkers.map(name => (
@@ -141,7 +141,7 @@ function ScansHistory({ readOnly = false, workerNameFilter = '', workerIdFilter 
       {loading ? (
         <div style={{ textAlign: 'center', padding: '40px' }}>
           <span className="spinner"></span>
-          <p style={{ marginTop: '15px', color: '#666' }}>טוען...</p>
+          <p style={{ marginTop: '15px', color: 'var(--text-secondary)' }}>טוען...</p>
         </div>
       ) : filteredScans.length === 0 ? (
         <div className="empty-state">
@@ -152,9 +152,9 @@ function ScansHistory({ readOnly = false, workerNameFilter = '', workerIdFilter 
         <div>
           {Object.entries(groupedScans).map(([date, dateScans]) => (
             <div key={date} style={{ marginBottom: '25px' }}>
-              <h4 style={{ background: '#f0f0f0', padding: '10px 15px', borderRadius: '6px', marginBottom: '10px' }}>
+              <h4 style={{ background: 'var(--surface-2)', padding: '10px 15px', borderRadius: '6px', marginBottom: '10px', color: 'var(--text-primary)' }}>
                 {date}
-                <span style={{ float: 'left', fontSize: '0.9rem', color: '#666' }}>
+                <span style={{ float: 'left', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
                   {dateScans.length} סריקות
                 </span>
               </h4>
@@ -164,10 +164,10 @@ function ScansHistory({ readOnly = false, workerNameFilter = '', workerIdFilter 
                   <div className="list-item-content" style={{ flex: 1 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <div>
-                        <h4 style={{ marginBottom: '5px', color: scan.isValid ? '#333' : '#dc3545' }}>
+                        <h4 style={{ marginBottom: '5px', color: scan.isValid ? 'var(--text-primary)' : 'var(--red)' }}>
                           {!scan.isValid && '❌ '}{scan.locationName}
                         </h4>
-                        <p style={{ fontSize: '0.9rem', color: '#666' }}>
+                        <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
                           {getDisplayName(scan)}
                           {scan.distanceMeters !== undefined && <span> • {formatDistance(scan.distanceMeters)}</span>}
                           {scan.gpsAccuracy && <span> • דיוק GPS: {Math.round(scan.gpsAccuracy)}m</span>}
@@ -179,7 +179,7 @@ function ScansHistory({ readOnly = false, workerNameFilter = '', workerIdFilter 
                         )}
                       </div>
                       <div style={{ textAlign: 'left' }}>
-                        <span style={{ fontWeight: 'bold', fontSize: '1.1rem', color: '#333' }}>
+                        <span style={{ fontWeight: 'bold', fontSize: '1.1rem', color: 'var(--text-primary)' }}>
                           {formatTime(scan.timestamp)}
                         </span>
                         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'flex-end', marginTop: '4px' }}>
@@ -202,7 +202,7 @@ function ScansHistory({ readOnly = false, workerNameFilter = '', workerIdFilter 
         </div>
       )}
 
-      <div aria-live="polite" style={{ marginTop: '20px', padding: '15px', background: '#f0f4ff', borderRadius: '8px', fontSize: '0.9rem', color: '#555' }}>
+      <div aria-live="polite" style={{ marginTop: '20px', padding: '15px', background: 'var(--surface-2)', borderRadius: '8px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
         <strong>סטטיסטיקה{workerFilter ? ` - ${workerFilter}` : ''}:</strong>
         <div style={{ display: 'flex', gap: '20px', marginTop: '10px', flexWrap: 'wrap' }}>
           <div>סה"כ סריקות: <strong>{filteredScans.length}</strong></div>

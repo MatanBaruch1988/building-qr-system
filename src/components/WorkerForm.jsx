@@ -16,7 +16,9 @@ function WorkerForm({ form, onChange }) {
       <div className="form-group">
         <label>קוד כניסה *</label>
         <input
-          type="text"
+          type="password"
+          inputMode="numeric"
+          pattern="[0-9]*"
           value={form.code}
           onChange={e => onChange({ ...form, code: e.target.value })}
           placeholder="לדוגמא: 1234"

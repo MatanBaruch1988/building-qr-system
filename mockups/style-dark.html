@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dark Mode</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Heebo', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #0A0A0A;
+    color: #F5F5F5;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .label-top {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: #555;
+    text-transform: uppercase;
+    margin-bottom: 32px;
+  }
+  .card {
+    background: #141414;
+    border: 1px solid #222;
+    border-radius: 20px;
+    padding: 32px 28px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.04), 0 24px 48px rgba(0,0,0,0.6);
+  }
+  .card-header {
+    margin-bottom: 28px;
+  }
+  h1 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: #555;
+  }
+  .form-group {
+    margin-bottom: 16px;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: #666;
+    margin-bottom: 8px;
+    letter-spacing: 0.02em;
+  }
+  select, input {
+    width: 100%;
+    background: #1E1E1E;
+    border: 1px solid #2A2A2A;
+    border-radius: 10px;
+    color: #F5F5F5;
+    font-size: 15px;
+    padding: 13px 14px;
+    outline: none;
+    transition: border-color 0.15s;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+  select:focus, input:focus {
+    border-color: #007AFF;
+    box-shadow: 0 0 0 3px rgba(0,122,255,0.15);
+  }
+  .btn {
+    width: 100%;
+    padding: 14px;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    margin-top: 8px;
+    transition: all 0.15s;
+  }
+  .btn-primary {
+    background: #007AFF;
+    color: #fff;
+  }
+  .btn-primary:hover { background: #0066D6; }
+  .divider {
+    height: 1px;
+    background: #1E1E1E;
+    margin: 20px 0;
+  }
+  .worker-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .worker-item {
+    background: #1E1E1E;
+    border: 1px solid #2A2A2A;
+    border-radius: 10px;
+    padding: 12px 10px;
+    text-align: center;
+    font-size: 13px;
+    color: #999;
+    cursor: pointer;
+  }
+  .worker-item.selected {
+    border-color: #007AFF;
+    background: rgba(0,122,255,0.1);
+    color: #007AFF;
+  }
+  .pin-dots {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin: 16px 0;
+  }
+  .dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #2A2A2A;
+    border: 1px solid #333;
+  }
+  .dot.filled { background: #007AFF; border-color: #007AFF; }
+  .badge {
+    display: inline-block;
+    background: rgba(0,122,255,0.15);
+    color: #007AFF;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 6px;
+    margin-bottom: 4px;
+  }
+</style>
+</head>
+<body>
+  <div class="label-top">א — Dark Mode First</div>
+  <div class="card">
+    <div class="card-header">
+      <div class="badge">כניסה לעובד</div>
+      <h1>שלום, מי את/ה?</h1>
+      <div class="subtitle">בחר/י שם מהרשימה והזן/י קוד</div>
+    </div>
+
+    <div class="worker-grid">
+      <div class="worker-item selected">דוד כהן</div>
+      <div class="worker-item">מרים לוי</div>
+      <div class="worker-item">יוסי אברהם</div>
+      <div class="worker-item">שרה גרין</div>
+    </div>
+
+    <div class="divider"></div>
+
+    <label>קוד אישי</label>
+    <div class="pin-dots">
+      <div class="dot filled"></div>
+      <div class="dot filled"></div>
+      <div class="dot filled"></div>
+      <div class="dot"></div>
+    </div>
+
+    <button class="btn btn-primary">כניסה ←</button>
+  </div>
+</body>
+</html>

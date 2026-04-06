@@ -124,15 +124,32 @@ function WorkerApp() {
     <div className="container">
       <header className="header">
         <h1>מערכת אימות נוכחות</h1>
-        <p>סריקת QR עם אימות GPS</p>
+        {!worker && <p>סריקת QR עם אימות GPS</p>}
       </header>
 
       {worker && (view === 'scanner' || view === 'result' || view === 'processing' || view === 'history') && (
-        <div className="card" style={{ textAlign: 'center', padding: '10px 20px' }}>
-          <span>מחובר כ: <strong>{workerDisplayName}</strong></span>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          background: 'var(--surface-1)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '10px 16px',
+          marginBottom: '16px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{
+              width: '8px', height: '8px', borderRadius: '50%',
+              background: 'var(--green)',
+              boxShadow: '0 0 6px rgba(52,199,89,0.5)'
+            }} />
+            <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+              מחובר כ: <strong style={{ color: 'var(--text-primary)' }}>{workerDisplayName}</strong>
+            </span>
+          </div>
           <button
-            className="btn btn-secondary"
-            style={{ marginRight: '10px', padding: '6px 12px', fontSize: '0.9rem' }}
+            className="btn btn-secondary btn-sm"
             onClick={handleLogout}
           >
             התנתק

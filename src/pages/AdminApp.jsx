@@ -16,17 +16,19 @@ function AdminApp({ user, logout }) {
 
   return (
     <div className="container">
-      <header className="header">
-        <h1>מערכת אימות נוכחות - ניהול</h1>
-        <p>ממשק מנהל</p>
+      <header className="header" style={{ paddingBottom: '16px' }}>
+        <h1>ממשק ניהול</h1>
       </header>
 
       {/* Logged-in user info and logout */}
-      <div className="card" style={{
-        padding: '12px 20px',
+      <div style={{
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
+        background: 'var(--surface-1)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-lg)',
+        padding: '10px 16px',
         marginBottom: '20px'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -34,20 +36,15 @@ function AdminApp({ user, logout }) {
             <img
               src={user.photoURL}
               alt=""
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%'
-              }}
+              style={{ width: '28px', height: '28px', borderRadius: '50%' }}
             />
           )}
-          <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
             {user?.email}
           </span>
         </div>
         <button
-          className="btn btn-secondary"
-          style={{ padding: '8px 16px', fontSize: '0.875rem' }}
+          className="btn btn-secondary btn-sm"
           onClick={handleLogout}
         >
           התנתק

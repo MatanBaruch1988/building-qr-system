@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>השוואת פונטים</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=Rubik:wght@300;400;500;600;700;800&family=Assistant:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0A0A0A;
+    color: #F5F5F5;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 24px;
+    gap: 0;
+  }
+
+  h1 {
+    font-family: 'Heebo', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #444;
+    margin-bottom: 40px;
+  }
+
+  .grid {
+    display: flex;
+    flex-direction: row;
+    gap: 24px;
+    width: 100%;
+    max-width: 1100px;
+    align-items: flex-start;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    flex: 1;
+    min-width: 280px;
+    max-width: 340px;
+  }
+
+  .font-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #007AFF;
+    background: rgba(0,122,255,0.12);
+    padding: 5px 14px;
+    border-radius: 20px;
+    border: 1px solid rgba(0,122,255,0.25);
+  }
+
+  /* ===== CARD BASE ===== */
+  .card {
+    background: #141414;
+    border: 1px solid #222;
+    border-radius: 20px;
+    padding: 28px 24px;
+    width: 100%;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.04), 0 24px 48px rgba(0,0,0,0.6);
+  }
+
+  .card-header { margin-bottom: 24px; }
+
+  .badge {
+    display: inline-block;
+    background: rgba(0,122,255,0.15);
+    color: #007AFF;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    letter-spacing: 0.02em;
+  }
+
+  .subtitle { font-size: 13px; color: #555; margin-top: 4px; }
+
+  .worker-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .worker-item {
+    background: #1E1E1E;
+    border: 1px solid #2A2A2A;
+    border-radius: 10px;
+    padding: 11px 8px;
+    text-align: center;
+    font-size: 13px;
+    color: #999;
+    cursor: pointer;
+  }
+
+  .worker-item.selected {
+    border-color: #007AFF;
+    background: rgba(0,122,255,0.1);
+    color: #007AFF;
+    font-weight: 600;
+  }
+
+  .divider { height: 1px; background: #1E1E1E; margin: 14px 0; }
+
+  .pin-label { font-size: 12px; color: #555; margin-bottom: 10px; }
+
+  .pin-dots {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin: 0 0 18px;
+  }
+
+  .dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #2A2A2A;
+    border: 1px solid #333;
+  }
+  .dot.filled { background: #007AFF; border-color: #007AFF; }
+
+  .btn {
+    width: 100%;
+    padding: 13px;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    background: #007AFF;
+    color: #fff;
+  }
+
+  /* ===== FONT FAMILIES ===== */
+  .font-heebo    { font-family: 'Heebo',    sans-serif; }
+  .font-rubik    { font-family: 'Rubik',    sans-serif; }
+  .font-assistant { font-family: 'Assistant', sans-serif; }
+
+  .font-heebo h2    { font-size: 21px; font-weight: 700; color: #fff; }
+  .font-rubik h2    { font-size: 21px; font-weight: 700; color: #fff; }
+  .font-assistant h2 { font-size: 21px; font-weight: 700; color: #fff; }
+
+  /* ===== DIVIDER BETWEEN COLS ===== */
+  .vsep {
+    width: 1px;
+    background: #1E1E1E;
+    align-self: stretch;
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 700px) {
+    .vsep { display: none; }
+    .col { min-width: 100%; }
+  }
+</style>
+</head>
+<body>
+  <h1>השוואת פונטים — Dark Mode</h1>
+
+  <div class="grid">
+
+    <!-- HEEBO -->
+    <div class="col font-heebo">
+      <div class="font-label">Heebo</div>
+      <div class="card">
+        <div class="card-header">
+          <div class="badge">כניסה לעובד</div>
+          <h2>שלום, מי את/ה?</h2>
+          <div class="subtitle">בחר/י שם מהרשימה והזן/י קוד</div>
+        </div>
+        <div class="worker-grid">
+          <div class="worker-item selected">דוד כהן</div>
+          <div class="worker-item">מרים לוי</div>
+          <div class="worker-item">יוסי אברהם</div>
+          <div class="worker-item">שרה גרין</div>
+        </div>
+        <div class="divider"></div>
+        <div class="pin-label">קוד אישי</div>
+        <div class="pin-dots">
+          <div class="dot filled"></div>
+          <div class="dot filled"></div>
+          <div class="dot filled"></div>
+          <div class="dot"></div>
+        </div>
+        <button class="btn">כניסה ←</button>
+      </div>
+    </div>
+
+    <div class="vsep"></div>
+
+    <!-- RUBIK -->
+    <div class="col font-rubik">
+      <div class="font-label">Rubik</div>
+      <div class="card">
+        <div class="card-header">
+          <div class="badge">כניסה לעובד</div>
+          <h2>שלום, מי את/ה?</h2>
+          <div class="subtitle">בחר/י שם מהרשימה והזן/י קוד</div>
+        </div>
+        <div class="worker-grid">
+          <div class="worker-item selected">דוד כהן</div>
+          <div class="worker-item">מרים לוי</div>
+          <div class="worker-item">יוסי אברהם</div>
+          <div class="worker-item">שרה גרין</div>
+        </div>
+        <div class="divider"></div>
+        <div class="pin-label">קוד אישי</div>
+        <div class="pin-dots">
+          <div class="dot filled"></div>
+          <div class="dot filled"></div>
+          <div class="dot filled"></div>
+          <div class="dot"></div>
+        </div>
+        <button class="btn">כניסה ←</button>
+      </div>
+    </div>
+
+    <div class="vsep"></div>
+
+    <!-- ASSISTANT -->
+    <div class="col font-assistant">
+      <div class="font-label">Assistant</div>
+      <div class="card">
+        <div class="card-header">
+          <div class="badge">כניסה לעובד</div>
+          <h2>שלום, מי את/ה?</h2>
+          <div class="subtitle">בחר/י שם מהרשימה והזן/י קוד</div>
+        </div>
+        <div class="worker-grid">
+          <div class="worker-item selected">דוד כהן</div>
+          <div class="worker-item">מרים לוי</div>
+          <div class="worker-item">יוסי אברהם</div>
+          <div class="worker-item">שרה גרין</div>
+        </div>
+        <div class="divider"></div>
+        <div class="pin-label">קוד אישי</div>
+        <div class="pin-dots">
+          <div class="dot filled"></div>
+          <div class="dot filled"></div>
+          <div class="dot filled"></div>
+          <div class="dot"></div>
+        </div>
+        <button class="btn">כניסה ←</button>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

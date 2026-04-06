@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Glassmorphism</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+    color: #fff;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  body::before {
+    content: '';
+    position: absolute;
+    width: 300px; height: 300px;
+    background: radial-gradient(circle, rgba(120,80,255,0.4) 0%, transparent 70%);
+    top: -80px; right: -80px;
+    border-radius: 50%;
+  }
+  body::after {
+    content: '';
+    position: absolute;
+    width: 250px; height: 250px;
+    background: radial-gradient(circle, rgba(0,180,255,0.3) 0%, transparent 70%);
+    bottom: -60px; left: -60px;
+    border-radius: 50%;
+  }
+  .label-top {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: rgba(255,255,255,0.4);
+    text-transform: uppercase;
+    margin-bottom: 32px;
+    z-index: 1;
+  }
+  .card {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(28px);
+    -webkit-backdrop-filter: blur(28px);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 24px;
+    padding: 32px 28px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.15);
+    position: relative;
+    z-index: 1;
+  }
+  .card-header { margin-bottom: 28px; }
+  h1 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+  .subtitle { font-size: 13px; color: rgba(255,255,255,0.5); }
+  .badge {
+    display: inline-block;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: rgba(255,255,255,0.9);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 20px;
+    margin-bottom: 8px;
+    letter-spacing: 0.04em;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 8px;
+  }
+  .worker-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .worker-item {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    padding: 12px 10px;
+    text-align: center;
+    font-size: 13px;
+    color: rgba(255,255,255,0.6);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .worker-item.selected {
+    background: rgba(130,100,255,0.3);
+    border-color: rgba(130,100,255,0.6);
+    color: #fff;
+    box-shadow: 0 0 16px rgba(130,100,255,0.3);
+  }
+  .divider {
+    height: 1px;
+    background: rgba(255,255,255,0.08);
+    margin: 16px 0;
+  }
+  .pin-dots {
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    margin: 16px 0;
+  }
+  .dot {
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.2);
+  }
+  .dot.filled {
+    background: rgba(130,100,255,0.9);
+    border-color: rgba(130,100,255,1);
+    box-shadow: 0 0 10px rgba(130,100,255,0.6);
+  }
+  .btn {
+    width: 100%;
+    padding: 14px;
+    border-radius: 14px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    margin-top: 8px;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, #7854F7 0%, #4FACFE 100%);
+    color: #fff;
+    box-shadow: 0 4px 20px rgba(120,84,247,0.5);
+    border: 1px solid rgba(255,255,255,0.2);
+  }
+</style>
+</head>
+<body>
+  <div class="label-top">ב — Glassmorphism</div>
+  <div class="card">
+    <div class="card-header">
+      <div class="badge">✦ כניסה לעובד</div>
+      <h1>שלום, מי את/ה?</h1>
+      <div class="subtitle">בחר/י שם מהרשימה והזן/י קוד</div>
+    </div>
+    <div class="worker-grid">
+      <div class="worker-item selected">דוד כהן</div>
+      <div class="worker-item">מרים לוי</div>
+      <div class="worker-item">יוסי אברהם</div>
+      <div class="worker-item">שרה גרין</div>
+    </div>
+    <div class="divider"></div>
+    <label>קוד אישי</label>
+    <div class="pin-dots">
+      <div class="dot filled"></div>
+      <div class="dot filled"></div>
+      <div class="dot filled"></div>
+      <div class="dot"></div>
+    </div>
+    <button class="btn btn-primary">כניסה ←</button>
+  </div>
+</body>
+</html>

@@ -1,51 +1,62 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
 import { getDisplayWorkerName, getWorkerInitials } from '../utils/formatters'
+
+const PIN_LENGTH = 4
 
 function WorkerLogin({ workers, onLogin }) {
   const [selectedWorker, setSelectedWorker] = useState(null)
-  const [code, setCode] = useState('')
+  const [pin, setPin] = useState('')
   const [error, setError] = useState('')
-  const [step, setStep] = useState('select') // 'select' | 'code'
+  const [submitting, setSubmitting] = useState(false)
+  const inputRef = useRef(null)
 
   const handleWorkerSelect = (worker) => {
     setSelectedWorker(worker)
-    setStep('code')
+    setPin('')
     setError('')
-    setCode('')
   }
 
-  const [submitting, setSubmitting] = useState(false)
-
-  const handleCodeSubmit = async (e) => {
-    e.preventDefault()
+  const handlePinChange = (e) => {
+    const val = e.target.value.replace(/\D/g, '').slice(0, PIN_LENGTH)
+    setPin(val)
     setError('')
+  }
 
-    if (!selectedWorker) {
-      setError('אנא בחר נותן שירות')
-      return
-    }
-
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!selectedWorker || pin.length < PIN_LENGTH) return
     setSubmitting(true)
     try {
-      await onLogin(selectedWorker.id, code)
+      await onLogin(selectedWorker.id, pin)
     } catch (err) {
-      // Error message is set by the hook; show a generic fallback
-      setError(err.code === 'functions/resource-exhausted'
-        ? 'יותר מדי ניסיונות. נסה שוב בעוד מספר דקות.'
-        : 'קוד שגוי')
+      setError(
+        err.code === 'functions/resource-exhausted'
+          ? 'יותר מדי ניסיונות. נסה שוב בעוד כמה דקות.'
+          : 'קוד שגוי, נסה שוב'
+      )
+      setPin('')
+      inputRef.current?.focus()
     } finally {
       setSubmitting(false)
     }
   }
 
-  if (workers.length === 0) {
+  const handleBack = () => {
+    setSelectedWorker(null)
+    setPin('')
+    setError('')
+  }
+
+  const activeWorkers = workers.filter(w => w.isActive !== false)
+
+  if (activeWorkers.length === 0) {
     return (
       <div className="login-container">
         <div className="card">
           <div className="empty-state">
             <div className="empty-state-icon">👤</div>
             <h3>אין נותני שירות במערכת</h3>
-            <p>עבור ללשונית "ניהול" להוספת נותני שירות</p>
+            <p>עבור לממשק הניהול להוספת נותני שירות</p>
           </div>
         </div>
       </div>
@@ -54,84 +65,169 @@ function WorkerLogin({ workers, onLogin }) {
 
   return (
     <div className="login-container">
-      <div className="card">
-        <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>
-          {step === 'select' ? 'בחר נותן שירות' : 'הזן קוד'}
-        </h2>
+      <div className="card" style={{ padding: '28px 24px', overflow: 'visible' }}>
 
-        {step === 'select' && (
-          <div className="worker-grid">
-            {workers.filter(w => w.isActive !== false).map(worker => (
+        {/* Badge + Title */}
+        <div style={{ marginBottom: '24px' }}>
+          <div style={{
+            display: 'inline-block',
+            background: 'rgba(0,122,255,0.15)',
+            color: '#007AFF',
+            fontSize: '11px',
+            fontWeight: 700,
+            padding: '3px 10px',
+            borderRadius: '6px',
+            marginBottom: '10px',
+            letterSpacing: '0.02em'
+          }}>
+            כניסה לנותן שירות
+          </div>
+          <h2 style={{
+            fontSize: '20px',
+            fontWeight: 700,
+            color: 'var(--text-primary)',
+            marginBottom: '4px',
+            padding: 0,
+            border: 'none'
+          }}>
+            {selectedWorker ? `שלום, ${getDisplayWorkerName(selectedWorker)}` : 'שלום, מי את/ה?'}
+          </h2>
+          <p style={{ fontSize: '13px', color: 'var(--text-tertiary)', margin: 0 }}>
+            {selectedWorker ? 'הזן/י קוד אישי כדי להמשיך' : 'בחר/י שם מהרשימה'}
+          </p>
+        </div>
+
+        {/* Worker grid */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, 1fr)',
+          gap: '8px',
+          marginBottom: '20px'
+        }}>
+          {activeWorkers.map(worker => (
+            <div
+              key={worker.id}
+              onClick={() => handleWorkerSelect(worker)}
+              style={{
+                background: selectedWorker?.id === worker.id
+                  ? 'rgba(0,122,255,0.1)'
+                  : 'var(--surface-2)',
+                border: `1px solid ${selectedWorker?.id === worker.id ? '#007AFF' : 'var(--border-mid)'}`,
+                borderRadius: '10px',
+                padding: '11px 10px',
+                textAlign: 'center',
+                fontSize: '13px',
+                fontWeight: selectedWorker?.id === worker.id ? 600 : 400,
+                color: selectedWorker?.id === worker.id ? '#007AFF' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+                userSelect: 'none'
+              }}
+            >
+              {getDisplayWorkerName(worker)}
+            </div>
+          ))}
+        </div>
+
+        {/* Divider */}
+        <div style={{ height: '1px', background: 'rgba(255,255,255,0.07)', margin: '0 0 18px' }} />
+
+        {/* PIN section */}
+        <form onSubmit={handleSubmit}>
+          <div style={{
+            fontSize: '12px',
+            color: 'var(--text-tertiary)',
+            marginBottom: '12px',
+            textAlign: 'center'
+          }}>
+            {selectedWorker ? 'קוד אישי' : 'בחר/י נותן שירות תחילה'}
+          </div>
+
+          {/* PIN dots */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'center',
+            gap: '14px',
+            marginBottom: '12px'
+          }}>
+            {Array.from({ length: PIN_LENGTH }).map((_, i) => (
               <div
-                key={worker.id}
-                className={`worker-card ${selectedWorker?.id === worker.id ? 'selected' : ''}`}
-                onClick={() => handleWorkerSelect(worker)}
-              >
-                <div className="worker-avatar">
-                  {getWorkerInitials(getDisplayWorkerName(worker))}
-                </div>
-                <div className="worker-name">{getDisplayWorkerName(worker)}</div>
-                {worker.name && worker.company && (
-                  <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '5px' }}>
-                    {worker.name}
-                  </div>
-                )}
-              </div>
+                key={i}
+                style={{
+                  width: '13px',
+                  height: '13px',
+                  borderRadius: '50%',
+                  background: i < pin.length ? '#007AFF' : 'var(--surface-3)',
+                  border: `1px solid ${i < pin.length ? '#007AFF' : 'var(--border-strong)'}`,
+                  transition: 'all 0.15s',
+                  boxShadow: i < pin.length ? '0 0 8px rgba(0,122,255,0.4)' : 'none'
+                }}
+              />
             ))}
           </div>
-        )}
 
-        {step === 'code' && selectedWorker && (
-          <form onSubmit={handleCodeSubmit}>
-            <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-              <div className="worker-avatar" style={{ margin: '0 auto' }}>
-                {getWorkerInitials(getDisplayWorkerName(selectedWorker))}
-              </div>
-              <h3 style={{ marginTop: '10px' }}>{getDisplayWorkerName(selectedWorker)}</h3>
-              {selectedWorker.name && selectedWorker.company && (
-                <p style={{ color: '#666', fontSize: '0.9rem' }}>{selectedWorker.name}</p>
-              )}
+          {/* Visible PIN input */}
+          <input
+            ref={inputRef}
+            type="password"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            value={pin}
+            onChange={handlePinChange}
+            disabled={!selectedWorker || submitting}
+            placeholder={selectedWorker ? '••••' : ''}
+            autoComplete="off"
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'center',
+              fontSize: '1.5rem',
+              letterSpacing: '0.4rem',
+              padding: '11px 14px',
+              background: selectedWorker ? 'var(--surface-2)' : 'transparent',
+              border: `1px solid ${selectedWorker ? 'var(--border-mid)' : 'transparent'}`,
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--text-primary)',
+              fontFamily: 'inherit',
+              marginBottom: '8px',
+              cursor: selectedWorker ? 'text' : 'default',
+              transition: 'all 0.2s'
+            }}
+          />
+
+          {error && (
+            <div role="alert" style={{
+              color: '#FF453A',
+              textAlign: 'center',
+              fontSize: '13px',
+              marginBottom: '14px'
+            }}>
+              {error}
             </div>
+          )}
 
-            <div className="form-group">
-              <label>קוד כניסה</label>
-              <input
-                type="password"
-                inputMode="numeric"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                placeholder="הזן קוד"
-                autoFocus
-                style={{ textAlign: 'center', fontSize: '1.5rem', letterSpacing: '0.5rem' }}
-              />
-            </div>
-
-            {error && (
-              <div role="alert" style={{ color: '#dc3545', textAlign: 'center', marginBottom: '15px' }}>
-                {error}
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: '10px' }}>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            {selectedWorker && (
               <button
                 type="button"
                 className="btn btn-secondary"
                 style={{ flex: 1 }}
-                onClick={() => {
-                  setStep('select')
-                  setSelectedWorker(null)
-                  setCode('')
-                  setError('')
-                }}
+                onClick={handleBack}
+                disabled={submitting}
               >
                 חזור
               </button>
-              <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={submitting}>
-                {submitting ? <span className="spinner"></span> : 'כניסה'}
-              </button>
-            </div>
-          </form>
-        )}
+            )}
+            <button
+              type="submit"
+              className="btn btn-primary"
+              style={{ flex: 1 }}
+              disabled={!selectedWorker || pin.length < PIN_LENGTH || submitting}
+            >
+              {submitting ? <span className="spinner" /> : 'כניסה →'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   )

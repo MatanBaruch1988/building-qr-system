@@ -1,32 +1,43 @@
 import { useState, useEffect } from 'react'
 import { auth, googleProvider } from '../services/firebase'
-import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth'
+import { signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged } from 'firebase/auth'
 
 export function useAdminAuth() {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
+  // Handle redirect result on mount (called after Google redirects back)
+  useEffect(() => {
+    getRedirectResult(auth)
+      .catch((err) => {
+        if (err.code !== 'auth/no-auth-event') {
+          setError('שגיאה בהתחברות: ' + err.message)
+          setLoading(false)
+        }
+      })
+  }, [])
+
   // Listen to auth state changes
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         try {
-          // Force token refresh to get latest claims
-          const tokenResult = await firebaseUser.getIdTokenResult(true)
+          let tokenResult = await firebaseUser.getIdTokenResult(false)
+          if (!tokenResult.claims.admin) {
+            tokenResult = await firebaseUser.getIdTokenResult(true)
+          }
           if (tokenResult.claims.admin === true) {
             setUser(firebaseUser)
             setError(null)
           } else {
-            // Not an admin - sign out
             signOut(auth)
             setUser(null)
             setError('המשתמש אינו מורשה לגשת לממשק הניהול')
           }
         } catch (err) {
-          console.error('Error refreshing token:', err)
           setUser(null)
-          setError('שגיאת רשת - לא ניתן לאמת הרשאות. נסה שוב.')
+          setError('שגיאת רשת — לא ניתן לאמת הרשאות. בדוק חיבור ונסה שוב.')
         }
       } else {
         setUser(null)
@@ -37,18 +48,21 @@ export function useAdminAuth() {
     return () => unsubscribe()
   }, [])
 
-  // Google Sign-In
+  // Google Sign-In — popup with redirect fallback if blocked
   const login = async () => {
     setError(null)
     setLoading(true)
     try {
       await signInWithPopup(auth, googleProvider)
-      // Claim check happens in onAuthStateChanged
     } catch (err) {
-      if (err.code === 'auth/popup-closed-by-user') {
+      if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
         setError('ההתחברות בוטלה')
       } else if (err.code === 'auth/popup-blocked') {
-        setError('חלון ההתחברות נחסם. אנא אפשר חלונות קופצים')
+        try {
+          await signInWithRedirect(auth, googleProvider)
+        } catch (redirectErr) {
+          setError('שגיאה בהתחברות: ' + redirectErr.message)
+        }
       } else {
         setError('שגיאה בהתחברות: ' + err.message)
       }
@@ -56,7 +70,6 @@ export function useAdminAuth() {
     }
   }
 
-  // Sign out
   const logout = async () => {
     try {
       await signOut(auth)

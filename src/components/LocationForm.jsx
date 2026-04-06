@@ -61,12 +61,12 @@ function LocationForm({ form, onChange, workers, onMapClick, gettingLocation, on
 
       <div className="form-group">
         <label>שיוך לנותני שירות</label>
-        <div style={{ border: '1px solid #ddd', borderRadius: '8px', padding: '10px', maxHeight: '200px', overflowY: 'auto' }}>
+        <div style={{ border: '1px solid var(--border-mid)', borderRadius: '8px', padding: '10px', maxHeight: '200px', overflowY: 'auto', background: 'var(--surface-2)' }}>
           {workers.length === 0 ? (
-            <p style={{ color: '#999', margin: 0 }}>אין נותני שירות</p>
+            <p style={{ color: 'var(--text-tertiary)', margin: 0 }}>אין נותני שירות</p>
           ) : (
             workers.map(w => (
-              <label key={w.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 4px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}>
+              <label key={w.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 4px', cursor: 'pointer', borderBottom: '1px solid var(--border-subtle)' }}>
                 <input
                   type="checkbox"
                   checked={form.assignedWorkerIds.includes(w.id)}
@@ -107,7 +107,7 @@ function LocationForm({ form, onChange, workers, onMapClick, gettingLocation, on
             marker={{ lat: form.latitude, lng: form.longitude }}
           />
         </div>
-        <p style={{ fontSize: '0.85rem', color: '#666', marginTop: '5px' }}>
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '5px' }}>
           לחץ על המפה לבחירת מיקום מדויק, או השתמש בכפתור למעלה
         </p>
       </div>

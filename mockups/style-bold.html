@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bold & Minimal</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #F4F4F5;
+    color: #09090B;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .label-top {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: #A1A1AA;
+    text-transform: uppercase;
+    margin-bottom: 32px;
+  }
+  .card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 36px 32px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.04);
+  }
+  .card-header { margin-bottom: 32px; }
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #6366F1;
+    margin-bottom: 10px;
+  }
+  h1 {
+    font-size: 26px;
+    font-weight: 800;
+    color: #09090B;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+    margin-bottom: 6px;
+  }
+  .subtitle {
+    font-size: 14px;
+    color: #71717A;
+    font-weight: 400;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 700;
+    color: #3F3F46;
+    margin-bottom: 8px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .worker-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  .worker-item {
+    background: #FAFAFA;
+    border: 1.5px solid #E4E4E7;
+    border-radius: 10px;
+    padding: 13px 10px;
+    text-align: center;
+    font-size: 14px;
+    font-weight: 500;
+    color: #71717A;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .worker-item.selected {
+    border-color: #6366F1;
+    background: #EEF2FF;
+    color: #4338CA;
+    font-weight: 700;
+  }
+  .divider {
+    height: 1.5px;
+    background: #F4F4F5;
+    margin: 20px 0;
+  }
+  .pin-dots {
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    margin: 16px 0 24px;
+  }
+  .dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: #E4E4E7;
+    border: 2px solid #D4D4D8;
+  }
+  .dot.filled {
+    background: #6366F1;
+    border-color: #6366F1;
+  }
+  .btn {
+    width: 100%;
+    padding: 15px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    letter-spacing: -0.01em;
+  }
+  .btn-primary {
+    background: #09090B;
+    color: #fff;
+    transition: background 0.15s;
+  }
+  .btn-primary:hover { background: #27272A; }
+  .accent-line {
+    width: 40px;
+    height: 4px;
+    background: #6366F1;
+    border-radius: 2px;
+    margin-bottom: 16px;
+  }
+</style>
+</head>
+<body>
+  <div class="label-top">ג — Bold & Minimal</div>
+  <div class="card">
+    <div class="card-header">
+      <div class="accent-line"></div>
+      <div class="eyebrow">כניסה לעובד</div>
+      <h1>שלום,<br>מי את/ה?</h1>
+      <div class="subtitle">בחר/י שם מהרשימה והזן/י קוד</div>
+    </div>
+    <label>בחר עובד</label>
+    <div class="worker-grid">
+      <div class="worker-item selected">דוד כהן</div>
+      <div class="worker-item">מרים לוי</div>
+      <div class="worker-item">יוסי אברהם</div>
+      <div class="worker-item">שרה גרין</div>
+    </div>
+    <div class="divider"></div>
+    <label>קוד אישי</label>
+    <div class="pin-dots">
+      <div class="dot filled"></div>
+      <div class="dot filled"></div>
+      <div class="dot filled"></div>
+      <div class="dot"></div>
+    </div>
+    <button class="btn btn-primary">כניסה ←</button>
+  </div>
+</body>
+</html>
