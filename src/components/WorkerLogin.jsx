@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react'
 import { getDisplayWorkerName, getWorkerInitials } from '../utils/formatters'
 
-const PIN_LENGTH = 4
+const PIN_MIN_LENGTH = 4
+const PIN_MAX_LENGTH = 10
 
 function WorkerLogin({ workers, onLogin }) {
   const [selectedWorker, setSelectedWorker] = useState(null)
@@ -17,14 +18,14 @@ function WorkerLogin({ workers, onLogin }) {
   }
 
   const handlePinChange = (e) => {
-    const val = e.target.value.replace(/\D/g, '').slice(0, PIN_LENGTH)
+    const val = e.target.value.replace(/\D/g, '').slice(0, PIN_MAX_LENGTH)
     setPin(val)
     setError('')
   }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!selectedWorker || pin.length < PIN_LENGTH) return
+    if (!selectedWorker || pin.length < PIN_MIN_LENGTH) return
     setSubmitting(true)
     try {
       await onLogin(selectedWorker.id, pin)
@@ -65,10 +66,10 @@ function WorkerLogin({ workers, onLogin }) {
 
   return (
     <div className="login-container">
-      <div className="card" style={{ padding: '28px 24px', overflow: 'visible' }}>
+      <div className="card" style={{ padding: '20px 20px', overflow: 'visible' }}>
 
         {/* Badge + Title */}
-        <div style={{ marginBottom: '24px' }}>
+        <div style={{ marginBottom: '16px' }}>
           <div style={{
             display: 'inline-block',
             background: 'rgba(0,122,255,0.15)',
@@ -102,7 +103,7 @@ function WorkerLogin({ workers, onLogin }) {
           display: 'grid',
           gridTemplateColumns: 'repeat(2, 1fr)',
           gap: '8px',
-          marginBottom: '20px'
+          marginBottom: '14px'
         }}>
           {activeWorkers.map(worker => (
             <div
@@ -129,71 +130,46 @@ function WorkerLogin({ workers, onLogin }) {
           ))}
         </div>
 
-        {/* Divider */}
-        <div style={{ height: '1px', background: 'rgba(255,255,255,0.07)', margin: '0 0 18px' }} />
-
         {/* PIN section */}
         <form onSubmit={handleSubmit}>
           <div style={{
             fontSize: '12px',
             color: 'var(--text-tertiary)',
-            marginBottom: '12px',
+            marginBottom: '10px',
             textAlign: 'center'
           }}>
             {selectedWorker ? 'קוד אישי' : 'בחר/י נותן שירות תחילה'}
           </div>
 
-          {/* PIN dots */}
-          <div style={{
-            display: 'flex',
-            justifyContent: 'center',
-            gap: '14px',
-            marginBottom: '12px'
-          }}>
-            {Array.from({ length: PIN_LENGTH }).map((_, i) => (
-              <div
-                key={i}
-                style={{
-                  width: '13px',
-                  height: '13px',
-                  borderRadius: '50%',
-                  background: i < pin.length ? '#007AFF' : 'var(--surface-3)',
-                  border: `1px solid ${i < pin.length ? '#007AFF' : 'var(--border-strong)'}`,
-                  transition: 'all 0.15s',
-                  boxShadow: i < pin.length ? '0 0 8px rgba(0,122,255,0.4)' : 'none'
-                }}
-              />
-            ))}
-          </div>
-
-          {/* Visible PIN input */}
-          <input
-            ref={inputRef}
-            type="password"
-            inputMode="numeric"
-            pattern="[0-9]*"
-            value={pin}
-            onChange={handlePinChange}
-            disabled={!selectedWorker || submitting}
-            placeholder={selectedWorker ? '••••' : ''}
-            autoComplete="off"
-            style={{
-              display: 'block',
-              width: '100%',
-              textAlign: 'center',
-              fontSize: '1.5rem',
-              letterSpacing: '0.4rem',
-              padding: '11px 14px',
-              background: selectedWorker ? 'var(--surface-2)' : 'transparent',
-              border: `1px solid ${selectedWorker ? 'var(--border-mid)' : 'transparent'}`,
-              borderRadius: 'var(--radius-md)',
-              color: 'var(--text-primary)',
-              fontFamily: 'inherit',
-              marginBottom: '8px',
-              cursor: selectedWorker ? 'text' : 'default',
-              transition: 'all 0.2s'
-            }}
-          />
+          {/* PIN input — only shown when worker is selected */}
+          {selectedWorker && (
+            <input
+              ref={inputRef}
+              type="password"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={pin}
+              onChange={handlePinChange}
+              disabled={submitting}
+              placeholder="••••"
+              autoComplete="off"
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'center',
+                fontSize: '1.5rem',
+                letterSpacing: '0.4rem',
+                padding: '11px 14px',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border-mid)',
+                borderRadius: 'var(--radius-md)',
+                color: 'var(--text-primary)',
+                fontFamily: 'inherit',
+                marginBottom: '8px',
+                cursor: 'text',
+              }}
+            />
+          )}
 
           {error && (
             <div role="alert" style={{
@@ -222,7 +198,7 @@ function WorkerLogin({ workers, onLogin }) {
               type="submit"
               className="btn btn-primary"
               style={{ flex: 1 }}
-              disabled={!selectedWorker || pin.length < PIN_LENGTH || submitting}
+              disabled={!selectedWorker || pin.length < PIN_MIN_LENGTH || submitting}
             >
               {submitting ? <span className="spinner" /> : 'כניסה →'}
             </button>

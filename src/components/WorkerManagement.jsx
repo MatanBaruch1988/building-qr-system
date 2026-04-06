@@ -4,8 +4,11 @@ import { EditButton, DeleteButton } from './ui/IconButton'
 function WorkerManagement({ workers, onAddWorker, onEditWorker, onDeleteWorker }) {
   return (
     <div className="card">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-        <h2>נותני שירות</h2>
+      <div className="worker-management-header">
+        <h2>
+          נותני שירות
+          {workers.length > 0 && <span className="worker-count-badge">{workers.length}</span>}
+        </h2>
         <button className="btn btn-primary" onClick={onAddWorker}>
           + הוסף נותן שירות
         </button>

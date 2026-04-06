@@ -88,16 +88,12 @@ function WorkerApp() {
   }
 
   const handleWorkerLogin = async (workerId, pin) => {
-    try {
-      const workerInfo = await login(workerId, pin)
-      // If there's a QR code in the URL, process it
-      if (qrCodeFromUrl && locations.length > 0) {
-        processCode(qrCodeFromUrl)
-      } else {
-        setView('scanner')
-      }
-    } catch (err) {
-      // Error is handled by the hook and WorkerLogin component
+    const workerInfo = await login(workerId, pin)
+    // If there's a QR code in the URL, process it
+    if (qrCodeFromUrl && locations.length > 0) {
+      processCode(qrCodeFromUrl)
+    } else {
+      setView('scanner')
     }
   }
 

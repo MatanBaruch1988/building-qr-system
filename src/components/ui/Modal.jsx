@@ -3,27 +3,43 @@ import React, { useEffect, useRef } from 'react'
 function Modal({ show, onClose, title, children, footer }) {
   const modalRef = useRef(null)
   const previousFocusRef = useRef(null)
+  const onCloseRef = useRef(onClose)
 
+  // Sync ref on every render — without causing effect re-runs
+  useEffect(() => { onCloseRef.current = onClose })
+
+  // Effect 1: open/close lifecycle — runs only when `show` changes
   useEffect(() => {
     if (!show) return
 
     // Save currently focused element
     previousFocusRef.current = document.activeElement
 
-    // Focus the modal
     const timer = setTimeout(() => {
       if (modalRef.current) {
+        // Focus first INPUT (not the × button)
+        const firstInput = modalRef.current.querySelector('input, select, textarea')
         const firstFocusable = modalRef.current.querySelector(
           'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
         )
-        if (firstFocusable) firstFocusable.focus()
+        ;(firstInput || firstFocusable)?.focus()
       }
     }, 50)
 
-    // Handle Escape key
+    return () => {
+      clearTimeout(timer)
+      // Restore focus to element that was focused before modal opened
+      previousFocusRef.current?.focus()
+    }
+  }, [show]) // NO onClose dependency
+
+  // Effect 2: keyboard handler — runs only when `show` changes
+  useEffect(() => {
+    if (!show) return
+
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
-        onClose()
+        onCloseRef.current()
         return
       }
 
@@ -46,16 +62,8 @@ function Modal({ show, onClose, title, children, footer }) {
     }
 
     document.addEventListener('keydown', handleKeyDown)
-
-    return () => {
-      clearTimeout(timer)
-      document.removeEventListener('keydown', handleKeyDown)
-      // Restore focus
-      if (previousFocusRef.current) {
-        previousFocusRef.current.focus()
-      }
-    }
-  }, [show, onClose])
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [show]) // NO onClose dependency
 
   if (!show) return null
 

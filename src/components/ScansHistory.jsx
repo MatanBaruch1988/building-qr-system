@@ -159,44 +159,92 @@ function ScansHistory({ readOnly = false, workerNameFilter = '', workerIdFilter 
                 </span>
               </h4>
 
-              {dateScans.map(scan => (
-                <div key={scan.id} className="list-item" style={{ marginBottom: '8px' }}>
-                  <div className="list-item-content" style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div>
-                        <h4 style={{ marginBottom: '5px', color: scan.isValid ? 'var(--text-primary)' : 'var(--red)' }}>
-                          {!scan.isValid && '❌ '}{scan.locationName}
-                        </h4>
-                        <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                          {getDisplayName(scan)}
-                          {scan.distanceMeters !== undefined && <span> • {formatDistance(scan.distanceMeters)}</span>}
-                          {scan.gpsAccuracy && <span> • דיוק GPS: {Math.round(scan.gpsAccuracy)}m</span>}
-                        </p>
-                        {!scan.isValid && scan.errorReason && (
-                          <p style={{ fontSize: '0.85rem', color: '#dc3545', marginTop: '4px' }}>
-                            סיבה: {scan.errorReason}
-                          </p>
-                        )}
-                      </div>
-                      <div style={{ textAlign: 'left' }}>
-                        <span style={{ fontWeight: 'bold', fontSize: '1.1rem', color: 'var(--text-primary)' }}>
+              {/* DESKTOP TABLE */}
+              <div className="scans-table-wrapper">
+                <table className="scan-desktop-table">
+                  <thead>
+                    <tr>
+                      <th>שעה</th>
+                      <th>נקודה</th>
+                      <th>נותן שירות</th>
+                      <th>מרחק</th>
+                      <th>סטטוס</th>
+                      {!readOnly && <th></th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dateScans.map(scan => (
+                      <tr key={scan.id}>
+                        <td style={{ fontWeight: 600, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                           {formatTime(scan.timestamp)}
-                        </span>
-                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'flex-end', marginTop: '4px' }}>
-                          {scan.isValid && scan.confidenceScore && (
-                            <ConfidenceBadge confidence={scan.confidenceScore} />
-                          )}
-                          {!scan.isValid && <span className="badge badge-danger">נדחה</span>}
-                          {scan.isValid && !scan.confidenceScore && <span className="badge badge-success">אומת</span>}
-                        </div>
+                        </td>
+                        <td style={{ color: scan.isValid ? 'var(--text-primary)' : 'var(--red)', fontWeight: 500 }}>
+                          {!scan.isValid && '❌ '}{scan.locationName}
+                        </td>
+                        <td style={{ color: 'var(--text-secondary)' }}>{getDisplayName(scan)}</td>
+                        <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                          {scan.distanceMeters !== undefined ? formatDistance(scan.distanceMeters) : '—'}
+                        </td>
+                        <td>
+                          {scan.confidenceScore
+                            ? <ConfidenceBadge confidence={scan.confidenceScore} />
+                            : <span style={{ color: scan.isValid ? 'var(--green)' : 'var(--red)', fontSize: '0.8125rem', fontWeight: 600 }}>
+                                {scan.isValid ? '✓ אומת' : '✗ נדחה'}
+                              </span>
+                          }
+                        </td>
                         {!readOnly && (
-                          <DeleteButton onClick={() => handleDeleteScan(scan.id)} title="מחק סריקה" />
+                          <td>
+                            <DeleteButton onClick={() => handleDeleteScan(scan.id)} title="מחק סריקה" />
+                          </td>
                         )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* MOBILE CARDS */}
+              <div className="scan-card-rows">
+                {dateScans.map(scan => (
+                  <div key={scan.id} className="list-item" style={{ marginBottom: '8px' }}>
+                    <div className="list-item-content" style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                          <h4 style={{ marginBottom: '5px', color: scan.isValid ? 'var(--text-primary)' : 'var(--red)' }}>
+                            {!scan.isValid && '❌ '}{scan.locationName}
+                          </h4>
+                          <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                            {getDisplayName(scan)}
+                            {scan.distanceMeters !== undefined && <span> • {formatDistance(scan.distanceMeters)}</span>}
+                            {scan.gpsAccuracy && <span> • דיוק GPS: {Math.round(scan.gpsAccuracy)}m</span>}
+                          </p>
+                          {!scan.isValid && scan.errorReason && (
+                            <p style={{ fontSize: '0.85rem', color: '#dc3545', marginTop: '4px' }}>
+                              סיבה: {scan.errorReason}
+                            </p>
+                          )}
+                        </div>
+                        <div style={{ textAlign: 'left' }}>
+                          <span style={{ fontWeight: 'bold', fontSize: '1.1rem', color: 'var(--text-primary)' }}>
+                            {formatTime(scan.timestamp)}
+                          </span>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'flex-end', marginTop: '4px' }}>
+                            {scan.isValid && scan.confidenceScore && (
+                              <ConfidenceBadge confidence={scan.confidenceScore} />
+                            )}
+                            {!scan.isValid && <span className="badge badge-danger">נדחה</span>}
+                            {scan.isValid && !scan.confidenceScore && <span className="badge badge-success">אומת</span>}
+                          </div>
+                          {!readOnly && (
+                            <DeleteButton onClick={() => handleDeleteScan(scan.id)} title="מחק סריקה" />
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           ))}
         </div>

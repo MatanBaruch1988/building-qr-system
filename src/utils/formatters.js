@@ -49,12 +49,17 @@ export const getScanWorkerDisplayName = (scan, workers = []) => {
  * Get assigned worker names for a location, with fallback for old format
  */
 export const getLocationAssignedNames = (location, workers = []) => {
-  if (location.assignedWorkerNames?.length > 0) {
-    return location.assignedWorkerNames.join(', ')
+  if (location.assignedWorkerIds?.length > 0 && workers.length > 0) {
+    const names = location.assignedWorkerIds
+      .map(id => workers.find(w => w.id === id))
+      .filter(Boolean)
+      .map(w => w.company || w.name)
+    return names.length > 0 ? names.join(', ') : null
   }
+  // fallback: old single-worker format
   if (location.assignedWorkerId && workers.length > 0) {
     const w = workers.find(w => w.id === location.assignedWorkerId)
-    return w ? (w.company || w.name) : (location.assignedWorkerName || '-')
+    return w ? (w.company || w.name) : null
   }
   return null
 }

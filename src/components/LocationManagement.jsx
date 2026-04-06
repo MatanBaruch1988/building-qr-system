@@ -1,7 +1,8 @@
 import React from 'react'
 import { EditButton, DeleteButton } from './ui/IconButton'
 import { getLocationAssignedNames } from '../utils/formatters'
-import { downloadQRCode, printQRCode } from '../utils/qrGenerator'
+import { printAllQRCodes } from '../utils/qrGenerator'
+import Modal from './ui/Modal'
 
 function LocationManagement({
   locations,
@@ -14,13 +15,20 @@ function LocationManagement({
   qrCodeDataUrl
 }) {
   return (
-    <div className="grid grid-2">
-      <div className="card">
+    <>
+      <div className="card location-list-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
           <h2>נקודות QR</h2>
-          <button className="btn btn-primary" onClick={onAddLocation}>
-            + הוסף נקודה
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {locations.length > 0 && (
+              <button className="btn btn-secondary" onClick={() => printAllQRCodes(locations)}>
+                🖨️ הדפס הכל
+              </button>
+            )}
+            <button className="btn btn-primary" onClick={onAddLocation}>
+              + הוסף נקודה
+            </button>
+          </div>
         </div>
 
         {locations.length === 0 ? (
@@ -30,7 +38,7 @@ function LocationManagement({
             <p>הוסף נקודה חדשה להתחיל</p>
           </div>
         ) : (
-          <div>
+          <div className="location-list">
             {locations.map(location => {
               const assignedNames = getLocationAssignedNames(location, workers)
               return (
@@ -71,43 +79,25 @@ function LocationManagement({
         )}
       </div>
 
-      {/* QR Code Display */}
-      <div className="card">
-        <h2>קוד QR</h2>
-        {selectedLocation ? (
-          <div className="qr-display">
-            <h3>{selectedLocation.name}</h3>
-            {qrCodeDataUrl && (
-              <>
-                <img src={qrCodeDataUrl} alt="QR Code" style={{ marginTop: '15px' }} />
-                <div style={{ marginTop: '15px', display: 'flex', gap: '10px', justifyContent: 'center' }}>
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => downloadQRCode(qrCodeDataUrl, `qr-${selectedLocation.name}.png`)}
-                  >
-                    הורד
-                  </button>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => printQRCode(qrCodeDataUrl, selectedLocation.name)}
-                  >
-                    הדפס
-                  </button>
-                </div>
-              </>
-            )}
-            <p style={{ marginTop: '15px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-              קואורדינטות: {selectedLocation.latitude?.toFixed(5)}, {selectedLocation.longitude?.toFixed(5)}
+      {/* QR Floating Modal */}
+      <Modal
+        show={!!selectedLocation && !!qrCodeDataUrl}
+        onClose={() => onSelectLocation(null)}
+        title={selectedLocation?.name || ''}
+      >
+        <div className="qr-display">
+          <img src={qrCodeDataUrl} alt="QR Code" />
+          {selectedLocation?.description && (
+            <p style={{ marginTop: '12px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+              {selectedLocation.description}
             </p>
-          </div>
-        ) : (
-          <div className="empty-state">
-            <div className="empty-state-icon">📷</div>
-            <p>בחר נקודה לצפייה בקוד QR</p>
-          </div>
-        )}
-      </div>
-    </div>
+          )}
+          <p style={{ marginTop: '10px', fontSize: '0.85rem', color: 'var(--text-tertiary)', fontFamily: 'monospace', direction: 'ltr' }}>
+            {selectedLocation?.latitude?.toFixed(5)}, {selectedLocation?.longitude?.toFixed(5)}
+          </p>
+        </div>
+      </Modal>
+    </>
   )
 }
 

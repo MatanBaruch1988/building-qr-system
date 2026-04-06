@@ -143,6 +143,139 @@ export function downloadQRCode(dataUrl, filename = 'qrcode.png') {
 }
 
 /**
+ * Print all QR codes in a 3x3 grid (A4 pages)
+ * @param {Array} locations - Array of location objects with qrCode and name fields
+ */
+export async function printAllQRCodes(locations) {
+  const active = locations.filter(loc => loc.qrCode)
+  if (active.length === 0) return
+
+  // Generate all data URLs in parallel
+  const items = await Promise.all(
+    active.map(async (loc) => ({
+      name: loc.name || '',
+      description: loc.description || '',
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      dataUrl: await generateQRCodeDataURL(loc.qrCode, { width: 300 })
+    }))
+  )
+
+  // Pad to fill complete pages (multiples of 6)
+  while (items.length % 6 !== 0) {
+    items.push({ name: '', dataUrl: null })
+  }
+
+  const printWindow = window.open('', '_blank')
+
+  // Split into pages of 6
+  const pages = []
+  for (let i = 0; i < items.length; i += 6) {
+    pages.push(items.slice(i, i + 6))
+  }
+
+  const formatCoords = (lat, lng) => {
+    if (lat == null || lng == null) return ''
+    return `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`
+  }
+
+  const pagesHtml = pages.map((page, pi) => `
+    <div class="page">
+      ${page.map(item => item.dataUrl ? `
+        <div class="cell">
+          <div class="cell-header">
+            <p class="cell-name">${escapeHtml(item.name)}</p>
+            ${item.description ? `<p class="cell-desc">${escapeHtml(item.description)}</p>` : ''}
+          </div>
+          <img src="${item.dataUrl}" alt="QR Code" />
+          ${formatCoords(item.latitude, item.longitude) ? `<p class="cell-coords">${formatCoords(item.latitude, item.longitude)}</p>` : ''}
+        </div>
+      ` : '<div class="cell empty"></div>').join('')}
+    </div>
+  `).join('')
+
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html dir="rtl">
+    <head>
+      <meta charset="utf-8" />
+      <title>כל קודי QR</title>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, Helvetica, sans-serif; background: #fff; }
+        .page {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          grid-template-rows: repeat(2, 1fr);
+          width: 297mm;
+          height: 210mm;
+          page-break-after: always;
+          break-after: page;
+        }
+        .page:last-child {
+          page-break-after: avoid;
+          break-after: avoid;
+        }
+        .cell {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: space-between;
+          padding: 5mm 6mm;
+          border: 0.3mm solid #ccc;
+          overflow: hidden;
+        }
+        .cell.empty { border-color: #eee; }
+        .cell-header {
+          text-align: center;
+          width: 100%;
+        }
+        .cell-name {
+          font-size: 12pt;
+          font-weight: bold;
+          color: #000;
+          line-height: 1.2;
+          word-break: break-word;
+        }
+        .cell-desc {
+          font-size: 9pt;
+          color: #444;
+          margin-top: 1mm;
+          line-height: 1.2;
+          word-break: break-word;
+        }
+        .cell img {
+          width: 60mm;
+          height: 60mm;
+          flex-shrink: 0;
+        }
+        .cell-coords {
+          font-size: 8pt;
+          color: #666;
+          font-family: 'Courier New', monospace;
+          text-align: center;
+          direction: ltr;
+        }
+        @media print {
+          @page { size: A4 landscape; margin: 0; }
+          body { width: 297mm; }
+        }
+      </style>
+    </head>
+    <body>
+      ${pagesHtml}
+      <script>
+        window.onload = function() {
+          setTimeout(function() { window.print(); }, 400);
+        };
+      </script>
+    </body>
+    </html>
+  `)
+  printWindow.document.close()
+}
+
+/**
  * Print QR code
  * @param {string} dataUrl - The QR code data URL
  * @param {string} title - Title to print above QR code

@@ -12,7 +12,6 @@ import LocationForm from './LocationForm'
 import WorkerForm from './WorkerForm'
 
 function AdminPanel({ locations, workers }) {
-  const [activeTab, setActiveTab] = useState('locations')
   const [showLocationModal, setShowLocationModal] = useState(false)
   const [showWorkerModal, setShowWorkerModal] = useState(false)
   const [editingLocation, setEditingLocation] = useState(null)
@@ -220,6 +219,19 @@ function AdminPanel({ locations, workers }) {
     if (!window.confirm('האם למחוק את נותן השירות?')) return
     try {
       await deleteDoc(doc(db, 'workers', workerId))
+
+      // Cascade: remove worker from all location assignments
+      const affected = locations.filter(loc =>
+        loc.assignedWorkerIds?.includes(workerId)
+      )
+      for (const loc of affected) {
+        const idx = loc.assignedWorkerIds.indexOf(workerId)
+        await updateDoc(doc(db, 'locations', loc.id), {
+          assignedWorkerIds: loc.assignedWorkerIds.filter(id => id !== workerId),
+          assignedWorkerNames: (loc.assignedWorkerNames || []).filter((_, i) => i !== idx)
+        })
+      }
+
       setMessage({ type: 'success', text: 'נותן השירות נמחק' })
     } catch (error) {
       console.error('Error deleting worker:', error)
@@ -258,22 +270,7 @@ function AdminPanel({ locations, workers }) {
         </div>
       )}
 
-      <div className="nav" style={{ marginBottom: '20px' }}>
-        <button
-          className={`nav-btn ${activeTab === 'locations' ? 'active' : ''}`}
-          onClick={() => setActiveTab('locations')}
-        >
-          נקודות QR ({locations.length})
-        </button>
-        <button
-          className={`nav-btn ${activeTab === 'workers' ? 'active' : ''}`}
-          onClick={() => setActiveTab('workers')}
-        >
-          נותני שירות ({workers.length})
-        </button>
-      </div>
-
-      {activeTab === 'locations' && (
+      <div className="admin-panel-grid">
         <LocationManagement
           locations={locations}
           workers={workers}
@@ -284,16 +281,13 @@ function AdminPanel({ locations, workers }) {
           onSelectLocation={setSelectedLocation}
           qrCodeDataUrl={qrCodeDataUrl}
         />
-      )}
-
-      {activeTab === 'workers' && (
         <WorkerManagement
           workers={workers}
           onAddWorker={openAddWorker}
           onEditWorker={openEditWorker}
           onDeleteWorker={handleDeleteWorker}
         />
-      )}
+      </div>
 
       {/* Location Modal */}
       <Modal
