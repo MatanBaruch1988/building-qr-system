@@ -765,7 +765,9 @@ tr:hover td {
   max-width: 100%;
   width: 100%;
   max-height: 90vh;
-  overflow-y: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   animation: slideUp var(--transition-base) ease-out;
 }
 
@@ -843,6 +845,9 @@ tr:hover td {
 
 .modal-body {
   padding: 8px 0;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .modal-footer {
@@ -850,6 +855,8 @@ tr:hover td {
   display: flex;
   gap: 10px;
   justify-content: stretch;
+  flex-shrink: 0;
+  border-top: 1px solid rgba(255,255,255,0.06);
 }
 
 .modal-footer .btn {
