@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>נוכחות בבניין</title>
+    <noscript><meta http-equiv="refresh" content="0;url=https://building-qr-system.vercel.app/" /></noscript>
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b0b0d; color: #f5f5f7; font-family: system-ui, sans-serif; text-align: center; padding: 24px; }
+      a { color: #7cc0ff; font-size: 1.25rem; }
+    </style>
+  </head>
+  <body>
+    <!--
+      The QR codes printed for the OLD app point to https://building-qr-system.web.app/scan?code=…
+      This page keeps them working: it forwards the same path and code to the new address.
+      If the app gets a custom domain, change NEW_ORIGIN here and redeploy this folder.
+    -->
+    <main>
+      <p>מעביר לאפליקציית הנוכחות…</p>
+      <p><a id="go" href="https://building-qr-system.vercel.app/">לחצו כאן אם לא עברתם אוטומטית</a></p>
+    </main>
+    <script>
+      var NEW_ORIGIN = 'https://building-qr-system.vercel.app'
+      var target = NEW_ORIGIN + location.pathname + location.search + location.hash
+      document.getElementById('go').href = target
+      location.replace(target)
+    </script>
+  </body>
+</html>

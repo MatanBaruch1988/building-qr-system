@@ -1,242 +1,211 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { useSearchParams, useNavigate } from 'react-router-dom'
-import { useLocations, usePublicWorkerList } from '../hooks/useFirebaseData'
-import { useWorkerAuth } from '../hooks/useWorkerAuth'
-import { processQRScan } from '../services/scanProcessor'
-import WorkerLogin from '../components/WorkerLogin'
-import QRScanner from '../components/QRScanner'
-import ScanResult from '../components/ScanResult'
-import ScansHistory from '../components/ScansHistory'
-import { getDisplayWorkerName } from '../utils/formatters'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { I18nProvider, useI18n } from '../i18n/index.jsx'
+import { api } from '../api/client.js'
+import { loadSession, saveSession, clearSession } from '../worker/session.js'
+import { createQueue } from '../worker/scanQueue.js'
+import { getFix } from '../worker/geo.js'
+import { performCheckIn } from '../worker/checkIn.js'
+import { uuid } from '../worker/uuid.js'
+import { useProviders, usePoint, useTodayVisits, useQueueSync } from '../worker/hooks.js'
+import { TopBar, LoginView, HomeView, WorkingView, ResultView } from '../worker/components.jsx'
+import '../ui/ui.css'
 
-function WorkerApp() {
-  const [view, setView] = useState('login') // 'login' | 'scanner' | 'result' | 'processing' | 'history'
-  const [scanResult, setScanResult] = useState(null)
-  const [processingMessage, setProcessingMessage] = useState('')
-  const isProcessingRef = useRef(false)
-  const pendingResultRef = useRef(null)
-
-  const locations = useLocations()
-  const { workers, loading: workersLoading } = usePublicWorkerList()
-  const { worker, login, logout, isLoggedIn } = useWorkerAuth()
-
-  const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
-  const qrCodeFromUrl = searchParams.get('code')
-
-  // עדכון view כשעובד מתחבר
-  useEffect(() => {
-    if (isLoggedIn && view === 'login') {
-      setView('scanner')
-    }
-  }, [isLoggedIn, view])
-
-  // Polling to check for pending results (iOS fix)
-  // Always runs, doesn't depend on view state
-  useEffect(() => {
-    const checkPendingResult = () => {
-      if (pendingResultRef.current) {
-        const result = pendingResultRef.current
-        pendingResultRef.current = null
-        isProcessingRef.current = false
-        setScanResult(result)
-        setView('result')
-      }
-    }
-
-    const interval = setInterval(checkPendingResult, 500)
-    return () => clearInterval(interval)
-  }, []) // No dependencies - always running
-
-  // כשיש קוד ב-URL ויש עובד מחובר - עבד אוטומטית
-  useEffect(() => {
-    if (qrCodeFromUrl && worker && locations.length > 0 && !isProcessingRef.current) {
-      processCode(qrCodeFromUrl)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [qrCodeFromUrl, worker, locations.length])
-
-  const processCode = (code) => {
-    // מניעת עיבוד כפול
-    if (isProcessingRef.current) return
-    isProcessingRef.current = true
-    pendingResultRef.current = null
-
-    // נקה את הקוד מה-URL מיד כדי למנוע עיבוד חוזר
-    if (qrCodeFromUrl) {
-      navigate('/', { replace: true })
-    }
-
-    setView('processing')
-    setProcessingMessage('מעבד קוד QR...')
-
-    processQRScan(code, locations, worker, (msg) => {
-      setProcessingMessage(msg)
-    })
-      .then((result) => {
-        // Store result for polling to pick up
-        pendingResultRef.current = result
-      })
-      .catch((err) => {
-        console.error('Error processing QR:', err)
-        pendingResultRef.current = {
-          success: false,
-          error: err.message || 'שגיאה לא ידועה',
-          details: `קוד: ${code}`
-        }
-      })
-  }
-
-  const handleWorkerLogin = async (workerId, pin) => {
-    const workerInfo = await login(workerId, pin)
-    // If there's a QR code in the URL, process it
-    if (qrCodeFromUrl && locations.length > 0) {
-      processCode(qrCodeFromUrl)
-    } else {
-      setView('scanner')
-    }
-  }
-
-  const handleBackToScanner = () => {
-    setScanResult(null)
-    setView('scanner')
-    if (qrCodeFromUrl) {
-      navigate('/', { replace: true })
-    }
-  }
-
-  const handleLogout = () => {
-    logout()
-    setScanResult(null)
-    setView('login')
-    if (qrCodeFromUrl) {
-      navigate('/', { replace: true })
-    }
-  }
-
-  const workerDisplayName = worker ? getDisplayWorkerName(worker) : ''
-
+export default function WorkerApp() {
+  const [session, setSession] = useState(loadSession)
   return (
-    <div className="container">
-      <header className="header">
-        <h1>מערכת אימות נוכחות</h1>
-        {!worker && <p>סריקת QR עם אימות GPS</p>}
-      </header>
-
-      {worker && (view === 'scanner' || view === 'result' || view === 'processing' || view === 'history') && (
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          background: 'var(--surface-1)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 'var(--radius-lg)',
-          padding: '10px 16px',
-          marginBottom: '16px'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{
-              width: '8px', height: '8px', borderRadius: '50%',
-              background: 'var(--green)',
-              boxShadow: '0 0 6px rgba(52,199,89,0.5)'
-            }} />
-            <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-              מחובר כ: <strong style={{ color: 'var(--text-primary)' }}>{workerDisplayName}</strong>
-            </span>
-          </div>
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={handleLogout}
-          >
-            התנתק
-          </button>
-        </div>
-      )}
-
-      {/* הודעה כשיש קוד ב-URL אבל אין עובד מחובר */}
-      {qrCodeFromUrl && !worker && view === 'login' && (
-        <div className="card" style={{
-          textAlign: 'center',
-          padding: '20px',
-          background: 'linear-gradient(135deg, #007AFF 0%, #AF52DE 100%)',
-          color: 'white'
-        }}>
-          <div style={{ fontSize: '2rem', marginBottom: '10px' }}>📱</div>
-          <p style={{ margin: 0, fontSize: '1.1rem' }}>
-            נמצא קוד QR! בחר נותן שירות כדי להמשיך
-          </p>
-        </div>
-      )}
-
-      {view === 'login' && (
-        <WorkerLogin
-          workers={workers}
-          onLogin={handleWorkerLogin}
-        />
-      )}
-
-      {view === 'processing' && (
-        <div className="card" style={{ textAlign: 'center', padding: '60px 20px' }}>
-          <div className="spinner" style={{
-            width: '48px',
-            height: '48px',
-            borderWidth: '3px',
-            margin: '0 auto 20px'
-          }}></div>
-          <p style={{ fontSize: '1.1rem', color: 'var(--text-secondary)' }}>
-            {processingMessage}
-          </p>
-        </div>
-      )}
-
-      {view === 'scanner' && worker && (
-        <>
-          <QRScanner />
-          <button
-            className="btn btn-secondary"
-            style={{ width: '100%', marginTop: '15px', padding: '14px' }}
-            onClick={() => setView('history')}
-          >
-            היסטוריית סריקות
-          </button>
-        </>
-      )}
-
-      {view === 'history' && worker && (
-        <>
-          <button
-            className="btn btn-secondary"
-            style={{ width: '100%', marginBottom: '15px', padding: '14px' }}
-            onClick={() => setView('scanner')}
-          >
-            ← חזרה
-          </button>
-          <ScansHistory
-            readOnly={true}
-            workerIdFilter={workerDisplayName === 'Test' ? '' : worker.id}
-            workers={workers}
-            showWorkerFilter={workerDisplayName === 'Test'}
-          />
-        </>
-      )}
-
-      {view === 'result' && scanResult && (
-        <ScanResult
-          result={scanResult}
-          onBack={handleBackToScanner}
-        />
-      )}
-
-      {/* Admin link at bottom - hide on login screen to save space */}
-      {view !== 'login' && (
-        <div style={{ textAlign: 'center', marginTop: '30px', paddingBottom: '10px' }}>
-          <a href="/admin" className="admin-link">
-            גישה לניהול
-          </a>
-        </div>
-      )}
-    </div>
+    <I18nProvider providerLang={session?.provider?.lang}>
+      <WorkerShell session={session} setSession={setSession} />
+    </I18nProvider>
   )
 }
 
-export default WorkerApp
+function LoginScreen({ pointName, notice, onSignedIn }) {
+  const providers = useProviders()
+  return <LoginView providers={providers} pointName={pointName} notice={notice} onSignedIn={onSignedIn} />
+}
+
+const vibrate = () => {
+  try {
+    navigator.vibrate?.(70)
+  } catch {
+    /* not supported */
+  }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const stripCodeFromUrl = () => window.history.replaceState(null, '', '/')
+
+function WorkerShell({ session, setSession }) {
+  const { t } = useI18n()
+  const queue = useMemo(() => createQueue(), [])
+  const deps = useMemo(() => ({ api, getFix, queue, newId: uuid, now: () => new Date() }), [queue])
+
+  // The QR link is /scan?code=…. The code stays in the address bar (and in `code`) until the check-in has
+  // produced an answer, so a refresh while signing in or while waiting does not lose it.
+  const [code, setCode] = useState(() => new URLSearchParams(window.location.search).get('code'))
+  const pointState = usePoint(code)
+  const pointRef = useRef(null)
+  pointRef.current = pointState.point
+
+  const [view, setView] = useState('home') // home | working | result
+  const [workingPhase, setWorkingPhase] = useState('locating')
+  const [result, setResult] = useState(null)
+  const [notice, setNotice] = useState(null)
+  const [loginNotice, setLoginNotice] = useState(null)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const startedFor = useRef(null)
+
+  const handleSignedOut = useCallback(() => {
+    clearSession()
+    setSession(null)
+    setView('home')
+    setResult(null)
+    setNotice(null) // the next person must not inherit the previous person's messages
+    startedFor.current = null // after signing in again the still-pending code is processed
+    setLoginNotice(t('error.invalid_session'))
+  }, [setSession, t])
+
+  const sync = useQueueSync({
+    session,
+    queue,
+    onSignedOut: handleSignedOut,
+    onDone: (res) => {
+      setRefreshKey((k) => k + 1)
+      const unaccepted = res.rejected + res.dropped
+      setNotice(unaccepted
+        ? { tone: 'warn', text: t('sync.dropped', { count: unaccepted }) }
+        : { tone: 'ok', text: t('sync.done') })
+    },
+  })
+
+  // Good news fades; a warning stays until dismissed (it may be the only word that visits were refused).
+  useEffect(() => {
+    if (!notice || notice.tone !== 'ok') return
+    const timer = setTimeout(() => setNotice(null), 9000)
+    return () => clearTimeout(timer)
+  }, [notice])
+
+  // A stored session may have been revoked (provider deactivated, password reset): check quietly.
+  useEffect(() => {
+    if (!session) return
+    const token = session.token
+    api('/session', { token, timeoutMs: 8000 })
+      .then((res) => setSession((s) => (s && s.token === token ? { ...s, provider: res.provider } : s)))
+      .catch((err) => err.status === 401 && handleSignedOut())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // (A slow answer that arrives after "Switch person" and a new sign-in must not touch the new session:
+  //  the token comparison above covers the 200 case; `switchWorker` clears the verify via the token check below.)
+
+  const runCheckIn = useCallback(
+    async (theCode, pointOverride) => {
+      const point = pointOverride ?? pointRef.current
+      setResult(null)
+      setWorkingPhase('locating')
+      setView('working')
+      const r = await performCheckIn({ code: theCode, point, session, deps, onPhase: setWorkingPhase })
+      if (r.kind === 'signedOut') return handleSignedOut()
+      // There is an answer now: the code is spent. (Kept in the result for the retry button.) Clearing it here
+      // also stops a later sign-out + sign-in from firing the same check-in a second time.
+      stripCodeFromUrl()
+      setCode(null)
+      setResult({ ...r, code: theCode, point })
+      setView('result')
+      if (r.kind === 'success' || r.kind === 'duplicate') vibrate()
+      if (r.kind === 'queued') sync.refresh()
+      setRefreshKey((k) => k + 1)
+    },
+    [session, deps, handleSignedOut, sync],
+  )
+
+  // Signed in + a scanned code → check in straight away, once per code.
+  useEffect(() => {
+    if (!session || !code || pointState.status === 'loading' || startedFor.current === code) return
+    // A cached "inactive" flag may be stale (the committee may have re-enabled the point): wait for the network.
+    if (pointState.status === 'ready' && pointState.point?.is_active === false && !pointState.settled) return
+    startedFor.current = code
+    if (pointState.status === 'invalid') {
+      stripCodeFromUrl()
+      setCode(null)
+      setResult({ kind: 'error', code: pointState.error })
+      setView('result')
+    } else if (pointState.point?.is_active === false) {
+      stripCodeFromUrl()
+      setCode(null)
+      setResult({ kind: 'error', code: 'point_inactive' })
+      setView('result')
+    } else {
+      runCheckIn(code)
+    }
+  }, [session, code, pointState, runCheckIn])
+
+  // `refreshKey` alone drives refetching. (Adding sync.pending to it was a bug: React batches the two updates
+  // after a sync and the sum can come out unchanged, so the list never refreshed.) The waiting rows are read
+  // from the queue on every render, and this component re-renders whenever the sync state changes.
+  const visits = useTodayVisits({ session, queue, refreshKey })
+
+  const onSignedIn = (data, remember) => {
+    saveSession(data, remember)
+    setLoginNotice(null)
+    setSession({ ...data, remember })
+  }
+
+  // Give the phone one last chance to upload this person's saved visits before they are signed out: on a shared
+  // phone they may never come back to it.
+  const switchWorker = async () => {
+    if (session) {
+      await Promise.race([sync.flush(), sleep(2500)])
+      api('/session', { method: 'DELETE', token: session.token, timeoutMs: 5000 }).catch(() => {})
+    }
+    clearSession()
+    setSession(null)
+    setView('home')
+    setResult(null)
+    setNotice(null)
+    setCode(null)
+    startedFor.current = null
+    stripCodeFromUrl()
+  }
+
+  const done = () => {
+    setResult(null)
+    setView('home')
+  }
+
+  // A scanned code is being looked up: show progress instead of the idle "scan a QR" screen.
+  const resolving = session && code && pointState.status === 'loading' && view === 'home'
+
+  return (
+    <div className="w-app">
+      <div className="w-shell">
+        <TopBar />
+        <main style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          {!session ? (
+            <LoginScreen pointName={pointState.point?.name} notice={loginNotice} onSignedIn={onSignedIn} />
+          ) : view === 'working' ? (
+            <WorkingView phase={workingPhase} />
+          ) : resolving ? (
+            <WorkingView phase="loading" />
+          ) : view === 'result' && result ? (
+            <ResultView
+              result={result}
+              pointName={result.point?.name}
+              onDone={done}
+              onRetry={() => runCheckIn(result.code, result.point)}
+            />
+          ) : (
+            <HomeView
+              session={session}
+              visits={visits}
+              pending={sync.pending}
+              syncing={sync.syncing}
+              onSync={sync.flush}
+              notice={notice}
+              onDismissNotice={() => setNotice(null)}
+              onSwitch={switchWorker}
+            />
+          )}
+        </main>
+      </div>
+    </div>
+  )
+}

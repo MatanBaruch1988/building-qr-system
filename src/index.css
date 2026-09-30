@@ -87,7 +87,7 @@ body {
   font-family: 'Rubik', -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--bg);
   color: var(--text-primary);
-  direction: rtl;
+  /* direction comes from <html dir>, which the language switcher updates (he/ar rtl, en/ru ltr) */
   line-height: 1.5;
   font-weight: 400;
   min-height: 100vh;
@@ -1058,7 +1058,8 @@ input:focus:not(:focus-visible) {
 }
 
 @media (min-width: 1024px) {
-  body { overflow: hidden; }
+  /* Only the admin shell scrolls internally; every other page (e.g. the provider app) scrolls normally. */
+  body:has(.admin-layout) { overflow: hidden; }
   .admin-layout {
     display: grid;
     /* RTL: column 1 = RIGHT (sidebar), column 2 = LEFT (content) */
