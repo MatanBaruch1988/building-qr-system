@@ -7,7 +7,7 @@ read-only agent API.
 ## Rules for every change
 
 - Code comments are in English. The Hebrew in the UI comes from `src/i18n/*.js`.
-- Never use an em dash (the long dash) anywhere: code, comments, UI text, docs. Use a regular hyphen. `tests/no-em-dash.test.js` fails the build if one appears.
+- Never use an em dash (the long dash) anywhere: code, comments, UI text, docs. Use a regular hyphen. `tests/no-em-dash.test.js` fails `npm run test:unit` if one appears.
 - The app is used on a phone and on a computer. Change both layouts together and check both.
 - Do not invent selectors or URLs in tests: read the real component, then use `getByRole` / `getByText` / `getByLabel`.
 - If a test fails because of a real app bug, report it. Do not change the test to hide it and do not fix the app silently.
@@ -27,13 +27,16 @@ Details that matter:
 
 - One-time setup on a new machine: `npm install`, then `npx playwright install chromium webkit` (about 350 MB).
 - E2E uses ports 3100 (preview of the production build) and 3101 (API) and the scratch schema `e2e`, seeded by
-  `scripts/dev-seed.mjs`. Both are started and cleaned up by Playwright (`playwright.config.js`, `e2e/global-teardown.js`).
-  Nothing may already be listening on those ports.
+  `scripts/dev-seed.mjs`. Playwright starts both servers (`playwright.config.js`); the schema is dropped before every run
+  and again after it (`e2e/global-teardown.js`), so a run that was killed leaves a schema that the next run clears.
+  Nothing may already be listening on those ports, and two runs cannot share them, so do not start two at once.
 - The PWA is tested on the production build, because the service worker only exists there. Do not point the E2E at `vite dev`.
 - A single spec or project: `npx playwright test e2e/pwa.spec.js --project=android-chrome`. A failing run keeps a trace
   in `test-results/` (`npx playwright show-trace <trace.zip>`).
-- Every E2E test fails on an unexpected `console.error` or page error. A test that provokes one on purpose (a wrong
-  password, a refused point, going offline) allows it with `allowConsoleErrors` in `e2e/fixtures.js`.
+- Every E2E test fails on an unexpected `console.error` or page error (the known-issue `apple-touch-icon` test below is
+  the one exception, because the whole test is expected to fail). A test that provokes one on purpose (a wrong
+  password, a refused point, going offline) allows it with `allowConsoleErrors` in `e2e/fixtures.js`: that allows the
+  message for the whole test, so keep the pattern as narrow as the message allows.
 - The offline tests run on `android-chrome` only: Playwright's WebKit cannot take a service-worker page offline.
 - The `apple-touch-icon` test is marked `test.fail`: the app links an SVG and iOS needs a PNG. When a PNG is added,
   Playwright reports it as "unexpectedly passed": delete the `test.fail` line then.

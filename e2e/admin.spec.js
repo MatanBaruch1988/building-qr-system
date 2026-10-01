@@ -3,7 +3,14 @@ import { randomUUID } from 'node:crypto'
 import { test, expect, he, PEOPLE, adminSignIn, clearScans, allowConsoleErrors } from './fixtures.js'
 
 const COMPUTER = { width: 1280, height: 800 }
-const TABS = ['points', 'providers', 'history', 'agent', 'committee']
+// Each tab and the heading of its page (every view renders its own h1 above its content)
+const TABS = [
+  ['points', 'נקודות סריקה'],
+  ['providers', 'נותני שירות'],
+  ['history', 'היסטוריית נוכחות'],
+  ['agent', 'גישה לאייג\'נט'],
+  ['committee', 'חברי הוועד'],
+]
 
 test.beforeEach(async ({ page, request }) => {
   // The sign-in screen asks /api/admin/me before anyone is signed in: the browser notes that 401 as a console error.
@@ -46,26 +53,33 @@ test('every committee screen fits the width, on a phone and on a computer', asyn
   await adminSignIn(page)
   for (const size of [null, COMPUTER]) {
     if (size) await page.setViewportSize(size)
-    for (const tab of TABS) {
+    for (const [tab, title] of TABS) {
       await page.goto(`/admin#${tab}`)
-      await expect(page.getByRole('main')).toBeVisible()
+      // measure the tab itself once its list has arrived, not the previous tab or a loading screen
+      await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
+      await expect(page.getByRole('status').filter({ hasText: 'טוען' })).toHaveCount(0)
       expect(await noHorizontalScroll(page), `${tab} at ${size ? 'computer' : 'phone'} width`).toBe(true)
     }
   }
 })
 
-test('the history filters keep their two date fields side by side without overlapping', async ({ page }) => {
+test('the history date fields do not overlap and stay inside the filter bar, on a phone and on a computer', async ({ page }) => {
   await adminSignIn(page)
-  await page.goto('/admin#history')
-  const from = await page.getByLabel('מתאריך').boundingBox()
-  const to = await page.getByLabel('עד תאריך').boundingBox()
-  const filters = await page.getByLabel('מתאריך').locator('xpath=ancestor::*[contains(@class,"a-filters")]').boundingBox()
-  const overlap = !(from.x + from.width <= to.x + 0.5 || to.x + to.width <= from.x + 0.5
-    || from.y + from.height <= to.y + 0.5 || to.y + to.height <= from.y + 0.5)
-  expect(overlap, 'the two date fields overlap').toBe(false)
-  for (const box of [from, to]) {
-    expect(box.x).toBeGreaterThanOrEqual(filters.x - 0.5)
-    expect(box.x + box.width).toBeLessThanOrEqual(filters.x + filters.width + 0.5)
+  for (const size of [null, COMPUTER]) {
+    if (size) await page.setViewportSize(size)
+    await page.goto('/admin#history')
+    await expect(page.getByRole('heading', { level: 1, name: 'היסטוריית נוכחות' })).toBeVisible()
+    const from = await page.getByLabel('מתאריך').boundingBox()
+    const to = await page.getByLabel('עד תאריך').boundingBox()
+    const filters = await page.getByLabel('מתאריך').locator('xpath=ancestor::*[contains(@class,"a-filters")]').boundingBox()
+    const where = size ? 'computer' : 'phone'
+    const overlap = !(from.x + from.width <= to.x + 0.5 || to.x + to.width <= from.x + 0.5
+      || from.y + from.height <= to.y + 0.5 || to.y + to.height <= from.y + 0.5)
+    expect(overlap, `the two date fields overlap at ${where} width`).toBe(false)
+    for (const box of [from, to]) {
+      expect(box.x, `${where} left edge`).toBeGreaterThanOrEqual(filters.x - 0.5)
+      expect(box.x + box.width, `${where} right edge`).toBeLessThanOrEqual(filters.x + filters.width + 0.5)
+    }
   }
 })
 

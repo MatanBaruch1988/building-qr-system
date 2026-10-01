@@ -88,8 +88,6 @@ test('a check-in made with no network is kept on the phone and sent when the net
 
   await context.setOffline(false)
   await page.getByRole('button', { name: he['checkin.done'] }).click()
-  // sent by itself when the network returns; the "send now" button is the manual way
-  const sendNow = page.getByRole('button', { name: he['home.syncNow'] })
-  if (await sendNow.isVisible()) await sendNow.click()
+  // sent by itself when the network returns (the "online" event, or the 30 second timer), with no "send now" click
   await expect(page.getByText(he['sync.done'])).toBeVisible({ timeout: 40_000 })
 })
