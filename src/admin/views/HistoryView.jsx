@@ -69,6 +69,9 @@ export default function HistoryView() {
   const providers = useLoad(() => adminApi('/providers'))
   const [filters, setFilters] = useState(DEFAULTS) // what the inputs show
   const [applied, setApplied] = useState(filters) // what is actually queried (after a short pause in typing)
+  // A date field that is half typed shows something other than what is queried (the last good date). The list may stay,
+  // but the export must not quietly use a range that differs from the fields, so it waits until both are finished.
+  const [unfinished, setUnfinished] = useState({ from: false, to: false })
   const [{ rows, cursor, status }, setList] = useState({ rows: [], cursor: null, status: 'loading' })
   const [voiding, setVoiding] = useState(null)
   const confirm = useConfirm()
@@ -146,13 +149,13 @@ export default function HistoryView() {
         </div>
         <div className="a-actions">
           <IconButton icon={IconRefresh} label="רענון" onClick={load} />
-          <IconButton icon={IconDownload} label="ייצוא ל-Excel" href={`/api/admin/scans?${query(applied, { format: 'csv' })}`} download="scans.csv" />
+          <IconButton icon={IconDownload} label="ייצוא ל-Excel" href={`/api/admin/scans?${query(applied, { format: 'csv' })}`} download="scans.csv" disabled={unfinished.from || unfinished.to} />
         </div>
       </div>
 
       <div className="a-filters">
-        <Field label="מתאריך"><DateInput value={filters.from} onChange={(v) => set('from', v)} /></Field>
-        <Field label="עד תאריך"><DateInput value={filters.to} onChange={(v) => set('to', v)} /></Field>
+        <Field label="מתאריך"><DateInput value={filters.from} onChange={(v) => set('from', v)} onPendingChange={(p) => setUnfinished((u) => ({ ...u, from: p }))} /></Field>
+        <Field label="עד תאריך"><DateInput value={filters.to} onChange={(v) => set('to', v)} onPendingChange={(p) => setUnfinished((u) => ({ ...u, to: p }))} /></Field>
         <Field label="נקודה">
           <select className="a-input" value={filters.point_id} onChange={(e) => set('point_id', e.target.value)}>
             <option value="">כל הנקודות</option>

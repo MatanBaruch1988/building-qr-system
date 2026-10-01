@@ -297,7 +297,7 @@ test.describe('dates on the committee screens', () => {
   const DAY_TIME = /^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/
   // what must never be on a screen: a day with a month name ("1 באוק׳", not a word that happens to contain one), a weekday,
   // an ISO date, a 12-hour clock
-  const OTHER_FORMATS = /\d{1,2}\s*ב?(ינו|פבר|מרץ|אפר|מאי|יוני|יולי|אוג|ספט|אוק|נוב|דצמ)|יום (ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת)|\d{4}-\d{2}-\d{2}|\b[AP]M\b/i
+  const OTHER_FORMATS = /\d{1,2}\s*ב?(ינו|פבר|מרץ|אפר|מאי|יוני|יולי|אוג|ספט|אוק|נוב|דצמ)|יום (ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת)|\d{4}-\d{2}-\d{2}|\b[AP]M\b|\d{2}:\d{2}:\d{2}|\b24:\d{2}|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?,? \d|\d (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i
 
   test('every date and time is DD/MM/YYYY and HH:MM, and the date fields read the same on an English device', async ({ page, playwright }) => {
     await adminSignIn(page)
@@ -327,7 +327,7 @@ test.describe('dates on the committee screens', () => {
       // committee: the last sign-in of the member who is signed in now
       await page.goto('/admin#committee')
       await loaded(page, 'חברי הוועד')
-      await expect(page.getByRole('article').first().locator('dd').first()).toHaveText(DAY_TIME)
+      await expect(page.getByRole('article').filter({ hasText: '(אתם)' }).locator('dd').first()).toHaveText(DAY_TIME) // the member who is signed in
       await noOtherFormat('committee')
 
       // agent keys: created
@@ -352,10 +352,35 @@ test.describe('dates on the committee screens', () => {
       await page.getByRole('dialog').getByRole('button', { name: 'סגירה' }).click() // close without deleting
       await noOtherFormat('history')
 
-      // typing a date: the slashes come by themselves, and half a date does not change the list
+      // a date that is half typed: the list does not follow it and the export waits (it would use the last good range, and
+      // the file would not match what the field says). Both are back when the date is finished.
+      const original = await from.inputValue()
+      const listed = await page.getByRole('listitem').count()
+      await from.press('End')
+      for (let i = 0; i < 6; i++) await from.press('Backspace')
+      await expect(from).toHaveValue(/^\d{2}$/)
+      await expect(page.getByRole('button', { name: 'ייצוא ל-Excel' })).toBeDisabled()
+      await expect(page.getByRole('link', { name: 'ייצוא ל-Excel' })).toHaveCount(0)
+      await page.waitForTimeout(600) // longer than the pause before a query: the list must not have followed half a date
+      expect(await page.getByRole('listitem').count()).toBe(listed)
+      await from.pressSequentially(original.replace(/\D/g, '').slice(2))
+      await expect(from).toHaveValue(original)
+      await expect(page.getByRole('link', { name: 'ייצוא ל-Excel' })).toBeVisible()
+
+      // typing a whole date: the slashes come by themselves
       await from.fill('')
       await from.pressSequentially('01012026')
       await expect(from).toHaveValue('01/01/2026')
+      // deleting a slash deletes the digit before it, and the cursor stays by it
+      await from.fill('')
+      await from.pressSequentially('01102026')
+      await from.press('Home')
+      for (let i = 0; i < 3; i++) await from.press('ArrowRight')
+      await from.press('Backspace')
+      await expect(from).toHaveValue('01/02/026')
+      expect(await from.evaluate((el) => el.selectionStart)).toBe(1)
+      await from.fill('')
+      await from.pressSequentially('01012026')
       await to.fill('')
       await to.pressSequentially('3102')
       await expect(to).toHaveValue('31/02')
@@ -372,11 +397,25 @@ test.describe('dates on the committee screens', () => {
     }
   })
 
-  test('the committee file has DD/MM/YYYY dates and no UTC column', async ({ page }) => {
+  test('the committee file has DD/MM/YYYY dates, with the exact moment in UTC beside the building time', async ({ page, playwright }) => {
     await adminSignIn(page)
+    // a visit to export: every test starts with an empty history
+    const phone = await playwright.request.newContext({ baseURL: page.url().split('/admin')[0] })
+    try {
+      const providers = (await (await phone.get('/api/public/providers')).json()).providers
+      const lior = providers.find((p) => p.contact_name === PEOPLE.lior.name)
+      const session = await (await phone.post('/api/session', { data: { provider_id: lior.id, password: PEOPLE.lior.password } })).json()
+      const visit = await phone.post('/api/scan', { headers: { authorization: `Bearer ${session.token}` }, data: { id: randomUUID(), code: POINTS.basement, gps: null } })
+      expect((await visit.json()).scan.outcome).toBe('accepted')
+    } finally {
+      await phone.dispose()
+    }
     const csv = await (await page.request.get('/api/admin/scans?format=csv&outcome=all&include_voided=true')).text()
     const lines = csv.replace('\ufeff', '').trim().split('\r\n')
-    expect(lines[0].split(',').slice(0, 3)).toEqual(['id', 'checked_in_local', 'local_date'])
-    for (const line of lines.slice(1)) expect(line).toMatch(/,\d{2}\/\d{2}\/\d{4} \d{2}:\d{2},\d{2}\/\d{2}\/\d{4},/)
+    expect(lines.length, 'a header and at least the visit').toBeGreaterThan(1)
+    expect(lines[0].split(',').slice(0, 4)).toEqual(['id', 'checked_in_utc', 'checked_in_local', 'local_date'])
+    for (const line of lines.slice(1)) {
+      expect(line).toMatch(/,\d{2}\/\d{2}\/\d{4} \d{2}:\d{2},\d{2}\/\d{2}\/\d{4} \d{2}:\d{2},\d{2}\/\d{2}\/\d{4},/)
+    }
   })
 })

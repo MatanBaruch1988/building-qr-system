@@ -204,8 +204,9 @@ describe('CSV exports', () => {
       [p.id, provider.id],
     )
     const people = (await call('GET', `/api/admin/scans?point_id=${p.id}&format=csv`, { cookie })).text.replace('\ufeff', '').split('\r\n')
-    expect(people[0].split(',').slice(0, 3)).toEqual(['id', 'checked_in_local', 'local_date']) // no UTC column
-    expect(people[1]).toContain(',30/09/2026 08:12,30/09/2026,')
+    // the exact moment is kept, in UTC and in the same shape, next to the building's time
+    expect(people[0].split(',').slice(0, 4)).toEqual(['id', 'checked_in_utc', 'checked_in_local', 'local_date'])
+    expect(people[1]).toContain(',30/09/2026 05:12,30/09/2026 08:12,30/09/2026,')
     expect(people[1]).not.toMatch(/2026-09-30|T05:12|:00Z/)
 
     const key = (await call('POST', '/api/admin/api-keys', { cookie, body: { name: 'csv-dates' } })).json.key

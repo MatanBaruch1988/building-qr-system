@@ -4,8 +4,10 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 import {
-  formatDate, formatTime, formatDateTime, formatDay, isoDay, parseDay, maskDay,
+  formatDate, formatTime, formatDateTime, formatDateTimeUtc, formatDay, isoDay, parseDay, maskDay, editDay,
 } from '../shared/datetime.js'
 
 const root = decodeURIComponent(new URL('..', import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, '$1')
@@ -47,12 +49,31 @@ describe('writing a moment: DD/MM/YYYY and HH:MM in the building time', () => {
     }
   })
 
-  it('does not depend on the language or region of the machine it runs on', () => {
-    const before = formatDateTime('2026-09-30T05:12:00Z')
-    const keep = process.env.LANG
-    process.env.LANG = 'ar_EG.UTF-8'
-    expect(formatDateTime('2026-09-30T05:12:00Z')).toBe(before)
-    process.env.LANG = keep
+  it('does not depend on the language, region or time zone of the machine it runs on', () => {
+    // a fresh Node on a machine set to Arabic (Egypt) and New York time, which reads the module from scratch
+    const script = `import('${pathToFileURL(path.join(root, 'shared', 'datetime.js')).href}').then((m) => console.log(JSON.stringify([
+      m.formatDateTime('2026-09-30T05:12:00Z'), m.formatDateTimeUtc('2026-09-30T05:12:00Z'), m.formatDate('2026-09-30T21:30:00Z'), m.isoDay('2026-09-30T21:30:00Z'),
+    ])))`
+    const out = execFileSync(process.execPath, ['-e', script], { env: { ...process.env, LANG: 'ar_EG.UTF-8', LC_ALL: 'ar_EG.UTF-8', TZ: 'America/New_York' } })
+    expect(JSON.parse(out.toString())).toEqual(['30/09/2026 08:12', '30/09/2026 05:12', '01/10/2026', '2026-10-01'])
+  })
+
+  it('a moment as text must say which moment it is (Z or an offset): text without a zone depends on the machine', () => {
+    expect(formatDateTime('2026-09-30T05:12:00Z')).toBe('30/09/2026 08:12')
+    expect(formatDateTime('2026-09-30T08:12:00+03:00')).toBe('30/09/2026 08:12')
+    expect(formatDateTime('2026-09-30T05:12:00.000Z')).toBe('30/09/2026 08:12')
+    for (const unclear of ['2026-09-30T05:12:00', '2026-09-30', '2026-09-30 05:12:00', 'Sep 30 2026']) {
+      expect(formatDateTime(unclear), unclear).toBe('-')
+    }
+  })
+
+  it('the exact moment for the committee file: UTC, in the same shape, so the repeated hour of October can be told apart', () => {
+    expect(formatDateTimeUtc('2026-09-30T05:12:00Z')).toBe('30/09/2026 05:12')
+    // the night the clocks go back (25 October 2026): 01:30 happens twice in the building
+    expect(formatDateTime('2026-10-24T22:30:00Z')).toBe('25/10/2026 01:30')
+    expect(formatDateTime('2026-10-24T23:30:00Z')).toBe('25/10/2026 01:30')
+    expect(formatDateTimeUtc('2026-10-24T22:30:00Z')).not.toBe(formatDateTimeUtc('2026-10-24T23:30:00Z'))
+    expect(formatDateTimeUtc(null)).toBe('-')
   })
 })
 
@@ -62,6 +83,8 @@ describe('a calendar day', () => {
     expect(formatDay('2026-10-01')).toBe('01/10/2026')
     expect(formatDay('')).toBe('-')
     expect(formatDay('1 Oct 2026')).toBe('-')
+    expect(formatDay('2026-02-30')).toBe('-') // a day that is not on the calendar
+    expect(formatDay('2028-02-29')).toBe('29/02/2028')
     expect(isoDay()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 
@@ -83,6 +106,40 @@ describe('a calendar day', () => {
     expect(maskDay('01/10/2026999')).toBe('01/10/2026')
     expect(maskDay('ab01x10')).toBe('01/10')
     expect(maskDay('01/1')).toBe('01/1') // already masked text stays as it is
+  })
+
+  describe('editing the field (editDay)', () => {
+    it('typing at the end adds the slashes and keeps the cursor at the end', () => {
+      expect(editDay('01', '013', 3)).toEqual({ text: '01/3', caret: 4 })
+      expect(editDay('01/1', '01/10', 5)).toEqual({ text: '01/10', caret: 5 })
+      expect(editDay('', '0', 1)).toEqual({ text: '0', caret: 1 })
+    })
+
+    it('deleting the last digit takes the slash that would follow nothing away', () => {
+      expect(editDay('01/1', '01/', 3)).toEqual({ text: '01', caret: 2 })
+      expect(editDay('01/10/2', '01/10/', 6)).toEqual({ text: '01/10', caret: 5 })
+    })
+
+    it('deleting a slash deletes the digit before it, so something happens and the cursor stays by that digit', () => {
+      // backspace with the cursor right after the first slash of 01/10/2026
+      expect(editDay('01/10/2026', '0110/2026', 2)).toEqual({ text: '01/02/026', caret: 1 })
+      // backspace right after the second slash
+      expect(editDay('01/10/2026', '01/102026', 5)).toEqual({ text: '01/12/026', caret: 4 })
+    })
+
+    it('typing a digit in the middle pushes the others along, and the cursor follows the typed digit', () => {
+      expect(editDay('01/10/2026', '051/10/2026', 2)).toEqual({ text: '05/11/0202', caret: 2 })
+    })
+
+    it('pasting a whole date, with or without the slashes, gives the same field', () => {
+      expect(editDay('', '01/10/2026')).toEqual({ text: '01/10/2026', caret: 10 })
+      expect(editDay('', '01102026')).toEqual({ text: '01/10/2026', caret: 10 })
+      expect(editDay('01/01/2026', '15/11/2026999', 13).text).toBe('15/11/2026')
+    })
+
+    it('selecting everything and typing replaces it', () => {
+      expect(editDay('01/10/2026', '7', 1)).toEqual({ text: '7', caret: 1 })
+    })
   })
 })
 

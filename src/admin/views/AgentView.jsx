@@ -83,7 +83,7 @@ Base URL: ${base}
 Authorization: Bearer <API KEY>
 Start with GET ${base}/schema : it explains every field, flag and rule.
 Main endpoint: GET ${base}/scans?from=YYYY-MM-DD&to=YYYY-MM-DD (also point_id, provider_id, flag, outcome=all|accepted|rejected, limit, cursor, format=csv).
-Times are Israel time (checked_in_local, local_date). Flags are signals, not verdicts: report them, do not treat them as proof of anything.`
+Times are Israel time (checked_in_local, local_date). When you report to people, write dates as DD/MM/YYYY and times as HH:MM (24 hours, Israel time): never month names or weekdays, and convert checked_in_local and local_date to that format instead of copying them. Flags are signals, not verdicts: report them, do not treat them as proof of anything.`
 
   return (
     <>
