@@ -64,6 +64,41 @@ describe('icon button styling', () => {
   })
 })
 
+describe('the same design on a phone and on a computer', () => {
+  const app = fs.readFileSync(path.join(root, 'src', 'pages', 'AdminApp.jsx'), 'utf8')
+  const css = fs.readFileSync(path.join(root, 'src', 'admin', 'admin.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+
+  it('the provider-app, light/dark and sign-out controls are the same three icons in the side rail and in the top bar', () => {
+    expect(app.match(/<ShellTools onSignOut=\{signOut\} \/>/g)).toHaveLength(2) // once in .a-side, once in .a-top
+    const tools = app.slice(app.indexOf('function ShellTools'), app.indexOf('function Shell('))
+    expect(tools).toContain('label="אפליקציית נותני השירות"')
+    expect(tools).toContain('<ThemeSwitch')
+    expect(tools).toContain('label="יציאה"')
+  })
+
+  it('the page icons are the same in the side rail and in the bottom bar, at the same size', () => {
+    const sizes = [...app.matchAll(/<NavItem [^>]*className="(a-nav__item|a-tab)" size=\{(\d+)\}/g)].map((m) => `${m[1]}:${m[2]}`)
+    expect(sizes).toEqual(['a-nav__item:24', 'a-tab:24'])
+    expect(app.match(/TABS\.map\(\(t\) => <NavItem/g)).toHaveLength(2) // one list of icons feeds both
+  })
+
+  it('the side rail keeps no text buttons for them (only the page links stay as rows)', () => {
+    expect(app).not.toMatch(/className="a-nav__item" href=/)
+    expect(app).not.toMatch(/<button className="a-nav__item" onClick=\{signOut\}/)
+    const theme = fs.readFileSync(path.join(root, 'src', 'ui', 'ThemeSwitch.jsx'), 'utf8')
+    expect(theme).not.toMatch(/variant/)
+  })
+
+  it('a date field stays inside its column (Safari on iPhone gave it a width that made two of them overlap)', () => {
+    const rule = css.match(/\.a-input\[type='date'\]\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(rule).toContain('appearance: none')
+    expect(rule).toContain('width: 100%')
+    expect(rule).toContain('min-width: 0')
+    expect(rule).toContain('direction: ltr') // the device's own date order, not one jumbled by an RTL page
+    expect(css).toMatch(/\.a-filters > \*\s*\{\s*min-width:\s*0/)
+  })
+})
+
 describe('the tiles and headers of the committee screens', () => {
   it('red is used for exactly one thing: deleting (a point, or a scan row)', () => {
     const uses = views.flatMap((f) => [...read(f).matchAll(/<IconButton([^>]*tone="danger"[^>]*)/g)].map((m) => [f, m[1]]))

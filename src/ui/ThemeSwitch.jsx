@@ -34,17 +34,15 @@ const ICONS = {
 }
 
 /**
- * labels: { label, system, light, dark } (already translated).
- * variant "bare": only the icon of the current mode, on a 44px touch target (provider top bar, committee screens).
- *         "row": a full-width row that reads "label: current" (committee side rail).
+ * labels: { label, system, light, dark } (already translated). Only the icon of the current mode, on a 44px touch
+ * target: the same on a phone and on a computer, in both apps.
  */
-export default function ThemeSwitch({ labels, variant = 'bare' }) {
+export default function ThemeSwitch({ labels }) {
   const { theme, setTheme } = useTheme()
   const Icon = ICONS[theme]
   return (
-    <label className={`w-theme w-theme--${variant}`}>
-      <Icon size={variant === 'bare' ? 24 : 22} />
-      {variant === 'row' && <span>{labels.label}: {labels[theme]}</span>}
+    <label className="w-theme w-theme--bare">
+      <Icon size={24} />
       {/* blur: after a choice the picker must not stay "focused", or the icon would stay blue */}
       <select value={theme} onChange={(e) => { setTheme(e.target.value); e.target.blur() }} aria-label={labels.label}>
         {THEMES.map((value) => <option key={value} value={value}>{labels[value]}</option>)}
