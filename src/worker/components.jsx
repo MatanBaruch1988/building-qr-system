@@ -28,13 +28,13 @@ export function TopBar() {
   const themeLabels = { label: t('theme.label'), system: t('theme.system'), light: t('theme.light'), dark: t('theme.dark') }
   return (
     <header className="w-topbar">
-      <p className="w-brand">{t('app.name')}</p>
+      <p className="w-brand">{t('brand.address')}</p>
       <div className="w-topbar__tools">
         <ThemeSwitch labels={themeLabels} />
         <label className="w-lang">
           <span className="w-sr">{t('lang.label')}</span>
-          <IconGlobe size={20} />
-          <select value={lang} onChange={(e) => setLang(e.target.value)}>
+          <IconGlobe size={24} />
+          <select value={lang} onChange={(e) => { setLang(e.target.value); e.target.blur() }}>
             {langs.map((l) => (
               <option key={l.code} value={l.code} lang={l.code}>{l.label}</option>
             ))}

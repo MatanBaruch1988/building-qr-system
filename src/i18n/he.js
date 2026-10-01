@@ -2,6 +2,7 @@
 // (enforced by tests/i18n.test.js). Wording is gender-neutral (plural imperatives).
 export default {
   'app.name': 'נוכחות בבניין',
+  'brand.address': 'אהבת אדם 86, כפר יונה',
   'lang.label': 'שפה',
   'footer.admin': 'כניסת ועד',
   'common.loading': 'טוען…',
@@ -23,7 +24,7 @@ export default {
   'login.network': 'אין חיבור לרשת. נסו שוב כשיש קליטה.',
   'login.noProviders': 'עדיין לא הוגדרו נותני שירות. פנו לוועד הבית.',
   'login.loadError': 'לא הצלחנו לטעון את הרשימה.',
-  'login.privacy': 'נרשמים שם, נקודה וזמן. המיקום משמש רק לאימות שהגעתם.',
+  'login.privacy': 'בכל סריקה נרשמים השם שלכם, הנקודה והשעה. המיקום בטלפון משמש רק כדי לוודא שאתם ליד הנקודה. המיקום עצמו לא נשמר, רק המרחק ממנה.',
 
   'home.hello': 'שלום, {name}',
   'home.instruction': 'כדי לרשום נוכחות, סרקו את קוד ה-QR שבנקודה עם מצלמת הטלפון.',
