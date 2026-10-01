@@ -16,7 +16,7 @@ export async function requireProvider(req) {
   const token = bearerToken(req)
   if (!token) throw unauthorized('invalid_session', 'Sign in required')
   const { rows } = await query(
-    `select d.id as device_id, d.last_seen_at, p.id, p.company, p.contact_name, p.service_type, p.lang, p.is_demo
+    `select d.id as device_id, d.last_seen_at, p.id, p.company, p.contact_name, p.service_type, p.is_demo
        from provider_devices d
        join providers p on p.id = d.provider_id
       where d.token_hash = $1 and d.revoked_at is null and p.is_active`,
@@ -34,7 +34,6 @@ export async function requireProvider(req) {
       company: row.company,
       contact_name: row.contact_name,
       service_type: row.service_type,
-      lang: row.lang,
       is_demo: row.is_demo,
     },
   }

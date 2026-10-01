@@ -28,10 +28,10 @@ beforeAll(async () => {
 
   const mk = async (body) => (await call('POST', '/api/admin/points', { cookie, body })).json.point
   const lior = (await call('POST', '/api/admin/providers', {
-    cookie, body: { company: 'ניקיון', contact_name: 'ליאור', service_type: 'cleaning', lang: 'he', password: 'lior-1234' },
+    cookie, body: { company: 'ניקיון', contact_name: 'ליאור', service_type: 'cleaning', password: 'lior-1234' },
   })).json.provider
   const gardener = (await call('POST', '/api/admin/providers', {
-    cookie, body: { company: 'גינון', contact_name: 'חמודי', service_type: 'gardening', lang: 'ar', password: 'gard-1234' },
+    cookie, body: { company: 'גינון', contact_name: 'חמודי', service_type: 'gardening', password: 'gard-1234' },
   })).json.provider
   ids.lior = lior.id
   ids.gardener = gardener.id
@@ -236,7 +236,7 @@ describe('provider sign-in', () => {
     const r = await login(ids.lior, 'lior-1234')
     expect(r.status).toBe(200)
     expect(r.json.token).toMatch(/^qrp_/)
-    expect(r.json.provider).toMatchObject({ contact_name: 'ליאור', lang: 'he' })
+    expect(r.json.provider).toMatchObject({ contact_name: 'ליאור' })
     const me = await call('GET', '/api/session', { token: r.json.token })
     expect(me.json.provider.company).toBe('ניקיון')
     ids.liorToken = r.json.token
@@ -421,6 +421,31 @@ describe('committee controls', () => {
   it('writes an audit trail', async () => {
     const n = await db.pool.query("select count(*)::int n from audit_log where action like 'provider.%' or action like 'point.%'")
     expect(n.rows[0].n).toBeGreaterThan(5)
+  })
+})
+
+describe('providers have no language of their own', () => {
+  // The language is each person's own choice, kept on their phone (like light/dark). The committee does not set one.
+  it('is in no answer of the API: sign-in list, session, committee list, agent list', async () => {
+    expect((await call('GET', '/api/public/providers')).json.providers[0]).not.toHaveProperty('lang')
+    // a provider of its own: the others were locked out by the sign-in throttling tests above
+    const fresh = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'חדש', contact_name: 'ללא שפה', password: 'fresh-1234' } })).json.provider
+    const session = await login(fresh.id, 'fresh-1234')
+    expect(session.status).toBe(200)
+    expect(session.json.provider).not.toHaveProperty('lang')
+    expect((await call('GET', '/api/session', { token: session.json.token })).json.provider).not.toHaveProperty('lang')
+    expect((await call('GET', '/api/admin/providers', { cookie })).json.providers[0]).not.toHaveProperty('lang')
+    const key = (await call('POST', '/api/admin/api-keys', { cookie, body: { name: 'no-lang' } })).json.key
+    expect((await call('GET', '/api/agent/v1/providers', { token: key })).json.providers[0]).not.toHaveProperty('lang')
+  })
+
+  it('a language sent anyway is ignored, not an error (an old committee screen that is still open)', async () => {
+    const made = await call('POST', '/api/admin/providers', { cookie, body: { company: 'ישן', contact_name: 'מסך פתוח', lang: 'xx', password: 'old-screen-1' } })
+    expect(made.status).toBe(201)
+    expect(made.json.provider).not.toHaveProperty('lang')
+    const edited = await call('PATCH', `/api/admin/providers/${made.json.provider.id}`, { cookie, body: { lang: 'ru', company: 'ישן 2' } })
+    expect(edited.status).toBe(200)
+    expect(edited.json.provider.company).toBe('ישן 2')
   })
 })
 

@@ -270,3 +270,19 @@ test('a provider, a committee member and an agent key can each be deleted from t
   const list = (await (await page.request.get('/api/public/providers')).json()).providers
   expect(list.find((p) => p.id === provider.id)).toBeUndefined()
 })
+
+test('the provider form and card have no language: each person chooses theirs on their own phone', async ({ page }) => {
+  await adminSignIn(page)
+  await page.goto('/admin#providers')
+  await loaded(page, 'נותני שירות')
+  // no language label on any card
+  for (const label of ['עברית', 'English', 'Русский', 'العربية']) {
+    await expect(page.getByRole('article').getByText(label, { exact: true }), `a card shows the language ${label}`).toHaveCount(0)
+  }
+  // and none to pick in the form, for a new provider or for an existing one
+  await page.getByRole('button', { name: 'נותן שירות חדש' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByLabel('סוג שירות')).toBeVisible()
+  await expect(dialog.getByText('שפת הממשק')).toHaveCount(0)
+  await expect(dialog.getByRole('option', { name: 'Русский' })).toHaveCount(0)
+})

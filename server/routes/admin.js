@@ -9,7 +9,7 @@ import { requireAdmin, guardLogin } from '../auth.js'
 import { verifyGoogleCredential } from '../google.js'
 import { listScans, listAllScans, scanJson, SCAN_CSV_COLUMNS } from '../scans.js'
 import {
-  ADMIN_COOKIE, ADMIN_SESSION_DAYS, PASSWORD_MIN_LENGTH, SERVICE_LANGS,
+  ADMIN_COOKIE, ADMIN_SESSION_DAYS, PASSWORD_MIN_LENGTH,
 } from '../config.js'
 
 const GPS_MODES = ['required', 'optional', 'none']
@@ -314,7 +314,7 @@ route('POST', '/admin/points/:id/regenerate-qr', async ({ req, params }) => {
 // ---------- providers ----------
 
 const PROVIDER_SELECT = `
-  select p.id, p.company, p.contact_name, p.service_type, p.lang, p.is_active, p.is_demo, p.created_at,
+  select p.id, p.company, p.contact_name, p.service_type, p.is_active, p.is_demo, p.created_at,
          (p.password_hash is not null) as has_password,
          (select count(*)::int from provider_devices d where d.provider_id = p.id and d.revoked_at is null) as active_devices,
          (select max(s.checked_in_at) from scans s where s.provider_id = p.id and s.outcome = 'accepted' and s.voided_at is null) as last_scan_at,
@@ -328,10 +328,6 @@ function providerFields(body, { create }) {
   const contact = str(body.contact_name, { field: 'contact_name', max: 120 })
   if (contact !== undefined) f.contact_name = contact
   if (body.service_type !== undefined) f.service_type = str(body.service_type, { field: 'service_type', max: 60 }) || null
-  if (body.lang !== undefined) {
-    if (!SERVICE_LANGS.includes(body.lang)) throw bad('invalid_field', 'Unsupported language', { field: 'lang' })
-    f.lang = body.lang
-  }
   for (const flag of ['is_active', 'is_demo']) {
     if (body[flag] === undefined) continue
     if (typeof body[flag] !== 'boolean') throw bad('invalid_field', `${flag} must be true or false`, { field: flag })

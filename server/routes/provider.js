@@ -12,13 +12,12 @@ const providerJson = (p) => ({
   company: p.company,
   contact_name: p.contact_name,
   service_type: p.service_type,
-  lang: p.lang,
 })
 
 // Names for the login tiles. Only providers who can actually sign in (a password is set).
 route('GET', '/public/providers', async () => {
   const { rows } = await query(
-    `select id, company, contact_name, service_type, lang
+    `select id, company, contact_name, service_type
        from providers where is_active and password_hash is not null
       order by company, contact_name`,
   )

@@ -1,5 +1,5 @@
 // The two choices a person makes on their own phone: language and light/dark. Both are remembered.
-import { test, expect, he } from './fixtures.js'
+import { test, expect, he, ru, PEOPLE, signIn } from './fixtures.js'
 
 test.describe('language', () => {
   // The device says English, and the app still opens in Hebrew: the language is the person's choice, not the browser's.
@@ -53,5 +53,37 @@ test.describe('light and dark', () => {
     await page.emulateMedia({ colorScheme: 'light' })
     await page.goto('/')
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  })
+})
+
+test.describe('kept on the phone', () => {
+  // The same as the sign-in: once a person changes language or light/dark it stays on their phone, also when someone
+  // signs out, and nothing is saved for someone who never changed anything.
+  test.use({ colorScheme: 'dark', locale: 'en-US' })
+
+  test('nothing is saved until the person changes something', async ({ page }) => {
+    await page.goto('/')
+    await expect(page.getByRole('heading', { name: he['login.title'] })).toBeVisible()
+    const saved = await page.evaluate(() => ({ lang: localStorage.getItem('qr.lang'), theme: localStorage.getItem('qr.theme') }))
+    expect(saved).toEqual({ lang: null, theme: null })
+  })
+
+  test('language and light/dark stay after signing out, and for the next person who signs in on the phone', async ({ page }) => {
+    await page.goto('/')
+    await page.getByLabel(he['lang.label']).selectOption('ru')
+    await page.getByLabel(ru['theme.label']).selectOption('light')
+    await signIn(page, PEOPLE.lior, ru)
+    await expect(page.getByRole('heading', { name: /Здравствуйте/ })).toBeVisible()
+
+    await page.getByRole('button', { name: ru['home.switchWorker'] }).click()
+    await expect(page.getByRole('heading', { name: ru['login.title'] })).toBeVisible() // signed out, still Russian
+    await expect(page.locator('html')).toHaveAttribute('lang', 'ru')
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+
+    await page.reload()
+    await expect(page.getByRole('heading', { name: ru['login.title'] })).toBeVisible()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+    const saved = await page.evaluate(() => ({ lang: localStorage.getItem('qr.lang'), theme: localStorage.getItem('qr.theme') }))
+    expect(saved).toEqual({ lang: 'ru', theme: 'light' })
   })
 })

@@ -26,12 +26,5 @@ export const SERVICE_TYPES = [
 ]
 export const serviceLabel = (value) => SERVICE_TYPES.find((s) => s.value === value)?.label ?? value ?? ''
 
-export const LANG_OPTIONS = [
-  { value: 'he', label: 'עברית' },
-  { value: 'en', label: 'English' },
-  { value: 'ru', label: 'Русский' },
-  { value: 'ar', label: 'العربية' },
-]
-
 const dateTime = new Intl.DateTimeFormat('he-IL', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Jerusalem' })
 export const formatDateTime = (iso) => (iso ? dateTime.format(new Date(iso)) : '-')
