@@ -9,6 +9,9 @@ read-only agent API.
 - Code comments are in English. The Hebrew in the UI comes from `src/i18n/*.js`.
 - Never use an em dash (the long dash) anywhere: code, comments, UI text, docs. Use a regular hyphen. `tests/no-em-dash.test.js` fails `npm run test:unit` if one appears.
 - The app is used on a phone and on a computer. Change both layouts together and check both.
+- Every tile and row of the committee app lists its actions in one order, from the title to the end of the row: the
+  actions of that screen, then edit, then switch off / on, and last the red trash can (red is only for deleting).
+  `e2e/admin.spec.js` measures it on every screen, so a new action goes in its place in that order.
 - Do not invent selectors or URLs in tests: read the real component, then use `getByRole` / `getByText` / `getByLabel`.
 - If a test fails because of a real app bug, report it. Do not change the test to hide it and do not fix the app silently.
 

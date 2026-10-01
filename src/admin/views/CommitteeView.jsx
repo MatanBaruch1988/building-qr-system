@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { adminApi, errorText } from '../api.js'
 import { useLoad, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
-import { IconPlus, IconBan, IconCheck, IconShield, IconAlert } from '../icons.jsx'
+import { IconPlus, IconBan, IconCheck, IconShield, IconAlert, IconTrash } from '../icons.jsx'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -58,6 +58,16 @@ export default function CommitteeView({ admin }) {
     if (await run(() => adminApi(`/admins/${a.id}`, { method: 'PATCH', body: { is_active: !a.is_active } }), a.is_active ? 'הגישה הוסרה' : 'הגישה הוחזרה')) admins.reload()
   }
 
+  // Deleting takes the person off the list for good (you cannot delete yourself); removing access only shuts them out.
+  const deleteMember = async (a) => {
+    const ok = await confirm({
+      title: `למחוק את ${a.name || a.email} מהוועד?`,
+      body: 'הכתובת נמחקת מהרשימה והחשבון מתנתק מיד. אפשר להוסיף את אותה כתובת שוב בכל עת. כדי רק לעצור את הכניסה, אפשר להסיר גישה במקום.',
+      confirmLabel: 'מחיקה מהוועד', danger: true,
+    })
+    if (ok && await run(() => adminApi(`/admins/${a.id}`, { method: 'DELETE' }), 'חבר הוועד נמחק')) admins.reload()
+  }
+
   return (
     <>
       <div className="a-head">
@@ -82,11 +92,14 @@ export default function CommitteeView({ admin }) {
               <div className="a-card__top">
                 <div>
                   <h2 className="a-card__title">{a.name || 'חבר ועד'}{me && ' (אתם)'}</h2>
-                  <p className="a-card__sub" dir="ltr" style={{ textAlign: 'start' }}>{a.email}</p>
+                  {/* an address reads left to right, but it lines up with the title like the other cards' second line */}
+                  <p className="a-card__sub"><bdi dir="ltr">{a.email}</bdi></p>
                 </div>
+                {/* your own card has no icons: you cannot remove or delete yourself */}
                 {!me && (
                   <div className="a-card__tools">
                     <IconButton icon={a.is_active ? IconBan : IconCheck} label={a.is_active ? 'הסרת גישה' : 'החזרת גישה'} onClick={() => toggle(a)} disabled={busy} />
+                    <IconButton icon={IconTrash} label="מחיקה מהוועד" tone="danger" onClick={() => deleteMember(a)} disabled={busy} />
                   </div>
                 )}
               </div>

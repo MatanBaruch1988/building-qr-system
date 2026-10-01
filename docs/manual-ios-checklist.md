@@ -44,7 +44,7 @@ Mark each item OK or write what you saw. Take a screenshot of anything that look
 11. [ ] Typing a password: the keyboard does not zoom the page, the password manager offers the saved login, and the
     show/hide eye works.
 12. [ ] Committee app (`/admin`) on the phone: the History tab's two date fields sit side by side without overlapping,
-    the point tiles show three icons (QR, edit, delete), and nothing scrolls sideways.
+    the point tiles show four icons (QR, edit, switch off, delete), and nothing scrolls sideways.
 
 ## Updates
 

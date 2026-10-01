@@ -5,7 +5,7 @@ import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast,
 import { downloadDataUrl, safeFileName, useQrImage } from '../qr.js'
 import MapPicker from '../MapPicker.jsx'
 import PrintSheet from '../PrintSheet.jsx'
-import { IconPlus, IconEdit, IconQr, IconPrinter, IconDownload, IconCopy, IconRefresh, IconLocate, IconPin, IconAlert, IconTrash } from '../icons.jsx'
+import { IconPlus, IconEdit, IconQr, IconPrinter, IconDownload, IconCopy, IconRefresh, IconLocate, IconPin, IconAlert, IconTrash, IconBan, IconCheck } from '../icons.jsx'
 
 const GPS = {
   required: { label: 'מיקום חובה', hint: 'לנקודות עם קליטה: חובה להיות בתוך הרדיוס של הנקודה (בתוספת 15 מטר לדיוק הסיכה ולסטיית ה-GPS של הטלפון). בלי מיקום תקין הנוכחות לא נרשמת.' },
@@ -252,6 +252,19 @@ export default function PointsView() {
     if (ok && await run(() => adminApi(`/points/${p.id}`, { method: 'DELETE' }), 'הנקודה נמחקה')) points.reload()
   }
 
+  // Switching a point off stops it taking scans; nothing is lost and it can be switched back on at any time.
+  const toggleActive = async (p) => {
+    if (p.is_active) {
+      const ok = await confirm({
+        title: `להשבית את "${p.name}"?`,
+        body: 'הנקודה תפסיק לקבל סריקות. קוד ה-QR המודפס שלה לא משתנה, וכל הנוכחויות שנרשמו בה נשמרות. אפשר להפעיל אותה שוב בכל עת.',
+        confirmLabel: 'השבתה', danger: true,
+      })
+      if (!ok) return
+    }
+    if (await run(() => adminApi(`/points/${p.id}`, { method: 'PATCH', body: { is_active: !p.is_active } }), p.is_active ? 'הנקודה הושבתה' : 'הנקודה הופעלה')) points.reload()
+  }
+
   const startPrint = useCallback((list, layout) => {
     if (!list.length) return toast.error('אין נקודות פעילות להדפסה.')
     if (list.some((p) => isLocalAddress(p.qr_url))) {
@@ -302,6 +315,7 @@ export default function PointsView() {
                 <div className="a-card__tools">
                   <IconButton icon={IconQr} label="QR והדפסה" onClick={() => setQrFor(p)} />
                   <IconButton icon={IconEdit} label="עריכה" onClick={() => setEditing(p)} />
+                  <IconButton icon={p.is_active ? IconBan : IconCheck} label={p.is_active ? 'השבתת הנקודה' : 'הפעלת הנקודה'} onClick={() => toggleActive(p)} disabled={busy} />
                   <IconButton icon={IconTrash} label="מחיקת הנקודה" tone="danger" onClick={() => deletePoint(p)} disabled={busy} />
                 </div>
               </div>

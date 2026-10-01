@@ -517,7 +517,7 @@ describe('agent API', () => {
     expect(r.json.timezone).toBe('Asia/Jerusalem')
   })
   it('a revoked key stops working', async () => {
-    await call('DELETE', `/api/admin/api-keys/${keyId}`, { cookie })
+    await call('POST', `/api/admin/api-keys/${keyId}/revoke`, { cookie })
     expect((await call('GET', '/api/agent/v1/scans', { token: key })).json.error.code).toBe('api_key_invalid')
   })
 })

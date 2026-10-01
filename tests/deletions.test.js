@@ -128,6 +128,145 @@ describe('deleting a scan row', () => {
   })
 })
 
+describe('deleting a provider', () => {
+  const newProvider = async (extra = {}) =>
+    (await call('POST', '/api/admin/providers', { cookie, body: { company: 'גינון', contact_name: 'חמודי', password: 'hamudi-1234', ...extra } })).json.provider
+  const signIn = async (p) => (await call('POST', '/api/session', { body: { provider_id: p.id, password: 'hamudi-1234' } })).json.token
+
+  it('keeps every scan recorded for them, with their name, and takes their phones and assignments away', async () => {
+    const p = await newProvider()
+    const t = await signIn(p)
+    const pt = await point({ provider_ids: [p.id] })
+    const done = (await call('POST', '/api/scan', { token: t, body: { id: randomUUID(), code: pt.qr_token, gps: near } })).json.scan
+    expect(done.outcome).toBe('accepted')
+    const listed = (await call('GET', '/api/admin/providers', { cookie })).json.providers.find((x) => x.id === p.id)
+    expect(listed.scan_count).toBe(1)
+
+    const del = await call('DELETE', `/api/admin/providers/${p.id}`, { cookie })
+    expect(del.status).toBe(200)
+    expect(del.json).toEqual({ ok: true, scans_kept: 1 })
+
+    // gone from the list and from the sign-in screen, and signed out of the phone they were on
+    expect((await call('GET', '/api/admin/providers', { cookie })).json.providers.find((x) => x.id === p.id)).toBeUndefined()
+    expect((await call('GET', '/api/public/providers')).json.providers.find((x) => x.id === p.id)).toBeUndefined()
+    expect((await call('GET', '/api/session', { token: t })).status).toBe(401)
+    expect((await call('POST', '/api/session', { body: { provider_id: p.id, password: 'hamudi-1234' } })).status).toBeGreaterThanOrEqual(400)
+    // their devices and their entry on the point's list went with them
+    expect((await db.pool.query('select count(*)::int n from provider_devices where provider_id = $1', [p.id])).rows[0].n).toBe(0)
+    expect((await db.pool.query('select count(*)::int n from point_providers where provider_id = $1', [p.id])).rows[0].n).toBe(0)
+    // the scan is still there, readable by name, and the history still protects it
+    const kept = (await allScans()).find((s) => s.id === done.id)
+    expect(kept).toMatchObject({ provider_id: p.id, provider_name: expect.stringContaining('חמודי'), outcome: 'accepted' })
+    await expect(db.pool.query('delete from scans where id = $1', [done.id])).rejects.toThrow(/append-only/)
+    // who did it is on record
+    const rows = await audit('provider.delete', p.id)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].detail).toMatchObject({ company: 'גינון', contact_name: 'חמודי', scans_kept: 1 })
+  })
+
+  it('works for a provider with no scans, an inactive one and the demo account', async () => {
+    const empty = await newProvider()
+    expect((await call('DELETE', `/api/admin/providers/${empty.id}`, { cookie })).json).toEqual({ ok: true, scans_kept: 0 })
+    const off = await newProvider()
+    await call('PATCH', `/api/admin/providers/${off.id}`, { cookie, body: { is_active: false } })
+    expect((await call('DELETE', `/api/admin/providers/${off.id}`, { cookie })).status).toBe(200)
+    const demo = await newProvider({ is_demo: true })
+    expect((await call('DELETE', `/api/admin/providers/${demo.id}`, { cookie })).status).toBe(200)
+  })
+
+  it('says 404 for a provider that is not there, 400 for a malformed id, and needs a committee member', async () => {
+    const p = await newProvider()
+    expect((await call('DELETE', `/api/admin/providers/${p.id}`)).status).toBe(401)
+    expect((await call('DELETE', `/api/admin/providers/${p.id}`, { token })).status).toBe(401) // a provider cannot delete one
+    expect((await call('DELETE', `/api/admin/providers/${p.id}`, { cookie })).status).toBe(200)
+    const twice = await call('DELETE', `/api/admin/providers/${p.id}`, { cookie })
+    expect(twice.status).toBe(404)
+    expect(twice.json.error.code).toBe('provider_not_found')
+    expect((await call('DELETE', '/api/admin/providers/not-an-id', { cookie })).status).toBe(400)
+  })
+})
+
+describe('deleting a committee member', () => {
+  const add = async (email) => (await call('POST', '/api/admin/admins', { cookie, body: { email, name: 'חבר ועד' } })).json.admin
+
+  it('takes them off the list for good, signs them out, and records who did it', async () => {
+    const other = await add('second@test.local')
+    const theirCookie = await adminCookie('second@test.local')
+    expect((await call('GET', '/api/admin/points', { cookie: theirCookie })).status).toBe(200)
+
+    const del = await call('DELETE', `/api/admin/admins/${other.id}`, { cookie })
+    expect(del.status).toBe(200)
+    expect(del.json).toEqual({ ok: true })
+    expect((await call('GET', '/api/admin/admins', { cookie })).json.admins.find((a) => a.id === other.id)).toBeUndefined()
+    expect((await call('GET', '/api/admin/points', { cookie: theirCookie })).status).toBe(401) // their session went with them
+    const trail = await audit('admin.delete', other.id)
+    expect(trail).toHaveLength(1)
+    expect(trail[0].detail).toMatchObject({ email: 'second@test.local' })
+    // the same address can be added again later, as a new member
+    expect((await add('second@test.local')).id).not.toBe(other.id)
+  })
+
+  it('refuses to delete yourself, so the list is never left without someone who can sign in', async () => {
+    const me = (await call('GET', '/api/admin/admins', { cookie })).json.admins.find((a) => a.email === 'admin@test.local')
+    const r = await call('DELETE', `/api/admin/admins/${me.id}`, { cookie })
+    expect(r.status).toBe(409)
+    expect(r.json.error.code).toBe('cannot_delete_self')
+    expect((await call('GET', '/api/admin/admins', { cookie })).json.admins.find((a) => a.id === me.id)).toBeDefined()
+  })
+
+  it('says 404 for a member that is not there, 400 for a malformed id, and needs a committee member', async () => {
+    const other = await add('third@test.local')
+    expect((await call('DELETE', `/api/admin/admins/${other.id}`)).status).toBe(401)
+    expect((await call('DELETE', `/api/admin/admins/${other.id}`, { token })).status).toBe(401)
+    expect((await call('DELETE', `/api/admin/admins/${other.id}`, { cookie })).status).toBe(200)
+    const twice = await call('DELETE', `/api/admin/admins/${other.id}`, { cookie })
+    expect(twice.status).toBe(404)
+    expect(twice.json.error.code).toBe('admin_not_found')
+    expect((await call('DELETE', '/api/admin/admins/not-an-id', { cookie })).status).toBe(400)
+  })
+})
+
+describe('deleting an agent key', () => {
+  const newKey = async (name) => (await call('POST', '/api/admin/api-keys', { cookie, body: { name } })).json
+  const listed = async () => (await call('GET', '/api/admin/api-keys', { cookie })).json.api_keys
+
+  it('removes the key for good, active or revoked, and an active one stops working at once', async () => {
+    const live = await newKey('live')
+    expect((await call('GET', '/api/agent/v1/scans', { token: live.key })).status).toBe(200)
+    expect((await call('DELETE', `/api/admin/api-keys/${live.api_key.id}`, { cookie })).json).toEqual({ ok: true })
+    expect((await listed()).find((k) => k.id === live.api_key.id)).toBeUndefined()
+    expect((await call('GET', '/api/agent/v1/scans', { token: live.key })).json.error.code).toBe('api_key_invalid')
+
+    const old = await newKey('old')
+    await call('POST', `/api/admin/api-keys/${old.api_key.id}/revoke`, { cookie })
+    expect((await listed()).find((k) => k.id === old.api_key.id).revoked_at).not.toBeNull() // revoking keeps the row
+    expect((await call('DELETE', `/api/admin/api-keys/${old.api_key.id}`, { cookie })).status).toBe(200)
+    expect((await listed()).find((k) => k.id === old.api_key.id)).toBeUndefined()
+
+    const trail = await audit('api_key.delete', live.api_key.id)
+    expect(trail[0].detail).toMatchObject({ name: 'live', was_revoked: false })
+    expect((await audit('api_key.delete', old.api_key.id))[0].detail.was_revoked).toBe(true)
+  })
+
+  it('says 404 for a key that is not there, 400 for a malformed id, and needs a committee member', async () => {
+    const k = await newKey('once')
+    expect((await call('DELETE', `/api/admin/api-keys/${k.api_key.id}`)).status).toBe(401)
+    expect((await call('DELETE', `/api/admin/api-keys/${k.api_key.id}`, { token: k.key })).status).toBe(401) // the key cannot delete itself
+    await call('DELETE', `/api/admin/api-keys/${k.api_key.id}`, { cookie })
+    const twice = await call('DELETE', `/api/admin/api-keys/${k.api_key.id}`, { cookie })
+    expect(twice.status).toBe(404)
+    expect(twice.json.error.code).toBe('api_key_not_found')
+    expect((await call('DELETE', '/api/admin/api-keys/nope', { cookie })).status).toBe(400)
+  })
+
+  it('revoking is its own action: it needs a committee member and a key that is still active', async () => {
+    const k = await newKey('rev')
+    expect((await call('POST', `/api/admin/api-keys/${k.api_key.id}/revoke`)).status).toBe(401)
+    expect((await call('POST', `/api/admin/api-keys/${k.api_key.id}/revoke`, { cookie })).status).toBe(200)
+    expect((await call('POST', `/api/admin/api-keys/${k.api_key.id}/revoke`, { cookie })).status).toBe(404) // already revoked
+  })
+})
+
 describe('the history is still protected from accidents', () => {
   it('refuses every delete that does not come through the committee screen, also right after one that did', async () => {
     const p = await point()
