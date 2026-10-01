@@ -49,6 +49,13 @@ Details that matter:
   To change the logo, replace that SVG, run `npm run icons`, commit the PNGs. `tests/pwa-icons.test.js` and the
   `apple-touch-icon` test in `e2e/pwa.spec.js` check them.
 
+CI (`.github/workflows/ci.yml`) runs `guards`, `unit` and `e2e` (both projects) on every pull request, against a
+Postgres 18 container instead of Neon, and all four checks are required to merge. A migration is a new file only (never
+edit, rename or delete an old one), numbered one after the last, and destructive SQL (drop, rename, truncate, delete, a
+type change, `SET NOT NULL`) needs a line `-- contract: <reason>`, because the old deployment keeps serving while the
+new one builds. The PR title is a Conventional Commit (`fix: ...`). Never delete or skip a test to make CI pass:
+`scripts/check-tests.mjs` refuses it.
+
 Not automated, on purpose: Home Screen install, standalone mode, the status bar, offline use on a real iPhone, push.
 Check them by hand with `docs/manual-ios-checklist.md` before a release that touches the PWA files, the layout or the
 location flow.

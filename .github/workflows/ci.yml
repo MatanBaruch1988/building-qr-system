@@ -1,0 +1,166 @@
+# Continuous integration. Four checks, and branch protection (.github/rulesets/) requires all of them to merge:
+#   guards                 migrations only move forward, tests are not removed, the PR title, a dependency audit
+#   unit                   Vitest, against a Postgres 18 container (production runs Postgres 18 on Neon)
+#   e2e (android-chrome)   Playwright, Chromium as a Pixel 7
+#   e2e (iphone-webkit)    Playwright, WebKit as an iPhone 14
+# Every third-party action is pinned to a full commit SHA (the tag is in the comment): a tag can be moved, a SHA cannot.
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+    # The default types plus the ones that change what the guards read, so that fixing the title or adding the
+    # allow-test-removal label re-runs the checks (a plain re-run would still see the old title and labels).
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guards:
+    name: guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the guards diff against the base branch, so they need its history
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      # The guard scripts use Node built-ins only and `npm audit` reads the lock file, so there is no `npm ci` here.
+
+      # What to compare with: the target branch for a pull request, the previous tip for a push. A branch that is new
+      # (all-zero SHA) or a force-pushed one (the old tip is gone) has nothing to compare with: the diff guards skip.
+      - name: Find the base commit
+        id: base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          case "$EVENT_NAME" in
+            pull_request) base="origin/$BASE_REF" ;;
+            push) base="$BEFORE_SHA" ;;
+            *) base="origin/master" ;;
+          esac
+          if [ "$base" = "0000000000000000000000000000000000000000" ] || ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
+            echo "No base commit to compare with ($base): skipping the migration and test guards."
+            base=""
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Migrations only move forward
+        if: steps.base.outputs.base != ''
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/check-migrations.mjs --base "$BASE"
+
+      # PR_LABELS lets a pull request that has to remove a test say so with the allow-test-removal label.
+      # Titles and labels are text that anyone can write: they go in through env and are read from process.env, never
+      # pasted into the script of a `run:` step.
+      - name: Tests are not removed or switched off
+        if: steps.base.outputs.base != ''
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: node scripts/check-tests.mjs --base "$BASE"
+
+      - name: Pull request title is a Conventional Commit
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: node scripts/check-pr-title.mjs
+
+      - name: Audit the production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Plain URLs without sslmode, so the container is reached without TLS (see normalizeConnectionString in server/db.js).
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      DATABASE_URL_UNPOOLED: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run --reporter=default --reporter=github-actions
+
+  e2e:
+    name: e2e (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: android-chrome
+            browser: chromium
+          - project: iphone-webkit
+            browser: webkit
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      DATABASE_URL_UNPOOLED: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      # Only the browser this project needs. Playwright's own advice is not to cache the browsers, so they are downloaded.
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      # playwright.config.js builds the app and starts the API (on a scratch schema of the container) and the preview.
+      - run: npx playwright test --project=${{ matrix.project }}
+      - name: Keep the report and the traces of a failed run
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-${{ matrix.project }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore

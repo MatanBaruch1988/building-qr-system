@@ -16,8 +16,11 @@ export default defineConfig({
   workers: 1,
   timeout: 60_000,
   expect: { timeout: 10_000 },
+  // A focused test (an `only`) left in the code would silently skip the rest of the suite: refuse it on CI.
+  forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: [['list'], ['html', { open: 'never' }]],
+  // On GitHub Actions the failures become annotations on the pull request, and the HTML report is uploaded when a run fails.
+  reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : [['list'], ['html', { open: 'never' }]],
   globalTeardown: './e2e/global-teardown.js',
   use: {
     baseURL: `http://localhost:${APP_PORT}`,
