@@ -6,6 +6,7 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 - **Base URL:** `https://<your-domain>/api/agent/v1` (the committee sees the exact address in the admin screen, tab "אייג׳נט")
 - **Auth:** `Authorization: Bearer qrk_…`, a key the committee creates and can revoke at any time. Read-only.
 - **Self-description:** `GET /schema` returns this contract as JSON. Read it first.
+- **Ready-made system prompt for the committee's agent (Hebrew):** [`agent-prompt.md`](agent-prompt.md).
 - **Time:** all human-readable times are Israel time. `checked_in_at` is UTC ISO, `checked_in_local` is
   `YYYY-MM-DD HH:mm:ss` in Asia/Jerusalem, `local_date` is the Israeli calendar day (use it for "per day").
 
