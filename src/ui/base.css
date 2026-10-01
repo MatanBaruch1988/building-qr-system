@@ -1,5 +1,7 @@
 /* Page-level basics shared by both apps. Everything else is scoped in ui.css / admin.css. */
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 html, body { margin: 0; padding: 0; background: #0b0b0d; }
+/* The light page background (the same value as --w-bg in ui.css, which is scoped to the two app roots). */
+html[data-theme='light'], html[data-theme='light'] body { background: #f4f5f7; }
 body { font-family: 'Rubik Variable', system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
 #root { min-height: 100vh; min-height: 100dvh; }

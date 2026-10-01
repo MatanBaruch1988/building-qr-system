@@ -53,6 +53,10 @@ export default {
   'checkin.done': 'סיימתי',
   'checkin.retry': 'נסו שוב',
   'checkin.asUser': 'משתמש: {name}',
+  'theme.label': 'מצב תצוגה',
+  'theme.system': 'לפי המכשיר',
+  'theme.light': 'בהיר',
+  'theme.dark': 'כהה',
 
   'error.invalid_code': 'קוד ה-QR הזה לא שייך למערכת.',
   'error.unknown_code': 'קוד ה-QR לא מוכר. ייתכן שהוחלף. פנו לוועד הבית.',

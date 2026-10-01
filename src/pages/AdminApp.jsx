@@ -10,6 +10,7 @@ import HistoryView from '../admin/views/HistoryView.jsx'
 import AgentView from '../admin/views/AgentView.jsx'
 import CommitteeView from '../admin/views/CommitteeView.jsx'
 import { applyUpdate, isUpdateReady, subscribeUpdate } from '../worker/update.js'
+import ThemeSwitch, { HEBREW_THEME_LABELS as THEME_LABELS } from '../ui/ThemeSwitch.jsx'
 import { IconPin, IconUsers, IconList, IconKey, IconShield, IconLogout, IconQr, IconAlert, IconRefresh } from '../admin/icons.jsx'
 
 const TABS = [
@@ -78,6 +79,7 @@ function Shell({ admin, onSignedOut }) {
         </nav>
         <div className="a-side__foot">
           <div className="a-user"><strong>{admin.name || 'חבר ועד'}</strong><span dir="ltr">{admin.email}</span></div>
+          <ThemeSwitch variant="row" labels={THEME_LABELS} />
           <a className="a-nav__item" href="/"><IconQr />אפליקציית נותני השירות</a>
           <button className="a-nav__item" onClick={signOut}><IconLogout />יציאה</button>
         </div>
@@ -85,7 +87,10 @@ function Shell({ admin, onSignedOut }) {
 
       <header className="a-top">
         <div className="a-brand"><span className="a-brand__mark"><IconQr size={22} /></span>{label}</div>
-        <button className="a-icon-btn" onClick={signOut} aria-label="יציאה"><IconLogout /></button>
+        <div className="a-actions" style={{ gap: 4 }}>
+          <ThemeSwitch variant="plain" labels={THEME_LABELS} />
+          <button className="a-icon-btn" onClick={signOut} aria-label="יציאה"><IconLogout /></button>
+        </div>
       </header>
 
       <main className="a-main" ref={mainRef} tabIndex={-1} style={{ outline: 'none' }}>

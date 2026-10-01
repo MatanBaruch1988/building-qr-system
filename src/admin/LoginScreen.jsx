@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { adminApi, errorText } from './api.js'
 import { IconAlert, IconLock, IconShield } from './icons.jsx'
+import ThemeSwitch, { HEBREW_THEME_LABELS } from '../ui/ThemeSwitch.jsx'
 
 const GIS_SRC = 'https://accounts.google.com/gsi/client'
 
@@ -71,6 +72,7 @@ export default function LoginScreen({ config, onSignedIn }) {
 
   return (
     <main className="a-login">
+      <div className="a-login__tools"><ThemeSwitch labels={HEBREW_THEME_LABELS} /></div>
       <div className="a-login__card">
         <span className="a-login__mark"><IconShield size={34} /></span>
         <h1 className="w-h1">ניהול נוכחות הבניין</h1>
