@@ -1,0 +1,99 @@
+import { ApiError, assertSafeWrite, bad } from './http.js'
+
+const routes = []
+
+function compile(pattern) {
+  return pattern.split('/').filter(Boolean)
+}
+
+export function route(method, pattern, handler) {
+  routes.push({ method, segments: compile(pattern), handler })
+}
+
+function match(segments, path) {
+  const parts = path.split('/').filter(Boolean)
+  if (parts.length !== segments.length) return null
+  const params = {}
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i].startsWith(':')) {
+      try {
+        params[segments[i].slice(1)] = decodeURIComponent(parts[i])
+      } catch {
+        throw bad('bad_request', 'Malformed URL')
+      }
+    } else if (segments[i] !== parts[i]) return null
+  }
+  return params
+}
+
+function send(res, { status = 200, json, text, headers = {} }) {
+  res.statusCode = status
+  res.setHeader('Cache-Control', 'no-store')
+  for (const [k, v] of Object.entries(headers)) res.setHeader(k, v)
+  if (text !== undefined) {
+    if (!res.getHeader('Content-Type')) res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+    res.end(text)
+  } else {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.end(JSON.stringify(json ?? {}))
+  }
+}
+
+/** On Vercel `req.body` is a lazy getter that throws on malformed JSON; the dev server sets it eagerly. */
+function readBody(req) {
+  let body
+  try {
+    body = req.body
+  } catch {
+    throw bad('invalid_json', 'Invalid JSON')
+  }
+  return body && typeof body === 'object' && !Array.isArray(body) ? body : {}
+}
+
+/** Database "bad data" errors are the caller's fault (400/409), not a server fault. */
+function fromDatabaseError(err) {
+  const code = typeof err?.code === 'string' ? err.code : ''
+  if (code.startsWith('22')) return new ApiError(400, 'invalid_input', 'A value is out of range or malformed')
+  if (code === '23505' || code === '23503') return new ApiError(409, 'conflict', 'Conflicts with existing data')
+  return null
+}
+
+/** Single entry point for every /api/* request (Vercel function and local dev server share it). */
+export async function handle(req, res) {
+  try {
+    const url = new URL(req.url, 'http://local')
+    const path = url.pathname.replace(/^\/api/, '') || '/'
+
+    let allowed = false
+    for (const r of routes) {
+      const params = match(r.segments, path)
+      if (!params) continue
+      allowed = true
+      if (r.method !== req.method) continue
+      assertSafeWrite(req)
+      const out = await r.handler({
+        req,
+        res,
+        url,
+        params,
+        query: Object.fromEntries(url.searchParams),
+        body: readBody(req),
+      })
+      const shaped = out && (out.json !== undefined || out.text !== undefined || out.status) ? out : { json: out }
+      return send(res, shaped)
+    }
+    throw allowed
+      ? new ApiError(405, 'method_not_allowed', 'Method not allowed')
+      : new ApiError(404, 'not_found', 'Unknown endpoint')
+  } catch (raw) {
+    const err = raw instanceof ApiError ? raw : fromDatabaseError(raw)
+    if (err) {
+      return send(res, {
+        status: err.status,
+        json: { error: { code: err.code, message: err.message, ...(err.extra || {}) } },
+      })
+    }
+    console.error('unhandled API error:', raw)
+    return send(res, { status: 500, json: { error: { code: 'server_error', message: 'Something went wrong' } } })
+  }
+}

@@ -1,0 +1,72 @@
+# Attendance data for an AI agent (read-only API)
+
+Building attendance log: one row per QR scan by a service provider (cleaning company, gardener).
+The app records facts and signals only. It never analyses, scores or judges: that is your job.
+
+- **Base URL:** `https://<your-domain>/api/agent/v1` (the committee sees the exact address in the admin screen, tab "אייג׳נט")
+- **Auth:** `Authorization: Bearer qrk_…` — a key the committee creates and can revoke at any time. Read-only.
+- **Self-description:** `GET /schema` returns this contract as JSON. Read it first.
+- **Time:** all human-readable times are Israel time. `checked_in_at` is UTC ISO, `checked_in_local` is
+  `YYYY-MM-DD HH:mm:ss` in Asia/Jerusalem, `local_date` is the Israeli calendar day (use it for "per day").
+
+## Endpoints
+
+| Endpoint | What it returns |
+|---|---|
+| `GET /scans` | Scan records, newest first. Filters below. |
+| `GET /points` | Every service point, including inactive ones, with assigned providers. |
+| `GET /providers` | Every provider, including inactive and demo ones, with `last_scan_at`. |
+| `GET /schema` | Field, flag and rule descriptions. |
+| `GET /health` | Liveness and server time. |
+
+### `GET /scans` filters
+
+`from`, `to` (`YYYY-MM-DD` = Israel calendar day, or a full ISO time with `Z`/offset), `point_id`, `provider_id`,
+`service_type`, `flag`, `outcome` (`accepted` default | `rejected` | `all`), `include_voided`, `include_demo`,
+`order` (`desc` default | `asc`), `limit` (1–500, default 100), `cursor`, `format` (`json` | `csv`).
+
+Paging: the response has `next_cursor`; pass it back as `cursor`. For CSV the cursor is in the `X-Next-Cursor` header.
+
+```bash
+curl -H "Authorization: Bearer $KEY" \
+  "https://<your-domain>/api/agent/v1/scans?from=2026-09-01&to=2026-09-30&limit=500"
+```
+
+## A scan row
+
+```json
+{
+  "id": "uuid",
+  "checked_in_at": "2026-09-30T06:04:10.821Z",
+  "checked_in_local": "2026-09-30 09:04:10",
+  "local_date": "2026-09-30",
+  "point_id": "uuid", "point_name": "לובי",
+  "provider_id": "uuid", "provider_name": "ניקיון – ליאור",
+  "service_type": "cleaning",
+  "source": "online",
+  "outcome": "accepted",
+  "distance_m": 12, "gps_accuracy_m": 8,
+  "flags": [],
+  "voided": false, "void_reason": null
+}
+```
+
+## How to read it
+
+- `outcome: accepted` is a real check-in. `rejected_far` / `rejected_no_location` are refused attempts, kept for the record.
+- **Flags are signals, not verdicts.** Report them, weigh them, but do not treat one as proof of anything:
+  - `location_unverified`: no usable GPS fix. Normal in basements and stairwells.
+  - `location_outside_radius`: a good fix slightly outside the point's radius (on `required` points, within the 15 m pin tolerance).
+  - `offline_sync`: scanned without signal, uploaded later (`checked_in_at` is the phone's time).
+  - `clock_skew`: the phone's clock was off by more than 5 minutes.
+  - `demo`: the demo account (hidden unless `include_demo=true`).
+- The same provider at the same point within 10 minutes is stored once.
+- Nothing is deleted. A committee member can void a scan (hidden unless `include_voided=true`).
+- Points can be `required`, `optional` or `none` for GPS (`gps_mode` in `/points`): `none` points are never judged by location.
+- Patterns worth looking for are yours to define, for example: missing visits on expected days, the same phone used by
+  two providers, two distant points minutes apart, or a run of `location_unverified` at a point that usually has GPS.
+
+## Errors
+
+JSON `{ "error": { "code": "…", "message": "…" } }`. `401 api_key_required | api_key_invalid` (missing, malformed
+or revoked key), `400 invalid_filter` (bad date, id, cursor, …).

@@ -1,0 +1,38 @@
+// Best-effort location for the soft-GPS policy. Never throws and never blocks for long:
+// the server treats a missing or vague fix as "unverified", not as a failure (see docs).
+
+const USABLE_ACCURACY_M = 150
+
+/**
+ * One geolocation request with a watchdog of our own. The browser's `timeout` only starts once the
+ * permission question is answered, and some browsers (Firefox "Not now") never answer it at all.
+ */
+const ask = (options, watchdogMs) =>
+  new Promise((resolve) => {
+    if (!('geolocation' in navigator)) return resolve({ reason: 'unsupported' })
+    const timer = setTimeout(() => resolve({ reason: 'timeout' }), watchdogMs)
+    const done = (value) => {
+      clearTimeout(timer)
+      resolve(value)
+    }
+    navigator.geolocation.getCurrentPosition(
+      (p) => done({ fix: { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy } }),
+      (e) => done({ reason: e.code === 1 ? 'denied' : e.code === 3 ? 'timeout' : 'unavailable' }),
+      options,
+    )
+  })
+
+/**
+ * 1) Accept a position up to 5 minutes old: people usually arrive from outside, where GPS worked,
+ *    so this is instant and works indoors. 2) If that is too vague, try once for a fresh fix.
+ * Returns { fix, reason } where fix is {lat, lng, accuracy} or null.
+ */
+export async function getFix({ quickMs = 4000, preciseMs = 3000, maxAgeMs = 5 * 60_000 } = {}) {
+  const quick = await ask({ enableHighAccuracy: false, timeout: quickMs, maximumAge: maxAgeMs }, quickMs + 2500)
+  if (quick.fix && quick.fix.accuracy <= USABLE_ACCURACY_M) return { fix: quick.fix, reason: null }
+  if (quick.reason === 'denied' || quick.reason === 'unsupported') return { fix: null, reason: quick.reason }
+
+  const precise = await ask({ enableHighAccuracy: true, timeout: preciseMs, maximumAge: 0 }, preciseMs + 2500)
+  const best = [quick.fix, precise.fix].filter(Boolean).sort((a, b) => a.accuracy - b.accuracy)[0] ?? null
+  return { fix: best, reason: best ? null : precise.reason ?? quick.reason }
+}

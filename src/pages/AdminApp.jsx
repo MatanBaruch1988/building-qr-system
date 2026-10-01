@@ -1,125 +1,162 @@
-import React, { useState } from 'react'
-import { useLocations, useWorkers } from '../hooks/useFirebaseData'
-import AdminPanel from '../components/AdminPanel'
-import ScansHistory from '../components/ScansHistory'
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import '../ui/ui.css'
+import '../admin/admin.css'
+import { adminApi } from '../admin/api.js'
+import { ToastProvider, ConfirmProvider, Spinner, useToast } from '../admin/ui.jsx'
+import LoginScreen from '../admin/LoginScreen.jsx'
+import PointsView from '../admin/views/PointsView.jsx'
+import ProvidersView from '../admin/views/ProvidersView.jsx'
+import HistoryView from '../admin/views/HistoryView.jsx'
+import AgentView from '../admin/views/AgentView.jsx'
+import CommitteeView from '../admin/views/CommitteeView.jsx'
+import { applyUpdate, isUpdateReady, subscribeUpdate } from '../worker/update.js'
+import { IconPin, IconUsers, IconList, IconKey, IconShield, IconLogout, IconQr, IconAlert, IconRefresh } from '../admin/icons.jsx'
 
-function AdminApp({ user, logout }) {
-  const [view, setView] = useState('management') // 'management' | 'history'
-  const locations = useLocations()
-  const workers = useWorkers()
+const TABS = [
+  { key: 'points', label: 'נקודות', icon: IconPin, View: PointsView },
+  { key: 'providers', label: 'נותני שירות', icon: IconUsers, View: ProvidersView },
+  { key: 'history', label: 'היסטוריה', icon: IconList, View: HistoryView },
+  { key: 'agent', label: 'אייג׳נט', icon: IconKey, View: AgentView },
+  { key: 'committee', label: 'ועד', icon: IconShield, View: CommitteeView },
+]
 
-  const handleLogout = async () => {
-    if (window.confirm('האם להתנתק מהמערכת?')) {
-      await logout()
-    }
-  }
+const tabFromHash = () => TABS.find((t) => t.key === window.location.hash.slice(1))?.key ?? 'points'
 
+function useTab() {
+  const [tab, setTab] = useState(tabFromHash)
+  useEffect(() => {
+    const onHash = () => setTab(tabFromHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+  return [tab, (key) => { window.location.hash = key }]
+}
+
+// Defined once, outside Shell: a component created inside a render would be a new type each time and every
+// tab change would remount the buttons (losing keyboard focus).
+function NavItem({ tab, current, onGo, className, size }) {
   return (
-    <div className="admin-layout">
-
-      {/* ── SIDEBAR (desktop only, hidden on mobile via CSS) ── */}
-      <aside className="admin-sidebar">
-        <div className="admin-sidebar-brand">
-          <h2>ממשק ניהול</h2>
-        </div>
-        <nav className="admin-sidebar-nav">
-          <button
-            className={`admin-sidebar-btn ${view === 'management' ? 'active' : ''}`}
-            onClick={() => setView('management')}
-          >
-            <span className="sidebar-icon">⚙️</span>
-            ניהול
-          </button>
-          <button
-            className={`admin-sidebar-btn ${view === 'history' ? 'active' : ''}`}
-            onClick={() => setView('history')}
-          >
-            <span className="sidebar-icon">📋</span>
-            היסטוריה
-          </button>
-          <a href="/" className="admin-sidebar-btn" style={{ textDecoration: 'none' }}>
-            <span className="sidebar-icon">👷</span>
-            ממשק נותני שירות
-          </a>
-        </nav>
-        <div className="admin-sidebar-footer">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 4px 12px' }}>
-            {user?.photoURL && (
-              <img src={user.photoURL} alt="" style={{ width: '28px', height: '28px', borderRadius: '50%' }} />
-            )}
-            <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {user?.email}
-            </span>
-          </div>
-          <button className="btn btn-secondary btn-sm" onClick={handleLogout} style={{ width: '100%' }}>
-            התנתק
-          </button>
-        </div>
-      </aside>
-
-      {/* ── CONTENT ── */}
-      <main className="admin-content container">
-
-        {/* Mobile-only header */}
-        <header className="header admin-mobile-only" style={{ paddingBottom: '16px' }}>
-          <h1>ממשק ניהול</h1>
-        </header>
-
-        {/* Mobile-only user info bar */}
-        <div className="admin-mobile-only" style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          background: 'var(--surface-1)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 'var(--radius-lg)',
-          padding: '10px 16px',
-          marginBottom: '20px'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            {user?.photoURL && (
-              <img src={user.photoURL} alt="" style={{ width: '28px', height: '28px', borderRadius: '50%' }} />
-            )}
-            <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-              {user?.email}
-            </span>
-          </div>
-          <button className="btn btn-secondary btn-sm" onClick={handleLogout}>
-            התנתק
-          </button>
-        </div>
-
-        {/* Mobile-only nav */}
-        <div className="admin-mobile-nav">
-          <nav className="nav">
-            <button
-              className={`nav-btn ${view === 'management' ? 'active' : ''}`}
-              onClick={() => setView('management')}
-            >
-              ניהול
-            </button>
-            <button
-              className={`nav-btn ${view === 'history' ? 'active' : ''}`}
-              onClick={() => setView('history')}
-            >
-              היסטוריה
-            </button>
-            <a href="/" className="nav-btn" style={{ textDecoration: 'none' }}>
-              ממשק נותני שירות
-            </a>
-          </nav>
-        </div>
-
-        {view === 'management' && (
-          <AdminPanel locations={locations} workers={workers} />
-        )}
-
-        {view === 'history' && (
-          <ScansHistory workers={workers} />
-        )}
-      </main>
-    </div>
+    <button className={className} onClick={() => onGo(tab.key)} aria-current={current ? 'page' : undefined}>
+      <tab.icon size={size} />{tab.label}
+    </button>
   )
 }
 
-export default AdminApp
+function Shell({ admin, onSignedOut }) {
+  const toast = useToast()
+  const [tab, goTo] = useTab()
+  const { View, label } = TABS.find((t) => t.key === tab)
+  const updateReady = useSyncExternalStore(subscribeUpdate, isUpdateReady)
+  const mainRef = useRef(null)
+  const first = useRef(true)
+
+  // A tab change is a page change: title for the tab strip/history, scroll to the top, focus to the content.
+  useEffect(() => {
+    document.title = `${label} · נוכחות בבניין`
+    if (first.current) return void (first.current = false)
+    window.scrollTo(0, 0)
+    mainRef.current?.focus({ preventScroll: true })
+  }, [tab, label])
+
+  // Only leave the screen once the server has really ended the session; otherwise a reload would sign the
+  // person straight back in (a shared computer).
+  const signOut = async () => {
+    try {
+      await adminApi('/logout', { method: 'POST' })
+    } catch (err) {
+      if (err.status !== 401) return toast.error('ההתנתקות לא הושלמה. בדקו את החיבור ונסו שוב.')
+    }
+    onSignedOut()
+  }
+
+  return (
+    <>
+      <aside className="a-side">
+        <div className="a-brand"><span className="a-brand__mark"><IconQr size={22} /></span>נוכחות בבניין</div>
+        <nav className="a-nav" aria-label="ניווט ראשי">
+          {TABS.map((t) => <NavItem key={t.key} tab={t} current={tab === t.key} onGo={goTo} className="a-nav__item" size={22} />)}
+        </nav>
+        <div className="a-side__foot">
+          <div className="a-user"><strong>{admin.name || 'חבר ועד'}</strong><span dir="ltr">{admin.email}</span></div>
+          <a className="a-nav__item" href="/"><IconQr />אפליקציית נותני השירות</a>
+          <button className="a-nav__item" onClick={signOut}><IconLogout />יציאה</button>
+        </div>
+      </aside>
+
+      <header className="a-top">
+        <div className="a-brand"><span className="a-brand__mark"><IconQr size={22} /></span>{label}</div>
+        <button className="a-icon-btn" onClick={signOut} aria-label="יציאה"><IconLogout /></button>
+      </header>
+
+      <main className="a-main" ref={mainRef} tabIndex={-1} style={{ outline: 'none' }}>
+        {updateReady && (
+          <div className="w-banner" role="status" style={{ marginBlockEnd: 16 }}>
+            <IconRefresh />
+            <div className="w-banner__body">יש גרסה חדשה של המערכת.</div>
+            <button className="w-btn w-btn--small w-btn--quiet" onClick={applyUpdate}>עדכון</button>
+          </div>
+        )}
+        <View admin={admin} />
+      </main>
+
+      <nav className="a-tabbar" aria-label="ניווט ראשי (טלפון)">
+        {TABS.map((t) => <NavItem key={t.key} tab={t} current={tab === t.key} onGo={goTo} className="a-tab" size={24} />)}
+      </nav>
+    </>
+  )
+}
+
+export default function AdminApp() {
+  const [boot, setBoot] = useState({ status: 'loading' })
+  const [notice, setNotice] = useState('')
+
+  const load = useCallback(async () => {
+    try {
+      const [config, me] = await Promise.all([
+        adminApi('/config'),
+        adminApi('/me').catch((e) => (e.status === 401 ? null : Promise.reject(e))),
+      ])
+      setBoot({ status: 'ready', config, admin: me?.admin ?? null })
+    } catch {
+      setBoot({ status: 'error' })
+    }
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  // Any call that finds the session gone sends the person back to the sign-in screen.
+  useEffect(() => {
+    const expired = () => {
+      setNotice('פג תוקף ההתחברות. היכנסו שוב.')
+      setBoot((b) => (b.status === 'ready' ? { ...b, admin: null } : b))
+    }
+    window.addEventListener('admin-session-expired', expired)
+    return () => window.removeEventListener('admin-session-expired', expired)
+  }, [])
+
+  let content
+  if (boot.status === 'loading') content = <Spinner />
+  else if (boot.status === 'error') {
+    content = (
+      <div className="a-login"><div className="a-login__card">
+        <span className="a-login__mark"><IconAlert size={34} /></span>
+        <h1 className="w-h1">אין חיבור לשרת</h1>
+        <button className="w-btn" onClick={() => { setBoot({ status: 'loading' }); load() }}>נסו שוב</button>
+      </div></div>
+    )
+  } else if (!boot.admin) {
+    content = (
+      <>
+        {notice && <div className="w-banner w-banner--warn" role="status" style={{ margin: '16px auto 0', maxWidth: 440 }}><IconAlert /><div className="w-banner__body">{notice}</div></div>}
+        <LoginScreen config={boot.config} onSignedIn={(admin) => { setNotice(''); setBoot((b) => ({ ...b, admin })) }} />
+      </>
+    )
+  } else content = <Shell admin={boot.admin} onSignedOut={() => { setNotice(''); setBoot((b) => ({ ...b, admin: null })) }} />
+
+  return (
+    <div className="a-app">
+      <ToastProvider>
+        <ConfirmProvider>{content}</ConfirmProvider>
+      </ToastProvider>
+    </div>
+  )
+}
