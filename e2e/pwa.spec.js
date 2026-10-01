@@ -24,6 +24,7 @@ test.describe('manifest', () => {
     })
     const sizes = manifest.icons.map((icon) => icon.sizes)
     expect(sizes).toEqual(expect.arrayContaining(['192x192', '512x512']))
+    expect(manifest.icons.every((icon) => icon.type === 'image/png'), 'the manifest icons are PNG, which every platform reads').toBe(true)
     for (const icon of manifest.icons) {
       const file = await page.request.get(new URL(icon.src, new URL(href, page.url())).href)
       expect(file.ok(), `icon ${icon.src} loads`).toBeTruthy()
@@ -31,14 +32,37 @@ test.describe('manifest', () => {
     }
   })
 
-  // KNOWN APP ISSUE (reported, not fixed here): iOS ignores an SVG apple-touch-icon and falls back to a screenshot of
-  // the page for the Home Screen icon; it needs a PNG (180x180). While the app links the SVG this test is expected to
-  // fail. When a PNG is added, Playwright reports "unexpectedly passed": delete the test.fail line then.
-  test('links a PNG apple-touch-icon, which iOS needs for its Home Screen icon', async ({ page }) => {
-    test.fail(true, 'the app links pwa-192x192.svg as its apple-touch-icon, which iOS does not use')
+  // iOS shows this file as the Home Screen icon. It ignores an SVG (and then uses a screenshot of the page), wants
+  // 180x180, and paints every transparent pixel black, so the corners of the file must be solid and not see-through.
+  test('links a PNG apple-touch-icon that iOS can use: 180x180, with solid corners', async ({ page }) => {
     await page.goto('/')
-    const href = await page.locator('link[rel="apple-touch-icon"]').getAttribute('href')
+    const link = page.locator('link[rel="apple-touch-icon"]')
+    const href = await link.getAttribute('href')
     expect(href).toMatch(/\.png(\?|$)/)
+    expect(await link.getAttribute('sizes')).toBe('180x180')
+
+    const response = await page.request.get(new URL(href, page.url()).href)
+    expect(response.ok()).toBeTruthy()
+    expect(response.headers()['content-type']).toContain('image/png')
+
+    // look at the pixels the way a browser sees them
+    const icon = await page.evaluate(async (url) => {
+      const bitmap = await createImageBitmap(await (await fetch(url)).blob())
+      const canvas = document.createElement('canvas')
+      canvas.width = bitmap.width
+      canvas.height = bitmap.height
+      const context = canvas.getContext('2d')
+      context.drawImage(bitmap, 0, 0)
+      const at = (x, y) => [...context.getImageData(x, y, 1, 1).data]
+      const last = bitmap.width - 1
+      return { width: bitmap.width, height: bitmap.height, corners: [at(0, 0), at(last, 0), at(0, last), at(last, last)] }
+    }, href)
+    expect([icon.width, icon.height]).toEqual([180, 180])
+    for (const [red, green, blue, alpha] of icon.corners) {
+      expect(alpha, 'a corner is fully opaque').toBe(255)
+      // the brand blue (#007AFF), not black
+      expect([red, green, blue]).toEqual([0, 122, 255])
+    }
   })
 })
 
