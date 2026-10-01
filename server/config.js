@@ -17,6 +17,14 @@ export const GPS_MAX_USABLE_ACCURACY_M = 150
 export const GPS_PIN_TOLERANCE_M = 15
 export const GPS_MAX_ACCURACY_CREDIT_M = 50
 
+// A remembered position is where the phone WAS. On 'optional' points (reception comes and goes) a reading older than
+// GPS_STALE_AFTER_S is flagged `location_stale`, and the person may have walked since: that far (at a brisk walk,
+// for at most GPS_MAX_STALE_AGE_S) is added to the allowed distance. 'required' points ask for a fresh reading and
+// get no such allowance.
+export const GPS_STALE_AFTER_S = 60
+export const GPS_MAX_STALE_AGE_S = 300
+export const GPS_WALKING_SPEED_MPS = 2
+
 // Offline scans keep the phone's clock only if it is plausible.
 export const MAX_SYNC_BATCH = 20
 export const CLOCK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000

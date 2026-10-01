@@ -57,6 +57,7 @@ curl -H "Authorization: Bearer $KEY" \
 - **Flags are signals, not verdicts.** Report them, weigh them, but do not treat one as proof of anything:
   - `location_unverified`: no usable GPS fix. Normal in basements and stairwells.
   - `location_outside_radius`: a good fix slightly outside the point's radius (within the 15 m pin tolerance).
+  - `location_stale`: the phone used a position it remembered (older than a minute), typically from just outside the building.
   - `offline_sync`: scanned without signal, uploaded later (`checked_in_at` is the phone's time).
   - `clock_skew`: the phone's clock was off by more than 5 minutes.
   - `demo`: the demo account (hidden unless `include_demo=true`).

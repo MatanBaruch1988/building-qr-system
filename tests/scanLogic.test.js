@@ -91,6 +91,32 @@ describe('evaluateGps (soft GPS)', () => {
       expect(judge(120, 50).outcome).toBe('rejected_far') // 70 > 65
     })
   })
+  describe('a remembered position is where the phone WAS', () => {
+    const remembered = (mode, metersAway, accuracy, age_s) => evaluateGps({ mode, point, gps: { ...at(metersAway), accuracy, age_s } })
+    it('a fresh reading (or one under a minute old) is judged as is, with no flag', () => {
+      expect(remembered('optional', 40, 10, 5).flags).toEqual([])
+      expect(remembered('optional', 100, 10, 30).outcome).toBe('rejected_far')
+    })
+    it("'optional': an honest walk since the reading is allowed for (2 m/s) and the reading is flagged", () => {
+      // from the lobby 4 minutes ago: 300 m away then, 240 s * 2 m/s = 480 m of room
+      const r = remembered('optional', 300, 10, 240)
+      expect(r.outcome).toBe('accepted')
+      expect(r.flags).toEqual(['location_stale'])
+    })
+    it("'optional': but not a reading from kilometres away, however old", () => {
+      expect(remembered('optional', 5000, 10, 240).outcome).toBe('rejected_far')
+      expect(remembered('optional', 5000, 10, 86_400).outcome).toBe('rejected_far') // the room is capped at 5 minutes of walking
+    })
+    it("'required' points get no such room: they ask for a fresh reading", () => {
+      expect(remembered('required', 300, 10, 240).outcome).toBe('rejected_far')
+      const near = remembered('required', 30, 10, 240) // still flagged when it is near
+      expect(near.outcome).toBe('accepted')
+      expect(near.flags).toEqual(['location_stale'])
+    })
+    it('a missing or nonsense age means "fresh"', () => {
+      for (const age_s of [undefined, null, NaN, 'x', -5]) expect(remembered('optional', 300, 10, age_s).outcome).toBe('rejected_far')
+    })
+  })
   it("the two modes differ only when the phone cannot say where it is", () => {
     for (const gps of [null, { ...at(5), accuracy: 900 }]) {
       expect(evaluateGps({ mode: 'required', point, gps }).outcome).toBe('rejected_no_location')

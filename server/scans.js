@@ -53,8 +53,15 @@ export function normalizeGps(gps) {
   const lng = realNumber(gps.lng)
   if (lat === null || lng === null) return null
   const accuracy = realNumber(gps.accuracy)
+  // How old the reading was when the phone took it (a remembered position). Optional, clamped, never trusted blindly.
+  const age = realNumber(gps.age_s)
   // Clamp: gps_accuracy_m is a 32-bit integer column.
-  return { lat, lng, accuracy: accuracy === null ? null : Math.min(Math.max(accuracy, 0), 1_000_000) }
+  return {
+    lat,
+    lng,
+    accuracy: accuracy === null ? null : Math.min(Math.max(accuracy, 0), 1_000_000),
+    age_s: age === null ? null : Math.min(Math.max(Math.round(age), 0), 86_400),
+  }
 }
 
 /**

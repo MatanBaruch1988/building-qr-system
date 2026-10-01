@@ -3,6 +3,9 @@ import {
   GPS_MAX_USABLE_ACCURACY_M,
   GPS_PIN_TOLERANCE_M,
   GPS_MAX_ACCURACY_CREDIT_M,
+  GPS_STALE_AFTER_S,
+  GPS_MAX_STALE_AGE_S,
+  GPS_WALKING_SPEED_MPS,
   CLOCK_MAX_AGE_MS,
   CLOCK_MAX_FUTURE_MS,
   CLOCK_SKEW_FLAG_MS,
@@ -49,6 +52,8 @@ function validGps(gps) {
  *  - a usable fix (accuracy <= GPS_MAX_USABLE_ACCURACY_M) must be inside the point's circle, allowing the pin
  *    tolerance and the phone's own (capped) inaccuracy (config.js); otherwise it is rejected (catches "scanning a
  *    photo of the QR from home"). Slightly outside, within the tolerance, is accepted + `location_outside_radius`.
+ *  - a remembered fix (age_s over GPS_STALE_AFTER_S) is flagged `location_stale`; on 'optional' points it also gets
+ *    room for the walking done since (config.js). 'required' points ask for a fresh reading and get no such room.
  *  - no / weak fix   : 'required' refuses it; 'optional' accepts it + `location_unverified` (basements, stairwells).
  * 'required' and 'optional' therefore differ only in what happens when the phone cannot say where it is.
  * Returns { outcome, distance_m, gps_accuracy_m, flags }.
@@ -86,9 +91,15 @@ export function evaluateGps({ mode, point, gps }) {
   // The same strictness for 'required' and 'optional': inside the circle, plus the pin tolerance, after crediting
   // the phone's (capped) inaccuracy. Slightly outside (within the tolerance) is accepted and flagged.
   const credit = Math.min(result.gps_accuracy_m, GPS_MAX_ACCURACY_CREDIT_M)
-  const outside = result.distance_m - credit - point.radius_m
+  // A remembered reading is where the phone WAS. On 'optional' points the person may have walked since (arriving
+  // from the lobby to a basement, say), so a stale reading is judged with that much extra room, and is flagged.
+  const age = Number.isFinite(gps.age_s) ? Math.max(0, gps.age_s) : 0
+  const stale = age > GPS_STALE_AFTER_S
+  const walked = mode === 'optional' && stale ? Math.min(age, GPS_MAX_STALE_AGE_S) * GPS_WALKING_SPEED_MPS : 0
+  const outside = result.distance_m - credit - walked - point.radius_m
   if (outside > GPS_PIN_TOLERANCE_M) return { ...result, outcome: 'rejected_far' }
   if (outside > 0) result.flags.push('location_outside_radius')
+  if (stale) result.flags.push('location_stale')
   return result
 }
 

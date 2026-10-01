@@ -44,6 +44,28 @@ describe('untrusted input never becomes a server error', () => {
     expect(r.json.scan.flags).toContain('location_unverified') // too vague to trust
   })
 
+  it('a remembered position: its age is read safely, flagged, and gives an optional point room for the walk since', { timeout: 60_000 }, async () => {
+    const metres300 = { lat: HOME.lat + 0.0027, lng: HOME.lng, accuracy: 10 } // ~300 m from the point
+    const run = async (gps, extra) => {
+      const p = await point(extra)
+      return scan({ code: p.qr_token, gps })
+    }
+    // 4 minutes old: the person may have walked 300 m since, and the reading is flagged
+    const stale = await run({ ...metres300, age_s: 240 })
+    expect(stale.status).toBe(200)
+    expect(stale.json.scan).toMatchObject({ outcome: 'accepted' })
+    expect(stale.json.scan.flags).toContain('location_stale')
+    // the same position claimed fresh (or with a nonsense age) is simply too far
+    for (const age_s of [undefined, 'abc', -1, [], null]) {
+      const r = await run({ ...metres300, age_s })
+      expect(r.status, String(age_s)).toBe(200)
+      expect(r.json.scan.outcome, String(age_s)).toBe('rejected_far')
+    }
+    // a 'required' point gets no room for walking: it wants a fresh reading
+    const required = await run({ ...metres300, age_s: 240 }, { gps_mode: 'required' })
+    expect(required.json.scan.outcome).toBe('rejected_far')
+  })
+
   it('an impossible client_time is ignored and flagged (online and offline)', { timeout: 90_000 }, async () => {
     for (const client_time of [-8.64e15, '0000-01-01', 'yesterday']) {
       const p = await point()

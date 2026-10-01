@@ -48,6 +48,7 @@ export const schemaDoc = {
   flags: {
     location_unverified: 'No usable GPS fix (typical indoors or in basements). Not evidence of fraud on its own.',
     location_outside_radius: 'A usable fix was a bit outside the point radius but not far enough to reject.',
+    location_stale: "The position was remembered by the phone (older than a minute), so it shows where the person was a little earlier. 'optional' points allow for the walking since.",
     offline_sync: 'Scanned without signal and uploaded later; checked_in_at is the phone time.',
     clock_skew: 'The phone clock differed from the server by more than 5 minutes (or was implausible).',
     demo: 'Scanned with the demo account (test data). Hidden by default; use include_demo=true to see it.',
