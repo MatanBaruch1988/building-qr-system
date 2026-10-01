@@ -13,7 +13,7 @@
 |---|---|
 | אפליקציית נותני השירות | `/` ו-`/scan?code=…`. עברית / אנגלית / רוסית / ערבית, עובדת גם בלי קליטה (תור מקומי שנשלח לבד). קוד ב-`src/worker`, `src/i18n`, `src/pages/WorkerApp.jsx` |
 | ממשק הוועד | `/admin`. כניסה **רק עם חשבון Google** מרשימת הוועד. נקודות, נותני שירות, היסטוריה, מפתחות אייג'נט. קוד ב-`src/admin` |
-| API | פונקציית Vercel אחת (`api/[...path].js`) שמריצה את `server/`. Postgres (Neon) דרך `pg` |
+| API | פונקציית Vercel אחת (`api/index.js`, שאליה `vercel.json` מנתב כל `/api/*`) שמריצה את `server/`. Postgres (Neon) דרך `pg` |
 | מסד נתונים | `db/migrations/*.sql`. סריקות הן append-only (אין מחיקה, רק ביטול), ספקים ונקודות מושבתים ולא נמחקים |
 
 **מדיניות המיקום ("GPS רך")**: סריקה נדחית רק כשיש מיקום מדויק ורחוק בבירור מהנקודה. בלי קליטה או עם מיקום חלש הנוכחות
@@ -57,7 +57,7 @@ npm test                          # כל הבדיקות (הבדיקות יוצר
 ## מבנה
 
 ```
-api/[...path].js       נקודת הכניסה של Vercel
+api/index.js           נקודת הכניסה של Vercel (כל /api/* מנותב אליה ב-vercel.json)
 server/                ה-API: routes/, auth, scans (הכללים), google (אימות), db, migrate
 db/migrations/         סכמת ה-DB
 scripts/               מיגרציה, יצירת אדמין, זריעת פיתוח, ייצוא/ייבוא מ-Firestore
