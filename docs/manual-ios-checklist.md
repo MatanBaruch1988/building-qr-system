@@ -1,0 +1,57 @@
+# Manual check on a real iPhone, before a release
+
+Playwright's WebKit is the Safari engine on a computer. It is not an iPhone: it cannot install to the Home Screen,
+run standalone, show the status bar, or go offline with a service worker. These are the things the automatic tests
+cannot see. Use a real iPhone with Safari, on the deployed address (`https://building-qr-system.vercel.app`).
+
+Do this when a release touches the manifest, the service worker, the icons, the layout, the top bar, the date
+fields, or the location flow. Otherwise a quick pass over items 1, 4 and 8 is enough.
+
+Mark each item OK or write what you saw. Take a screenshot of anything that looks wrong.
+
+## Install and standalone
+
+1. [ ] Open the address in Safari, then Share, then **Add to Home Screen**. The name shown is "נוכחות" and the icon is
+   the app's icon, not a screenshot of the page. (The app links an SVG icon today and iOS wants a PNG: if the icon is
+   a page screenshot, that is the known issue, see the `apple-touch-icon` test in `e2e/pwa.spec.js`.)
+2. [ ] Open it from the Home Screen: no Safari bar, the app fills the screen, and the first thing visible is the
+   building address in the top bar.
+3. [ ] The status bar (time, battery) is readable against the app in both light and dark mode, and nothing is hidden
+   behind the notch or the Dynamic Island. Content starts below it.
+4. [ ] The bottom edge: nothing is cut off by the home indicator (the last button is fully visible and tappable).
+
+## Offline
+
+5. [ ] Open the app once with a network, then close it fully (swipe it away). Turn on Airplane mode and open it from
+   the Home Screen: it opens and shows the sign-in list.
+6. [ ] While in Airplane mode, scan a printed QR with the camera (or open a `/scan?code=` link from Notes): the app
+   opens and says the visit is saved on the phone. Turn Airplane mode off: within about half a minute the visit is
+   sent and the home screen says so.
+
+## Location
+
+7. [ ] At a point whose GPS mode is `required`, the first scan asks for location permission, in the person's language.
+   Allow it: the visit is recorded. Then Settings, Safari (or the app), Location: set it to Never, scan again: the
+   app says location is needed and explains where to switch it on.
+8. [ ] Standing at the real point: a check-in succeeds. (If it fails indoors, note whether the message is clear.)
+
+## Look and feel on the phone
+
+9. [ ] Light and dark: the picker in the top bar switches the app, and "follow the device" follows the iPhone's
+   appearance setting, including when it changes while the app is open.
+10. [ ] Language: Hebrew, English, Russian, Arabic. Right-to-left screens (Hebrew, Arabic) are mirrored, the
+    arrows point the right way, and no text is cut off.
+11. [ ] Typing a password: the keyboard does not zoom the page, the password manager offers the saved login, and the
+    show/hide eye works.
+12. [ ] Committee app (`/admin`) on the phone: the History tab's two date fields sit side by side without overlapping,
+    the point tiles show three icons (QR, edit, delete), and nothing scrolls sideways.
+
+## Updates
+
+13. [ ] After a new version is deployed, open the installed app: the "update available" banner appears, and tapping it
+    loads the new version (the committee and provider screens still work).
+
+## Printed QR
+
+14. [ ] Scan a printed QR from before the move (`building-qr-system.web.app`): it lands on the new address with the
+    right point, and signing in and checking in works.

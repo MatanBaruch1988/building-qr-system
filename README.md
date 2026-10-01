@@ -27,8 +27,13 @@ cp .env.example .env.local        # ולמלא DATABASE_URL (ראו למטה)
 npm run db:seed-dev               # סכמת פיתוח נפרדת (dev_ui) עם נתוני דוגמה: לא נוגעת בנתונים האמיתיים
 npm run dev:api -- --schema=dev_ui   # שרת ה-API המקומי (פורט 3001) + כניסת אדמין לפיתוח בלי Google
 npm run dev                       # הממשק (פורט 3000, מעביר /api ל-3001)
-npm test                          # כל הבדיקות (הבדיקות יוצרות סכמה זמנית ומוחקות אותה)
+npm run test:unit                 # vitest: לוגיקה, API, רכיבים (יוצרות סכמה זמנית ומוחקות אותה)
+npm run test:e2e                  # Playwright: דפדפן אמיתי, פיקסל (Chromium) ואייפון (WebKit)
+npm test                          # שתיהן
 ```
+
+בדיקות הדפדפן דורשות התקנה חד-פעמית של הדפדפנים: `npx playwright install chromium webkit`.
+מה אי אפשר לבדוק אוטומטית (התקנה למסך הבית באייפון ועוד) מופיע ב-[docs/manual-ios-checklist.md](docs/manual-ios-checklist.md).
 
 משתמשי הדוגמה מוגדרים ב-`scripts/dev-seed.mjs` (סיסמאות פיתוח בלבד, קיימות רק בסכמת `dev_ui`).
 
@@ -59,6 +64,7 @@ db/migrations/         סכמת ה-DB
 scripts/               מיגרציה, יצירת אדמין, זריעת פיתוח, ייצוא/ייבוא מ-Firestore
 src/worker, src/i18n   אפליקציית נותני השירות
 src/admin              ממשק הוועד
-tests/                 vitest (לוגיקה, API מול Postgres אמיתי בסכמה זמנית, i18n, ייבוא)
+tests/                 vitest (לוגיקה, API מול Postgres אמיתי בסכמה זמנית, i18n, ייבוא, tests/components לרכיבים)
+e2e/                   Playwright (PWA, אפליקציית נותני השירות, ממשק הוועד) על פיקסל ואייפון
 legacy-redirect/       אתר הפניה ל-QR המודפסים הישנים
 ```

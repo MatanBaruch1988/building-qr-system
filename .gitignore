@@ -29,3 +29,8 @@ Thumbs.db
 
 .vercel
 .env*.local
+
+# Playwright (end-to-end test output)
+playwright-report/
+test-results/
+blob-report/
