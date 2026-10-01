@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { performCheckIn } from '../src/worker/checkIn.js'
+import { performCheckIn, withScanContext } from '../src/worker/checkIn.js'
+import { KNOWN_ERROR_CODES, errorMessageKey, isKnownError } from '../src/worker/errors.js'
 import { createQueue, flushQueue } from '../src/worker/scanQueue.js'
 import { api, ApiError } from '../src/api/client.js'
 
@@ -70,6 +71,25 @@ describe('performCheckIn', () => {
     const t = setup({ apiImpl: async () => { throw new ApiError(401, 'invalid_session') } })
     expect((await t.run()).kind).toBe('signedOut')
     expect(t.queue.list('prov-1')).toEqual([])
+  })
+
+  it('a refusal keeps its own code through to the result screen (regression: it was overwritten by the QR address)', async () => {
+    const qrCode = 'https://building-qr-system.web.app/scan?code=BQR-abc123'
+    for (const code of KNOWN_ERROR_CODES.filter((c) => c !== 'invalid_session')) {
+      const t = setup({ apiImpl: async () => { throw new ApiError(403, code) } })
+      const shown = withScanContext(await t.run(), { qrCode, point: { name: 'גימבורי' } })
+      expect(shown).toMatchObject({ kind: 'error', code, qrCode, point: { name: 'גימבורי' } })
+      // exactly what the screen does with it: a specific message and NO retry button
+      expect(errorMessageKey(shown.code)).toBe(`error.${code}`)
+      expect(isKnownError(shown.code)).toBe(true)
+    }
+  })
+
+  it('an unexpected refusal shows the generic message with a retry button', () => {
+    expect(errorMessageKey('conflict')).toBe('error.generic')
+    expect(isKnownError('conflict')).toBe(false)
+    // and the QR address is never mistaken for an error code
+    expect(isKnownError('https://x.web.app/scan?code=BQR-1')).toBe(false)
   })
 
   it('permanent refusals surface the server code and do not queue', async () => {

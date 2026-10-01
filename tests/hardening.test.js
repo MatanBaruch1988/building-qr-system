@@ -231,4 +231,22 @@ describe('demo account', () => {
     const providers = (await call('GET', '/api/agent/v1/providers', { token: key })).json.providers
     expect(providers.find((x) => x.id === demo.id).is_demo).toBe(true)
   })
+
+  it('may scan every point, including ones assigned to somebody else (a tester must reach all QR codes)', async () => {
+    const demo = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'דמו2', contact_name: 'בודק', password: 'demo-5678', is_demo: true } })).json.provider
+    const demoToken = (await call('POST', '/api/session', { body: { provider_id: demo.id, password: 'demo-5678' } })).json.token
+    const restricted = await point({ name: 'only-lior', provider_ids: [provider.id] })
+
+    const asDemo = await scan({ code: restricted.qr_token, gps: { ...HOME, accuracy: 5 } }, demoToken)
+    expect(asDemo.status).toBe(200)
+    expect(asDemo.json.scan).toMatchObject({ outcome: 'accepted' })
+    expect(asDemo.json.scan.flags).toContain('demo')
+
+    // a regular provider who is NOT assigned is still refused
+    const other = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'אחר', contact_name: 'אחר', password: 'other-1234' } })).json.provider
+    const otherToken = (await call('POST', '/api/session', { body: { provider_id: other.id, password: 'other-1234' } })).json.token
+    const refused = await scan({ code: restricted.qr_token, gps: { ...HOME, accuracy: 5 } }, otherToken)
+    expect(refused.status).toBe(403)
+    expect(refused.json.error.code).toBe('not_assigned')
+  })
 })

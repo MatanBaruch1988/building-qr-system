@@ -105,7 +105,7 @@ function ProviderForm({ provider, onClose, onSaved }) {
           <PasswordBox value={form.password} onChange={(v) => set('password', v)} />
         </Field>
         <Switch checked={form.is_demo} onChange={(v) => set('is_demo', v)} label="חשבון דמו"
-          hint="לניסויים והדגמות. הסריקות שלו מסומנות ולא נכנסות לדוחות ולנתוני האייג'נט." />
+          hint="לניסויים והדגמות. מורשה לסרוק בכל הנקודות, והסריקות שלו מסומנות ולא נכנסות לדוחות ולנתוני האייג'נט." />
         {provider && (
           <Switch checked={form.is_active} onChange={(v) => set('is_active', v)} label="פעיל"
             hint="מושבת אינו יכול להיכנס, וההיסטוריה שלו נשמרת." />

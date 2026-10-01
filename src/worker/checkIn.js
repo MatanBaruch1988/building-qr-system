@@ -1,3 +1,10 @@
+/**
+ * What the result screen needs besides the outcome: the scanned QR address and the point (for "try again").
+ * They get their own names. `code` is the SERVER's error code ('not_assigned', …) and must stay untouched:
+ * overwriting it with the QR address turned every specific refusal into "something went wrong".
+ */
+export const withScanContext = (result, { qrCode, point }) => ({ ...result, qrCode, point })
+
 // The whole "scan → recorded" journey as one function with injectable dependencies, so every branch
 // (success, duplicate, no signal, too far, …) is unit-tested without a browser.
 //

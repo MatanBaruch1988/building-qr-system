@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useI18n } from '../i18n/index.jsx'
 import { api } from '../api/client.js'
 import { applyUpdate, isUpdateReady, subscribeUpdate } from './update.js'
+import { errorMessageKey, isKnownError } from './errors.js'
 import {
   IconAlert, IconChevron, IconCheck, IconCloudOff, IconEye, IconEyeOff, IconGlobe, IconInfo, IconLock, IconPin,
   IconPinOff, IconQr, IconRefresh, IconSend, IconX,
@@ -285,8 +286,6 @@ export function WorkingView({ phase }) {
 
 /* ----------------------------------------------------------------- result */
 
-const ERROR_KEYS = new Set(['invalid_code', 'unknown_code', 'point_inactive', 'not_assigned', 'invalid_session'])
-
 export function ResultView({ result, pointName, onDone, onRetry }) {
   const { t, time, distance } = useI18n()
   const headingRef = useRef(null)
@@ -321,7 +320,7 @@ export function ResultView({ result, pointName, onDone, onRetry }) {
       }
       break
     default:
-      v = { tone: 'danger', Icon: IconAlert, title: t(ERROR_KEYS.has(result.code) ? `error.${result.code}` : 'error.generic'), body: '', retry: !ERROR_KEYS.has(result.code) }
+      v = { tone: 'danger', Icon: IconAlert, title: t(errorMessageKey(result.code)), body: '', retry: !isKnownError(result.code) }
   }
 
   return (

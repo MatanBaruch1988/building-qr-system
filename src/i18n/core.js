@@ -26,14 +26,14 @@ export function translate(lang, key, params) {
   return raw.replace(/\{(\w+)\}/g, (m, name) => (name in params ? `${FSI}${params[name]}${PDI}` : m))
 }
 
-/** Explicit choice on this phone > the provider's profile language > the browser language > Hebrew. */
-export function pickLang({ stored, provider, browser = [] } = {}) {
+/**
+ * Explicit choice on this phone > the provider's profile language > Hebrew.
+ * The phone's own language is deliberately NOT used: most phones here are set to English, but the people
+ * using this app expect it to open in Hebrew (the committee sets another language per provider when needed).
+ */
+export function pickLang({ stored, provider } = {}) {
   if (isLang(stored)) return stored
   if (isLang(provider)) return provider
-  for (const tag of browser) {
-    const code = String(tag).toLowerCase().split('-')[0]
-    if (isLang(code)) return code
-  }
   return DEFAULT_LANG
 }
 

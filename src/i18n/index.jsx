@@ -18,7 +18,7 @@ const readStored = () => {
  */
 export function I18nProvider({ providerLang, children }) {
   const [stored, setStored] = useState(readStored)
-  const lang = pickLang({ stored, provider: providerLang, browser: navigator.languages ?? [navigator.language] })
+  const lang = pickLang({ stored, provider: providerLang })
   const dir = dirOf(lang)
 
   useLayoutEffect(() => {

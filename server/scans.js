@@ -83,9 +83,13 @@ export async function recordScan({ provider, deviceId, input, source, now = new 
     const point = found.rows[0]
     if (!point.is_active) throw new ApiError(409, 'point_inactive', 'This point is not active')
 
-    const assigned = await c.query('select provider_id from point_providers where point_id = $1', [point.id])
-    if (assigned.rows.length && !assigned.rows.some((r) => r.provider_id === provider.id)) {
-      throw forbidden('not_assigned', 'This point is not assigned to this provider')
+    // The demo account may scan every point (it exists to try the whole system, and its scans are tagged 'demo'
+    // and kept out of reports). Everyone else only where the committee assigned them (no assignment = anyone).
+    if (!provider.is_demo) {
+      const assigned = await c.query('select provider_id from point_providers where point_id = $1', [point.id])
+      if (assigned.rows.length && !assigned.rows.some((r) => r.provider_id === provider.id)) {
+        throw forbidden('not_assigned', 'This point is not assigned to this provider')
+      }
     }
 
     // Serialise concurrent scans of the same provider at the same point (double taps, two phones).

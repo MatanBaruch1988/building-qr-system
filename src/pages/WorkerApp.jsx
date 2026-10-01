@@ -4,7 +4,7 @@ import { api } from '../api/client.js'
 import { loadSession, saveSession, clearSession } from '../worker/session.js'
 import { createQueue } from '../worker/scanQueue.js'
 import { getFix } from '../worker/geo.js'
-import { performCheckIn } from '../worker/checkIn.js'
+import { performCheckIn, withScanContext } from '../worker/checkIn.js'
 import { uuid } from '../worker/uuid.js'
 import { useProviders, usePoint, useTodayVisits, useQueueSync } from '../worker/hooks.js'
 import { TopBar, LoginView, HomeView, WorkingView, ResultView } from '../worker/components.jsx'
@@ -108,7 +108,7 @@ function WorkerShell({ session, setSession }) {
       // also stops a later sign-out + sign-in from firing the same check-in a second time.
       stripCodeFromUrl()
       setCode(null)
-      setResult({ ...r, code: theCode, point })
+      setResult(withScanContext(r, { qrCode: theCode, point }))
       setView('result')
       if (r.kind === 'success' || r.kind === 'duplicate') vibrate()
       if (r.kind === 'queued') sync.refresh()
@@ -190,7 +190,7 @@ function WorkerShell({ session, setSession }) {
               result={result}
               pointName={result.point?.name}
               onDone={done}
-              onRetry={() => runCheckIn(result.code, result.point)}
+              onRetry={() => runCheckIn(result.qrCode, result.point)}
             />
           ) : (
             <HomeView
