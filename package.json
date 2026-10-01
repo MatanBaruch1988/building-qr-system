@@ -11,6 +11,7 @@
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
+    "icons": "node scripts/make-icons.mjs",
     "db:migrate": "node scripts/db-migrate.mjs",
     "db:create-admin": "node scripts/create-admin.mjs",
     "db:seed-dev": "node scripts/dev-seed.mjs",

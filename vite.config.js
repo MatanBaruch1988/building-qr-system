@@ -9,7 +9,8 @@ export default defineConfig({
       // 'prompt': a new version waits for the next app start instead of reloading the page in the
       // middle of a check-in (the old 'autoUpdate' could do that).
       registerType: 'prompt',
-      includeAssets: ['pwa-192x192.svg', 'pwa-512x512.svg'],
+      // The SVG is the favicon and the source of the PNGs (npm run icons); the PNGs are what iOS and the manifest use.
+      includeAssets: ['pwa-192x192.svg', 'pwa-512x512.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'נוכחות בבניין',
         short_name: 'נוכחות',
@@ -22,8 +23,8 @@ export default defineConfig({
         start_url: '/',
         scope: '/',
         icons: [
-          { src: 'pwa-192x192.svg', sizes: '192x192', type: 'image/svg+xml', purpose: 'any' },
-          { src: 'pwa-512x512.svg', sizes: '512x512', type: 'image/svg+xml', purpose: 'any' },
+          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
         ],
       },
       workbox: {

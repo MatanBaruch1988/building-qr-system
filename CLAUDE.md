@@ -36,13 +36,14 @@ Details that matter:
 - The PWA is tested on the production build, because the service worker only exists there. Do not point the E2E at `vite dev`.
 - A single spec or project: `npx playwright test e2e/pwa.spec.js --project=android-chrome`. A failing run keeps a trace
   in `test-results/` (`npx playwright show-trace <trace.zip>`).
-- Every E2E test fails on an unexpected `console.error` or page error (the known-issue `apple-touch-icon` test below is
-  the one exception, because the whole test is expected to fail). A test that provokes one on purpose (a wrong
+- Every E2E test fails on an unexpected `console.error` or page error. A test that provokes one on purpose (a wrong
   password, a refused point, going offline) allows it with `allowConsoleErrors` in `e2e/fixtures.js`: that allows the
   message for the whole test, so keep the pattern as narrow as the message allows.
 - The offline tests run on `android-chrome` only: Playwright's WebKit cannot take a service-worker page offline.
-- The `apple-touch-icon` test is marked `test.fail`: the app links an SVG and iOS needs a PNG. When a PNG is added,
-  Playwright reports it as "unexpectedly passed": delete the `test.fail` line then.
+- The icons: iOS ignores an SVG as the Home Screen icon, so the PNGs in `public/` (`apple-touch-icon.png` 180x180 on a
+  solid background, `pwa-192x192.png`, `pwa-512x512.png`) are made from `public/pwa-512x512.svg` by `npm run icons`.
+  To change the logo, replace that SVG, run `npm run icons`, commit the PNGs. `tests/pwa-icons.test.js` and the
+  `apple-touch-icon` test in `e2e/pwa.spec.js` check them.
 
 Not automated, on purpose: Home Screen install, standalone mode, the status bar, offline use on a real iPhone, push.
 Check them by hand with `docs/manual-ios-checklist.md` before a release that touches the PWA files, the layout or the
