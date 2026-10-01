@@ -27,7 +27,7 @@
 
 .a-top {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; position: sticky; top: 0; z-index: 10;
-  padding: max(10px, env(safe-area-inset-top)) 20px 8px; background: var(--w-bg); border-bottom: 1px solid var(--w-border);
+  padding: max(24px, calc(env(safe-area-inset-top) + 14px)) 20px 10px; background: var(--w-bg); border-bottom: 1px solid var(--w-border);
 }
 .a-top .a-brand { padding: 0; }
 @media (min-width: 1024px) { .a-top { display: none; } }

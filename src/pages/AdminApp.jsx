@@ -88,7 +88,7 @@ function Shell({ admin, onSignedOut }) {
       <header className="a-top">
         <div className="a-brand"><span className="a-brand__mark"><IconQr size={22} /></span>{label}</div>
         <div className="a-actions" style={{ gap: 4 }}>
-          <ThemeSwitch variant="plain" labels={THEME_LABELS} />
+          <ThemeSwitch labels={THEME_LABELS} />
           <button className="a-icon-btn" onClick={signOut} aria-label="יציאה"><IconLogout /></button>
         </div>
       </header>

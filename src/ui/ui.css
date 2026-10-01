@@ -101,27 +101,30 @@
 .w-shell { width: 100%; max-width: 480px; margin-inline: auto; display: flex; flex-direction: column; flex: 1; }
 
 /* ----- top bar ----- */
+/* Pushed further down: on an iPhone the strip under the status bar is blurred by the system, and a bar sitting right
+   under it came out smeared. In an installed app the safe-area inset is added to; in the browser it is a plain gap. */
 .w-topbar {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding-block: max(14px, env(safe-area-inset-top)) 10px;
+  padding-block: max(32px, calc(env(safe-area-inset-top) + 18px)) 12px;
 }
-.w-topbar__tools { display: flex; align-items: center; gap: 8px; }
-.w-brand { font-size: 0.9375rem; font-weight: var(--w-weight-semibold); color: var(--w-text-2); }
-.w-lang { position: relative; display: inline-flex; align-items: center; }
-.w-lang svg { position: absolute; inset-inline-start: 12px; pointer-events: none; color: var(--w-text-2); }
-.w-lang select {
-  appearance: none; -webkit-appearance: none;
-  min-height: 48px; padding-inline: 40px 16px; border-radius: 24px;
-  background: var(--w-surface-2); border: 1px solid var(--w-field-border); color: var(--w-text); font-size: 1rem; cursor: pointer;
-}
+.w-topbar__tools { display: flex; align-items: center; gap: 2px; }
+/* The building's address is the title of the screen: large, and free to wrap onto a second line in a narrow phone or a
+   longer language, so it never pushes the two icons off the edge. */
+.w-brand { min-width: 0; font-size: 1.25rem; line-height: 1.25; font-weight: var(--w-weight-semibold); color: var(--w-text); overflow-wrap: anywhere; }
 
-/* Light / dark picker (src/ui/ThemeSwitch.jsx): a real <select> laid invisibly over an icon of the current mode. */
-.w-theme { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; color: var(--w-text-2); cursor: pointer; }
-.w-theme select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; appearance: none; -webkit-appearance: none; }
-.w-theme:focus-within { outline: 3px solid var(--w-focus); outline-offset: 2px; }
-.w-theme--pill { width: 48px; height: 48px; border-radius: 24px; background: var(--w-surface-2); border: 1px solid var(--w-field-border); }
-.w-theme--plain { width: 44px; height: 44px; border-radius: 12px; }
-.w-theme--plain:hover { background: var(--w-surface-2); color: var(--w-text); }
+/* The appearance picker (src/ui/ThemeSwitch.jsx) and the language picker (TopBar) are just an icon: no edge, no fill,
+   a 44px touch target. A real <select> lies invisibly over the icon, so the phone's own picker opens. Only the icon
+   changes, to the palette blue, on hover, while pressed and on keyboard focus. */
+.w-theme, .w-lang { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; color: var(--w-text-2); cursor: pointer; transition: color 0.12s; }
+.w-theme select, .w-lang select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; appearance: none; -webkit-appearance: none; }
+.w-theme--bare, .w-lang { width: 44px; height: 44px; border-radius: 12px; }
+@media (hover: hover) { .w-theme--bare:hover, .w-lang:hover { color: var(--w-info); } }
+.w-theme--bare:active, .w-lang:active { color: var(--w-info); }
+/* No frame around the two icons, even while their list is open or on keyboard focus: the icon itself turns blue. */
+.w-theme--bare:has(select:focus-visible), .w-lang:has(select:focus-visible) { color: var(--w-info); outline: none; }
+/* The row version in the committee side rail keeps the usual focus ring. */
+.w-theme--row:has(select:focus-visible) { outline: 3px solid var(--w-focus); outline-offset: 2px; }
+/* The same picker as a full-width row in the committee side rail. */
 .w-theme--row { justify-content: flex-start; gap: 12px; width: 100%; min-height: 48px; padding-inline: 14px; border-radius: 14px; font-weight: var(--w-weight-medium); font-size: 1.0625rem; }
 .w-theme--row:hover { background: var(--w-surface-2); color: var(--w-text); }
 
