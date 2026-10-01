@@ -65,10 +65,10 @@ describe('icon button styling', () => {
 })
 
 describe('the tiles and headers of the committee screens', () => {
-  it('red is used for exactly one thing: removing a point', () => {
-    const uses = views.flatMap((f) => [...read(f).matchAll(/<IconButton[^>]*tone="danger"/g)].map(() => f))
-    expect(uses).toEqual(['PointsView.jsx'])
-    expect(read('PointsView.jsx')).toMatch(/icon=\{IconTrash\}[^>]*tone="danger"/)
+  it('red is used for exactly one thing: deleting (a point, or a scan row)', () => {
+    const uses = views.flatMap((f) => [...read(f).matchAll(/<IconButton([^>]*tone="danger"[^>]*)/g)].map((m) => [f, m[1]]))
+    expect(uses.map(([f]) => f).sort()).toEqual(['HistoryView.jsx', 'PointsView.jsx'])
+    for (const [f, attrs] of uses) expect(attrs, `${f}: a red button must be a trash can`).toContain('icon={IconTrash}')
   })
 
   it('no tile keeps a row of text buttons at its bottom (the actions are icons in its header)', () => {
@@ -81,10 +81,20 @@ describe('the tiles and headers of the committee screens', () => {
     }
   })
 
-  it('removing a point keeps its history: it deactivates, and says so', () => {
+  it('deleting a point is a real delete, and the confirmation says its scans stay in the history', () => {
     const src = read('PointsView.jsx')
-    expect(src).toContain("body: { is_active: false }")
-    expect(src).toContain('כל ההיסטוריה שלה נשמרת')
-    expect(src).not.toMatch(/method: 'DELETE'/)
+    expect(src).toMatch(/adminApi\(`\/points\/\$\{p\.id\}`, \{ method: 'DELETE' \}\)/)
+    expect(src).toContain('בהיסטוריה, עם שם הנקודה')
+    expect(src).toContain('מחיקת הנקודה')
+  })
+
+  it('every history row has a delete button, with a confirmation that offers cancelling instead', () => {
+    const src = read('HistoryView.jsx')
+    expect(src).toMatch(/adminApi\(`\/scans\/\$\{s\.id\}`, \{ method: 'DELETE' \}\)/)
+    expect(src).toContain('אי אפשר לשחזר אותה')
+    expect(src).toContain('אפשר לבטל אותה במקום')
+    // the trash can is outside the "accepted only" condition: a refused attempt can be cleaned up too
+    expect(src).toMatch(/<\/div>\s*<\/li>/)
+    expect(src).toMatch(/\)\}\s*<IconButton icon=\{IconTrash\} label="מחיקת הנוכחות לצמיתות"/)
   })
 })

@@ -150,7 +150,8 @@ route('PATCH', '/admin/admins/:id', async ({ req, params, body }) => {
 // ---------- points ----------
 
 const POINT_SELECT = `
-  select p.*, coalesce(array_agg(pp.provider_id) filter (where pp.provider_id is not null), '{}') as provider_ids
+  select p.*, coalesce(array_agg(pp.provider_id) filter (where pp.provider_id is not null), '{}') as provider_ids,
+         (select count(*)::int from scans s where s.point_id = p.id) as scan_count
     from points p left join point_providers pp on pp.point_id = p.id`
 
 const pointJson = (p, req) => ({
@@ -166,6 +167,7 @@ const pointJson = (p, req) => ({
   qr_token: p.qr_token,
   qr_url: `${baseUrl(req)}/scan?code=${p.qr_token}`,
   provider_ids: p.provider_ids,
+  scan_count: p.scan_count, // scans recorded at this point (they survive deleting it)
   created_at: p.created_at,
 })
 
@@ -267,6 +269,22 @@ route('PATCH', '/admin/points/:id', async ({ req, params, body }) => {
   await audit(admin, 'point.update', 'point', id, { ...fields, provider_ids: ids })
   const { rows } = await query(`${POINT_SELECT} where p.id = $1 group by p.id`, [id])
   return { point: pointJson(rows[0], req) }
+})
+
+// Deleting a point is allowed. The scans recorded there are NOT touched: they keep the point's name (the snapshot made
+// when they were recorded). Only its who-may-scan list goes with it. The point's printed QR stops working.
+route('DELETE', '/admin/points/:id', async ({ req, params }) => {
+  const { admin } = await requireAdmin(req)
+  const id = requireUuid(params.id)
+  const gone = await tx(async (c) => {
+    const found = await c.query('select id, name from points where id = $1 for update', [id])
+    if (!found.rows.length) throw notFound('point_not_found', 'Point not found')
+    const kept = await c.query('select count(*)::int as n from scans where point_id = $1', [id])
+    await c.query('delete from points where id = $1', [id]) // the assignments follow (on delete cascade)
+    return { name: found.rows[0].name, scans_kept: kept.rows[0].n }
+  })
+  await audit(admin, 'point.delete', 'point', id, gone)
+  return { ok: true, scans_kept: gone.scans_kept }
 })
 
 // Old printed QR stops working; use when a photo of it may have leaked.
@@ -401,6 +419,28 @@ async function setVoid(req, params, body, voided) {
   await audit(admin, voided ? 'scan.void' : 'scan.unvoid', 'scan', id, { reason })
   return { scan: scanJson(r.rows[0]) }
 }
+// Deleting a scan row for good (test data, a row that should never have been there). The database refuses every other
+// delete: this route tells it, for the length of its own transaction, that this one is intended. Who deleted what goes
+// to the audit log, with a copy of the row's main fields.
+route('DELETE', '/admin/scans/:id', async ({ req, params }) => {
+  const { admin } = await requireAdmin(req)
+  const id = requireUuid(params.id)
+  const row = await tx(async (c) => {
+    await c.query("select set_config('app.allow_scan_delete', 'on', true)")
+    const r = await c.query('delete from scans where id = $1 returning *', [id])
+    if (!r.rows.length) throw notFound('scan_not_found', 'Scan not found')
+    return r.rows[0]
+  })
+  await audit(admin, 'scan.delete', 'scan', id, {
+    point_name: row.point_name,
+    provider_name: row.provider_name,
+    checked_in_at: new Date(row.checked_in_at).toISOString(),
+    outcome: row.outcome,
+    voided: row.voided_at != null,
+  })
+  return { ok: true }
+})
+
 route('POST', '/admin/scans/:id/void', ({ req, params, body }) => setVoid(req, params, body, true))
 route('POST', '/admin/scans/:id/unvoid', ({ req, params, body }) => setVoid(req, params, body, false))
 

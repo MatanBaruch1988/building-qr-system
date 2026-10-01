@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { adminApi, errorText } from '../api.js'
 import { useLoad } from '../hooks.js'
-import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useAction } from '../ui.jsx'
-import { IconList, IconDownload, IconRefresh, IconBan, IconUndo, IconAlert } from '../icons.jsx'
+import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
+import { IconList, IconDownload, IconRefresh, IconBan, IconUndo, IconAlert, IconTrash } from '../icons.jsx'
 
 const il = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }) // YYYY-MM-DD
 const isoDay = (d) => il.format(d)
@@ -73,6 +73,7 @@ export default function HistoryView() {
   const [applied, setApplied] = useState(filters) // what is actually queried (after a short pause in typing)
   const [{ rows, cursor, status }, setList] = useState({ rows: [], cursor: null, status: 'loading' })
   const [voiding, setVoiding] = useState(null)
+  const confirm = useConfirm()
   const [busy, run] = useAction(toast, errorText)
   const seq = useRef(0) // numbers the queries: an answer to an older one is ignored
 
@@ -115,6 +116,17 @@ export default function HistoryView() {
     const res = await run(() => adminApi(`/scans/${s.id}/unvoid`, { method: 'POST', body: {} }), 'הנוכחות שוחזרה')
     if (res) patch(res.scan)
   }
+  // For rows that should never have been there (test scans). Gone for good, unlike "cancel", which can be undone.
+  const remove = async (s) => {
+    const ok = await confirm({
+      title: 'למחוק את הנוכחות לצמיתות?',
+      body: `${s.point_name} · ${s.provider_name} · ${s.checked_in_local.slice(0, 16)}. אי אפשר לשחזר אותה. אם רק רוצים להוציא אותה מהדוחות, אפשר לבטל אותה במקום.`,
+      confirmLabel: 'מחיקה', danger: true,
+    })
+    if (ok && await run(() => adminApi(`/scans/${s.id}`, { method: 'DELETE' }), 'הנוכחות נמחקה')) {
+      setList((st) => ({ ...st, rows: st.rows.filter((r) => r.id !== s.id) }))
+    }
+  }
 
   const set = (k, v) => setFilters((f) => ({ ...f, [k]: v }))
   const groups = useMemo(() => {
@@ -132,7 +144,7 @@ export default function HistoryView() {
       <div className="a-head">
         <div>
           <h1>היסטוריית נוכחות</h1>
-          <p>כל הנוכחויות שנרשמו. שום דבר לא נמחק: אפשר רק לבטל ולשחזר.</p>
+          <p>כל הנוכחויות שנרשמו. אפשר לבטל נוכחות ולשחזר אותה, או למחוק שורה לצמיתות.</p>
         </div>
         <div className="a-actions">
           <IconButton icon={IconRefresh} label="רענון" onClick={load} />
@@ -193,9 +205,12 @@ export default function HistoryView() {
                   {s.distance_m != null && <Badge>{s.distance_m} מ׳ מהנקודה</Badge>}
                   {s.flags.map((f) => <Badge key={f} tone={FLAGS[f]?.tone}>{FLAGS[f]?.label ?? f}</Badge>)}
                 </div>
-                {s.outcome === 'accepted' && (s.voided
-                  ? <IconButton icon={IconUndo} label="שחזור הנוכחות" onClick={() => restore(s)} disabled={busy} />
-                  : <IconButton icon={IconBan} label="ביטול הנוכחות" onClick={() => setVoiding(s)} />)}
+                <div className="a-scan__tools">
+                  {s.outcome === 'accepted' && (s.voided
+                    ? <IconButton icon={IconUndo} label="שחזור הנוכחות" onClick={() => restore(s)} disabled={busy} />
+                    : <IconButton icon={IconBan} label="ביטול הנוכחות" onClick={() => setVoiding(s)} />)}
+                  <IconButton icon={IconTrash} label="מחיקת הנוכחות לצמיתות" tone="danger" onClick={() => remove(s)} disabled={busy} />
+                </div>
               </li>
             ))}
           </ul>

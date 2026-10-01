@@ -5,7 +5,7 @@ import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast,
 import { downloadDataUrl, safeFileName, useQrImage } from '../qr.js'
 import MapPicker from '../MapPicker.jsx'
 import PrintSheet from '../PrintSheet.jsx'
-import { IconPlus, IconEdit, IconQr, IconPrinter, IconDownload, IconCopy, IconRefresh, IconLocate, IconPin, IconAlert, IconTrash, IconUndo } from '../icons.jsx'
+import { IconPlus, IconEdit, IconQr, IconPrinter, IconDownload, IconCopy, IconRefresh, IconLocate, IconPin, IconAlert, IconTrash } from '../icons.jsx'
 
 const GPS = {
   required: { label: 'מיקום חובה', hint: 'לנקודות עם קליטה: חובה להיות בתוך הרדיוס של הנקודה (בתוספת 15 מטר לדיוק הסיכה ולסטיית ה-GPS של הטלפון). בלי מיקום תקין הנוכחות לא נרשמת.' },
@@ -239,17 +239,17 @@ export default function PointsView() {
   const confirm = useConfirm()
   const [busy, run] = useAction(toast, errorText)
 
-  // "Remove" takes a point out of use but keeps everything it recorded: nothing in the log is ever deleted.
-  const removePoint = async (p) => {
+  // Deleting a point is for good (its printed QR stops working), but the scans recorded there stay in the history.
+  const deletePoint = async (p) => {
+    const kept = p.scan_count === 0
+      ? 'לא נרשמו בה נוכחויות.'
+      : `${p.scan_count === 1 ? 'הנוכחות היחידה שנרשמה בה נשארת' : `${p.scan_count} הנוכחויות שנרשמו בה נשארות`} בהיסטוריה, עם שם הנקודה.`
     const ok = await confirm({
-      title: `להסיר את "${p.name}"?`,
-      body: 'הנקודה תפסיק לקבל סריקות, וקוד ה-QR שלה יפסיק לעבוד. כל ההיסטוריה שלה נשמרת, ואפשר להחזיר את הנקודה בכל רגע.',
-      confirmLabel: 'הסרת הנקודה', danger: true,
+      title: `למחוק את "${p.name}"?`,
+      body: `${kept} הנקודה נמחקת לצמיתות וקוד ה-QR שלה יפסיק לעבוד. כדי רק להפסיק לקבל בה סריקות, אפשר לסמן אותה כלא פעילה בעריכה.`,
+      confirmLabel: 'מחיקת הנקודה', danger: true,
     })
-    if (ok && await run(() => adminApi(`/points/${p.id}`, { method: 'PATCH', body: { is_active: false } }), 'הנקודה הוסרה')) points.reload()
-  }
-  const restorePoint = async (p) => {
-    if (await run(() => adminApi(`/points/${p.id}`, { method: 'PATCH', body: { is_active: true } }), 'הנקודה הוחזרה')) points.reload()
+    if (ok && await run(() => adminApi(`/points/${p.id}`, { method: 'DELETE' }), 'הנקודה נמחקה')) points.reload()
   }
 
   const startPrint = useCallback((list, layout) => {
@@ -302,9 +302,7 @@ export default function PointsView() {
                 <div className="a-card__tools">
                   <IconButton icon={IconQr} label="QR והדפסה" onClick={() => setQrFor(p)} />
                   <IconButton icon={IconEdit} label="עריכה" onClick={() => setEditing(p)} />
-                  {p.is_active
-                    ? <IconButton icon={IconTrash} label="הסרת הנקודה" tone="danger" onClick={() => removePoint(p)} disabled={busy} />
-                    : <IconButton icon={IconUndo} label="החזרת הנקודה" onClick={() => restorePoint(p)} disabled={busy} />}
+                  <IconButton icon={IconTrash} label="מחיקת הנקודה" tone="danger" onClick={() => deletePoint(p)} disabled={busy} />
                 </div>
               </div>
               <div className="a-meta">

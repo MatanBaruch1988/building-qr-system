@@ -27,7 +27,7 @@ export const schemaDoc = {
   auth: 'Header "Authorization: Bearer qrk_…". Keys are created and revoked by the committee in the admin screen.',
   scan_fields: {
     id: 'uuid',
-    point_id: 'uuid of the service point',
+    point_id: 'uuid of the service point. A point can be deleted by the committee: its scans stay, so an old scan can carry a point_id that /points no longer lists. point_name then still says where it happened.',
     point_name: 'Name at the time of the scan (kept even if the point is later renamed)',
     provider_id: 'uuid of the service provider',
     provider_name: 'Company – contact name at the time of the scan',
@@ -63,6 +63,6 @@ export const schemaDoc = {
       distance_rule: `A usable fix is judged the same way on 'required' and 'optional' points: the phone must be inside the point radius plus pin_tolerance_m, after crediting its own reported accuracy (up to max_accuracy_credit_m). Farther than that is rejected_far.`,
       note: "Points can be 'required', 'optional' or 'none' (no reception). 'required' and 'optional' differ only when there is no usable fix: 'required' refuses it (rejected_no_location), 'optional' accepts it with location_unverified. 'none' points are never judged by GPS.",
     },
-    history: 'Nothing is deleted. Providers and points are deactivated, scans are voided.',
+    history: 'Scans are kept: deleting a point does not delete its scans, and a scan is normally cancelled (voided), not removed. A committee member can still delete a single scan row on purpose (test data); it is then gone from this API. Providers are deactivated, not deleted.',
   },
 }
