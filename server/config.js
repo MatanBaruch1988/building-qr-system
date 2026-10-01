@@ -5,18 +5,17 @@ export const TIMEZONE = 'Asia/Jerusalem'
 // Same provider + same point within this window is treated as one visit, not two.
 export const SCAN_COOLDOWN_MINUTES = 10
 
-// "Soft GPS" (see docs): a scan is only rejected when the phone reports a usable fix
-// that is clearly far away. Anything vaguer is accepted and flagged.
+// "Soft GPS" (see docs): a reading counts only when the phone says it is accurate to within this many metres.
+// A vaguer one (or none) cannot be judged: 'required' points refuse it, 'optional' points accept and flag it.
 export const GPS_MAX_USABLE_ACCURACY_M = 150
-export const GPS_REJECT_MARGIN_M = 250
 
-// Points that are 'required' are strict: the phone has to be inside the point's circle, with two allowances.
+// When a reading counts, the phone has to be inside the point's circle, with two allowances (every judged mode):
 //  - a few metres for a pin that was placed by hand on a map,
 //  - the phone's own reported inaccuracy (a weak reading is not the worker's fault), credited up to a cap so a
 //    very vague reading cannot stretch the circle far.
 // At the usual outdoor accuracy (~10 m) a 50 m point therefore accepts up to ~75 m; at most 50 + 15 + 50 = 115 m.
-export const GPS_REQUIRED_PIN_TOLERANCE_M = 15
-export const GPS_REQUIRED_MAX_CREDIT_M = 50
+export const GPS_PIN_TOLERANCE_M = 15
+export const GPS_MAX_ACCURACY_CREDIT_M = 50
 
 // Offline scans keep the phone's clock only if it is plausible.
 export const MAX_SYNC_BATCH = 20

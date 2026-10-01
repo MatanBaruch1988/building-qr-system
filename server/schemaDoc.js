@@ -1,7 +1,6 @@
 // Self-describing contract for the agent API. Served at GET /api/agent/v1/schema and mirrored in AGENTS.md.
 import {
-  TIMEZONE, SCAN_COOLDOWN_MINUTES, GPS_MAX_USABLE_ACCURACY_M, GPS_REJECT_MARGIN_M,
-  GPS_REQUIRED_PIN_TOLERANCE_M, GPS_REQUIRED_MAX_CREDIT_M,
+  TIMEZONE, SCAN_COOLDOWN_MINUTES, GPS_MAX_USABLE_ACCURACY_M, GPS_PIN_TOLERANCE_M, GPS_MAX_ACCURACY_CREDIT_M,
 } from './config.js'
 
 export const schemaDoc = {
@@ -58,9 +57,10 @@ export const schemaDoc = {
     duplicate_rule: 'Same provider at the same point within this window is stored once.',
     gps_policy: {
       max_usable_accuracy_m: GPS_MAX_USABLE_ACCURACY_M,
-      reject_when_farther_than_m: GPS_REJECT_MARGIN_M,
-      required_points: `Strict: the phone must be inside the point radius plus ${GPS_REQUIRED_PIN_TOLERANCE_M} m, after crediting its own reported accuracy (up to ${GPS_REQUIRED_MAX_CREDIT_M} m). 'reject_when_farther_than_m' applies to 'optional' points.`,
-      note: "Points can be 'required', 'optional' or 'none' (no reception). 'none' points are never judged by GPS.",
+      pin_tolerance_m: GPS_PIN_TOLERANCE_M,
+      max_accuracy_credit_m: GPS_MAX_ACCURACY_CREDIT_M,
+      distance_rule: `A usable fix is judged the same way on 'required' and 'optional' points: the phone must be inside the point radius plus pin_tolerance_m, after crediting its own reported accuracy (up to max_accuracy_credit_m). Farther than that is rejected_far.`,
+      note: "Points can be 'required', 'optional' or 'none' (no reception). 'required' and 'optional' differ only when there is no usable fix: 'required' refuses it (rejected_no_location), 'optional' accepts it with location_unverified. 'none' points are never judged by GPS.",
     },
     history: 'Nothing is deleted. Providers and points are deactivated, scans are voided.',
   },

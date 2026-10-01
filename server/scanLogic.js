@@ -1,9 +1,8 @@
 // Pure scan rules (no database, no HTTP) so they are easy to test and reason about.
 import {
   GPS_MAX_USABLE_ACCURACY_M,
-  GPS_REJECT_MARGIN_M,
-  GPS_REQUIRED_PIN_TOLERANCE_M,
-  GPS_REQUIRED_MAX_CREDIT_M,
+  GPS_PIN_TOLERANCE_M,
+  GPS_MAX_ACCURACY_CREDIT_M,
   CLOCK_MAX_AGE_MS,
   CLOCK_MAX_FUTURE_MS,
   CLOCK_SKEW_FLAG_MS,
@@ -47,11 +46,11 @@ function validGps(gps) {
 /**
  * Soft GPS policy.
  *  - mode 'none'     : never judged (basement points with no reception). Evidence is still stored.
- *  - mode 'optional' : a usable fix that is clearly far away (GPS_REJECT_MARGIN_M beyond the radius) is rejected
- *                      (catches "scanning a photo of the QR from home"); no / weak fix is accepted + `location_unverified`;
- *                      slightly outside the radius is accepted + `location_outside_radius`.
- *  - mode 'required' : strict. No usable fix is refused. A usable fix must be inside the circle, allowing the pin
- *                      tolerance and the phone's own (capped) inaccuracy; see config.js.
+ *  - a usable fix (accuracy <= GPS_MAX_USABLE_ACCURACY_M) must be inside the point's circle, allowing the pin
+ *    tolerance and the phone's own (capped) inaccuracy (config.js); otherwise it is rejected (catches "scanning a
+ *    photo of the QR from home"). Slightly outside, within the tolerance, is accepted + `location_outside_radius`.
+ *  - no / weak fix   : 'required' refuses it; 'optional' accepts it + `location_unverified` (basements, stairwells).
+ * 'required' and 'optional' therefore differ only in what happens when the phone cannot say where it is.
  * Returns { outcome, distance_m, gps_accuracy_m, flags }.
  */
 export function evaluateGps({ mode, point, gps }) {
@@ -84,19 +83,12 @@ export function evaluateGps({ mode, point, gps }) {
     return result
   }
 
-  if (mode === 'required') {
-    // Strict: inside the circle, plus the pin tolerance, after crediting the phone's (capped) inaccuracy.
-    const credit = Math.min(result.gps_accuracy_m, GPS_REQUIRED_MAX_CREDIT_M)
-    const outside = result.distance_m - credit - point.radius_m
-    if (outside > GPS_REQUIRED_PIN_TOLERANCE_M) return { ...result, outcome: 'rejected_far' }
-    if (outside > 0) result.flags.push('location_outside_radius')
-    return result
-  }
-
-  // 'optional': only a clearly distant fix is refused; slightly outside is accepted and flagged.
-  const slack = result.distance_m - result.gps_accuracy_m
-  if (slack > GPS_REJECT_MARGIN_M) return { ...result, outcome: 'rejected_far' }
-  if (slack > point.radius_m) result.flags.push('location_outside_radius')
+  // The same strictness for 'required' and 'optional': inside the circle, plus the pin tolerance, after crediting
+  // the phone's (capped) inaccuracy. Slightly outside (within the tolerance) is accepted and flagged.
+  const credit = Math.min(result.gps_accuracy_m, GPS_MAX_ACCURACY_CREDIT_M)
+  const outside = result.distance_m - credit - point.radius_m
+  if (outside > GPS_PIN_TOLERANCE_M) return { ...result, outcome: 'rejected_far' }
+  if (outside > 0) result.flags.push('location_outside_radius')
   return result
 }
 
