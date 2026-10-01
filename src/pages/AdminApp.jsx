@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore }
 import '../ui/ui.css'
 import '../admin/admin.css'
 import { adminApi } from '../admin/api.js'
-import { ToastProvider, ConfirmProvider, Spinner, useToast } from '../admin/ui.jsx'
+import { ToastProvider, ConfirmProvider, Spinner, IconButton, useToast } from '../admin/ui.jsx'
 import LoginScreen from '../admin/LoginScreen.jsx'
 import PointsView from '../admin/views/PointsView.jsx'
 import ProvidersView from '../admin/views/ProvidersView.jsx'
@@ -89,7 +89,7 @@ function Shell({ admin, onSignedOut }) {
         <div className="a-brand"><span className="a-brand__mark"><IconQr size={22} /></span>{label}</div>
         <div className="a-actions" style={{ gap: 4 }}>
           <ThemeSwitch labels={THEME_LABELS} />
-          <button className="a-icon-btn" onClick={signOut} aria-label="יציאה"><IconLogout /></button>
+          <IconButton icon={IconLogout} label="יציאה" onClick={signOut} />
         </div>
       </header>
 

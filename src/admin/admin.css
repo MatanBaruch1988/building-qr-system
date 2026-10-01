@@ -46,7 +46,9 @@
 /* ----- page frame ----- */
 .a-main { flex: 1; min-width: 0; width: 100%; max-width: 1120px; margin-inline: auto; padding: 16px 20px calc(96px + env(safe-area-inset-bottom)); }
 @media (min-width: 1024px) { .a-main { padding: 36px 40px 64px; } }
-.a-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-block-end: 20px; }
+.a-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-block-end: 20px; }
+.a-head > :first-child { flex: 1 1 14rem; min-width: 0; }
+.a-head .a-actions { flex: none; gap: 4px; flex-wrap: nowrap; }
 .a-head h1 { font-size: 1.75rem; font-weight: var(--w-weight-bold); line-height: 1.2; }
 .a-head p { color: var(--w-text-2); margin-block-start: 4px; }
 .a-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
@@ -59,24 +61,39 @@
 .w-btn--ghost { background: none; border: 1px solid var(--w-border); color: var(--w-text); }
 .w-btn--ghost:hover { background: var(--w-surface-2); }
 
+/* An action that is only an icon (src/admin/ui.jsx IconButton): a 44px touch target, no edge, no fill. The icon is grey
+   and turns the palette blue on hover, while pressed and on focus. No frame, the same as the pickers in the provider app. */
 .a-icon-btn {
   width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; border: 0; background: none;
-  color: var(--w-text-2); cursor: pointer; flex: none; text-decoration: none;
+  color: var(--w-text-2); cursor: pointer; flex: none; text-decoration: none; transition: color 0.12s;
 }
-.a-icon-btn:hover { background: var(--w-surface-2); color: var(--w-text); }
+@media (hover: hover) { .a-icon-btn:hover:not(:disabled) { color: var(--w-info); } }
+.a-icon-btn:active:not(:disabled), .a-icon-btn:focus-visible { color: var(--w-info); outline: none; }
+.a-icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* Red, and only for removing something. */
+.a-icon-btn--danger, .a-icon-btn--danger:focus-visible { color: var(--w-danger); }
+@media (hover: hover) { .a-icon-btn--danger:hover:not(:disabled) { color: var(--w-danger); opacity: 0.7; } }
+.a-icon-btn--danger:active:not(:disabled) { color: var(--w-danger); opacity: 0.7; }
+/* The one main action of a page (adding something): a filled round button. */
+.a-icon-btn--primary, .a-icon-btn--primary:focus-visible { background: var(--w-primary); color: #fff; border-radius: 50%; }
+@media (hover: hover) { .a-icon-btn--primary:hover:not(:disabled) { background: var(--w-primary-hover); color: #fff; } }
+.a-icon-btn--primary:active:not(:disabled) { background: var(--w-primary-hover); color: #fff; }
 
 /* ----- cards ----- */
 .a-card { background: var(--w-surface); border: 1px solid var(--w-border); border-radius: 20px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 /* "Off" is shown with muted colours that still pass contrast, not with blanket opacity (which did not). */
 .a-card.is-off .a-card__title { color: var(--w-text-2); }
 .a-card__top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.a-card__top > :first-child { flex: 1; min-width: 0; }
+/* The tile's actions live in its header, as icons, so the tile has no row of buttons at the bottom. The negative margins
+   line the icons' glyphs up with the card padding (each icon sits inside a 44px touch target). */
+.a-card__tools { display: flex; align-items: center; flex: none; margin-block: -9px -9px; margin-inline: 0 -10px; }
 .a-card__title { font-size: 1.1875rem; font-weight: var(--w-weight-semibold); overflow-wrap: anywhere; }
 .a-card__sub { color: var(--w-text-2); font-size: 0.9375rem; overflow-wrap: anywhere; }
 .a-meta { display: flex; flex-wrap: wrap; gap: 6px; }
 .a-facts { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 0.9375rem; }
 .a-facts dt { color: var(--w-text-3); }
 .a-facts dd { margin: 0; overflow-wrap: anywhere; }
-.a-card__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block-start: auto; padding-block-start: 4px; }
 
 .a-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 0.8125rem; font-weight: var(--w-weight-semibold); background: var(--w-surface-2); color: var(--w-text-2); white-space: nowrap; }
 .a-badge--ok { background: var(--w-success-bg); color: var(--w-success); }

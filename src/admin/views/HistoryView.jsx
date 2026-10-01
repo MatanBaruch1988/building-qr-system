@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { adminApi, errorText } from '../api.js'
 import { useLoad } from '../hooks.js'
-import { Modal, Field, Badge, Switch, EmptyState, Spinner, useToast, useAction } from '../ui.jsx'
+import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useAction } from '../ui.jsx'
 import { IconList, IconDownload, IconRefresh, IconBan, IconUndo, IconAlert } from '../icons.jsx'
 
 const il = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }) // YYYY-MM-DD
@@ -135,10 +135,8 @@ export default function HistoryView() {
           <p>כל הנוכחויות שנרשמו. שום דבר לא נמחק: אפשר רק לבטל ולשחזר.</p>
         </div>
         <div className="a-actions">
-          <button className="w-btn w-btn--ghost w-btn--small" onClick={load}><IconRefresh size={20} />רענון</button>
-          <a className="w-btn w-btn--small" href={`/api/admin/scans?${query(applied, { format: 'csv' })}`} download="scans.csv">
-            <IconDownload size={20} />ייצוא ל-Excel
-          </a>
+          <IconButton icon={IconRefresh} label="רענון" onClick={load} />
+          <IconButton icon={IconDownload} label="ייצוא ל-Excel" href={`/api/admin/scans?${query(applied, { format: 'csv' })}`} download="scans.csv" />
         </div>
       </div>
 
@@ -196,8 +194,8 @@ export default function HistoryView() {
                   {s.flags.map((f) => <Badge key={f} tone={FLAGS[f]?.tone}>{FLAGS[f]?.label ?? f}</Badge>)}
                 </div>
                 {s.outcome === 'accepted' && (s.voided
-                  ? <button className="w-btn w-btn--ghost w-btn--small" onClick={() => restore(s)} disabled={busy}><IconUndo size={18} />שחזור</button>
-                  : <button className="w-btn w-btn--ghost w-btn--small" onClick={() => setVoiding(s)}><IconBan size={18} />ביטול</button>)}
+                  ? <IconButton icon={IconUndo} label="שחזור הנוכחות" onClick={() => restore(s)} disabled={busy} />
+                  : <IconButton icon={IconBan} label="ביטול הנוכחות" onClick={() => setVoiding(s)} />)}
               </li>
             ))}
           </ul>
