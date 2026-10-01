@@ -8,7 +8,9 @@
     "dev:api": "node server/dev.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
     "db:migrate": "node scripts/db-migrate.mjs",
     "db:create-admin": "node scripts/create-admin.mjs",
     "db:seed-dev": "node scripts/dev-seed.mjs",
@@ -24,7 +26,10 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@testing-library/react": "^16.3.3",
     "@vitejs/plugin-react": "^4.2.0",
+    "jsdom": "^29.1.1",
     "vite": "^5.0.0",
     "vite-plugin-pwa": "^1.2.0",
     "vitest": "^2.1.9"

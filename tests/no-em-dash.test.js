@@ -8,7 +8,10 @@ import path from 'node:path'
 const EM_DASH = String.fromCharCode(0x2014)
 const root = decodeURIComponent(new URL('..', import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, '$1')
 // .claude is the assistant tooling's own workspace (notes it writes for itself), not part of the project.
-const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.vercel', '.claude', 'coverage'])
+// playwright-report, test-results and blob-report are what Playwright generates (its report is a bundle of its own code).
+const SKIP_DIRS = new Set([
+  'node_modules', 'dist', '.git', '.vercel', '.claude', 'coverage', 'playwright-report', 'test-results', 'blob-report',
+])
 const TEXT = /\.(js|jsx|mjs|cjs|css|html|md|json|sql|txt|yml|yaml)$|^\.env\.example$|^\.gitignore$/
 const SKIP_FILES = new Set(['package-lock.json'])
 

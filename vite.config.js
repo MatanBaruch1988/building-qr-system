@@ -47,8 +47,9 @@ export default defineConfig({
   ],
   server: {
     port: 3000,
-    // `npm run dev:api` serves the same handler as production on this port.
-    // xfwd: pass the browser's real host along, so the API's same-origin check sees localhost:3000.
-    proxy: { '/api': { target: 'http://localhost:3001', xfwd: true } },
+    // `npm run dev:api` serves the same handler as production on this port (API_PORT overrides it; the E2E tests
+    // use that to run their own API next to a development one). `vite preview` reuses this proxy.
+    // xfwd: pass the browser's real host along, so the API's same-origin check sees the page's own host.
+    proxy: { '/api': { target: `http://localhost:${process.env.API_PORT || 3001}`, xfwd: true } },
   },
 })
