@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { adminApi, errorText } from '../api.js'
 import { useLoad, formatDateTime } from '../hooks.js'
-import { Modal, Field, Badge, EmptyState, Spinner, useToast, useConfirm, useAction } from '../ui.jsx'
+import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconBan, IconCheck, IconShield, IconAlert } from '../icons.jsx'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -65,7 +65,7 @@ export default function CommitteeView({ admin }) {
           <h1>חברי הוועד</h1>
           <p>מי רשאי להיכנס לניהול. הכניסה תמיד עם חשבון Google.</p>
         </div>
-        <button className="w-btn w-btn--small" onClick={() => setAdding(true)}><IconPlus size={20} />חבר ועד חדש</button>
+        <div className="a-actions"><IconButton icon={IconPlus} label="חבר ועד חדש" tone="primary" onClick={() => setAdding(true)} /></div>
       </div>
 
       {admins.status === 'loading' && <Spinner />}
@@ -84,16 +84,14 @@ export default function CommitteeView({ admin }) {
                   <h2 className="a-card__title">{a.name || 'חבר ועד'}{me && ' (אתם)'}</h2>
                   <p className="a-card__sub" dir="ltr" style={{ textAlign: 'start' }}>{a.email}</p>
                 </div>
-                <Badge tone={a.is_active ? 'ok' : 'neutral'}>{a.is_active ? 'פעיל' : 'הוסר'}</Badge>
+                {!me && (
+                  <div className="a-card__tools">
+                    <IconButton icon={a.is_active ? IconBan : IconCheck} label={a.is_active ? 'הסרת גישה' : 'החזרת גישה'} onClick={() => toggle(a)} disabled={busy} />
+                  </div>
+                )}
               </div>
+              <div className="a-meta"><Badge tone={a.is_active ? 'ok' : 'neutral'}>{a.is_active ? 'פעיל' : 'הוסר'}</Badge></div>
               <dl className="a-facts"><dt>כניסה אחרונה</dt><dd>{a.last_login_at ? formatDateTime(a.last_login_at) : 'עוד לא נכנס'}</dd></dl>
-              {!me && (
-                <div className="a-card__actions">
-                  <button className="w-btn w-btn--ghost w-btn--small" onClick={() => toggle(a)} disabled={busy}>
-                    {a.is_active ? <><IconBan size={20} />הסרת גישה</> : <><IconCheck size={20} />החזרת גישה</>}
-                  </button>
-                </div>
-              )}
             </article>
           )
         })}

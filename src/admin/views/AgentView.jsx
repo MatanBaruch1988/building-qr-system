@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { adminApi, errorText, copyText } from '../api.js'
 import { useLoad, formatDateTime } from '../hooks.js'
-import { Modal, Field, Badge, EmptyState, Spinner, useToast, useConfirm, useAction } from '../ui.jsx'
+import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconKey, IconCopy, IconBan, IconAlert, IconInfo } from '../icons.jsx'
 
 function NewKeyDialog({ onClose, onCreated }) {
@@ -80,7 +80,7 @@ Times are Israel time (checked_in_local, local_date). Flags are signals, not ver
           <h1>גישה לאייג'נט</h1>
           <p>נתוני הנוכחות זמינים לקריאה בלבד לכל אייג'נט שמחזיק במפתח. האפליקציה עצמה לא מנתחת כלום.</p>
         </div>
-        <button className="w-btn w-btn--small" onClick={() => setCreating(true)}><IconPlus size={20} />מפתח חדש</button>
+        <div className="a-actions"><IconButton icon={IconPlus} label="מפתח חדש" tone="primary" onClick={() => setCreating(true)} /></div>
       </div>
 
       {keys.status === 'loading' && <Spinner />}
@@ -98,18 +98,18 @@ Times are Israel time (checked_in_local, local_date). Flags are signals, not ver
           <article key={k.id} className={`a-card${k.revoked_at ? ' is-off' : ''}`}>
             <div className="a-card__top">
               <h2 className="a-card__title">{k.name}</h2>
-              <Badge tone={k.revoked_at ? 'neutral' : 'ok'}>{k.revoked_at ? 'בוטל' : 'פעיל'}</Badge>
+              {!k.revoked_at && (
+                <div className="a-card__tools">
+                  <IconButton icon={IconBan} label="ביטול המפתח" onClick={() => revoke(k)} disabled={busy} />
+                </div>
+              )}
             </div>
+            <div className="a-meta"><Badge tone={k.revoked_at ? 'neutral' : 'ok'}>{k.revoked_at ? 'בוטל' : 'פעיל'}</Badge></div>
             <dl className="a-facts">
               <dt>מפתח</dt><dd className="a-code">{k.key_prefix}…</dd>
               <dt>נוצר</dt><dd>{formatDateTime(k.created_at)}</dd>
               <dt>שימוש אחרון</dt><dd>{k.last_used_at ? formatDateTime(k.last_used_at) : 'עוד לא נעשה בו שימוש'}</dd>
             </dl>
-            {!k.revoked_at && (
-              <div className="a-card__actions">
-                <button className="w-btn w-btn--ghost w-btn--small" onClick={() => revoke(k)} disabled={busy}><IconBan size={20} />ביטול המפתח</button>
-              </div>
-            )}
           </article>
         ))}
       </div>
@@ -119,8 +119,8 @@ Times are Israel time (checked_in_local, local_date). Flags are signals, not ver
         <p className="w-lead">כתובת ה-API: <span className="a-code">{base}</span></p>
         <p className="w-small">הדביקו לאייג'נט את ההנחיה הבאה (בלי המפתח עצמו, אותו מסרו בנפרד):</p>
         <pre className="a-secret a-code" style={{ whiteSpace: 'pre-wrap', margin: 0, alignItems: 'flex-start' }}>{prompt}</pre>
-        <div className="a-card__actions">
-          <button className="w-btn w-btn--ghost w-btn--small" onClick={async () => toast.ok((await copyText(prompt)) ? 'ההנחיה הועתקה' : 'ההעתקה נכשלה')}><IconCopy size={20} />העתקת ההנחיה</button>
+        <div className="a-actions">
+          <IconButton icon={IconCopy} label="העתקת ההנחיה" onClick={async () => toast.ok((await copyText(prompt)) ? 'ההנחיה הועתקה' : 'ההעתקה נכשלה')} />
         </div>
       </section>
 

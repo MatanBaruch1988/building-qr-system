@@ -63,7 +63,8 @@ curl -H "Authorization: Bearer $KEY" \
   - `clock_skew`: the phone's clock was off by more than 5 minutes.
   - `demo`: the demo account (hidden unless `include_demo=true`).
 - The same provider at the same point within 10 minutes is stored once.
-- Nothing is deleted. A committee member can void a scan (hidden unless `include_voided=true`).
+- Scans are kept. A committee member normally voids a scan (hidden unless `include_voided=true`); they can also delete a single row on purpose (test data), and then it is gone from the API.
+- Deleting a point does not delete its scans. An old scan can therefore carry a `point_id` that `/points` no longer lists: use `point_name` (the name at the time of the scan).
 - Points can be `required`, `optional` or `none` for GPS (`gps_mode` in `/points`). A usable fix is judged the same way on
   `required` and `optional` points (inside the radius + 15 m, crediting the phone's own accuracy up to 50 m). They differ only
   when there is no usable fix: `required` refuses the scan, `optional` accepts it with `location_unverified`. `none` points are never judged.

@@ -6,6 +6,25 @@ import { IconAlert, IconCheck, IconX } from './icons.jsx'
 
 const appRoot = () => document.querySelector('.a-app') ?? document.body // portals must stay inside .a-app (design tokens)
 
+/* ---------------------------------------------------------- icon button */
+
+/**
+ * An action shown as just its icon: the app's way of offering the secondary actions on a tile and in a page header.
+ * `label` is both the accessible name and the tooltip. The icon is grey and turns the palette blue on hover, while
+ * pressed and on focus; there is no frame or fill.
+ *   tone "default": grey.      tone "danger": red, used only for removing something.
+ *   tone "primary": a filled blue round button, the single main action of a page (adding something).
+ * With `href` it is a link (a download), otherwise a button.
+ */
+export function IconButton({ icon: Icon, label, onClick, tone = 'default', size = 24, href, download, disabled, ...rest }) {
+  const className = `a-icon-btn${tone === 'default' ? '' : ` a-icon-btn--${tone}`}`
+  const icon = <Icon size={size} />
+  if (href) {
+    return <a className={className} href={href} download={download} aria-label={label} title={label} {...rest}>{icon}</a>
+  }
+  return <button type="button" className={className} onClick={onClick} disabled={disabled} aria-label={label} title={label} {...rest}>{icon}</button>
+}
+
 /* ---------------------------------------------------------------- modal */
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
@@ -65,7 +84,7 @@ export function Modal({ title, onClose, children, footer, size = 'md' }) {
       <div className={`a-modal a-modal--${size}`} role="dialog" aria-modal="true" aria-labelledby={titleId} ref={ref} tabIndex={-1}>
         <header className="a-modal__head">
           <h2 id={titleId}>{title}</h2>
-          <button type="button" className="a-icon-btn" onClick={onClose} aria-label="סגירה"><IconX /></button>
+          <IconButton icon={IconX} label="סגירה" onClick={onClose} />
         </header>
         <div className="a-modal__body">{children}</div>
         {footer && <footer className="a-modal__foot">{footer}</footer>}

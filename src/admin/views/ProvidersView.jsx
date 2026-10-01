@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { adminApi, errorText, copyText } from '../api.js'
 import { useLoad, SERVICE_TYPES, serviceLabel, LANG_OPTIONS, formatDateTime } from '../hooks.js'
-import { Modal, Field, Badge, Switch, EmptyState, Spinner, useToast, useConfirm, useAction } from '../ui.jsx'
+import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconEdit, IconKey, IconDevice, IconBan, IconCheck, IconCopy, IconRefresh, IconUsers, IconAlert } from '../icons.jsx'
 
 // No look-alike characters (0/o, 1/l/i): the password gets read out or typed from a message.
@@ -184,7 +184,7 @@ export default function ProvidersView() {
           <h1>נותני שירות</h1>
           <p>מי רשאי לרשום נוכחות. כל אחד נכנס בטלפון עם שם וסיסמה אישית.</p>
         </div>
-        <button className="w-btn w-btn--small" onClick={() => setEditing('new')}><IconPlus size={20} />נותן שירות חדש</button>
+        <div className="a-actions"><IconButton icon={IconPlus} label="נותן שירות חדש" tone="primary" onClick={() => setEditing('new')} /></div>
       </div>
 
       {providers.status === 'loading' && <Spinner />}
@@ -206,9 +206,15 @@ export default function ProvidersView() {
                 <h2 className="a-card__title">{p.contact_name || p.company}</h2>
                 {p.contact_name && <p className="a-card__sub">{p.company}</p>}
               </div>
-              <Badge tone={p.is_active ? 'ok' : 'neutral'}>{p.is_active ? 'פעיל' : 'מושבת'}</Badge>
+              <div className="a-card__tools">
+                <IconButton icon={IconEdit} label="עריכה" onClick={() => setEditing(p)} />
+                <IconButton icon={IconKey} label="סיסמה חדשה" onClick={() => setResetting(p)} />
+                {p.active_devices > 0 && <IconButton icon={IconDevice} label="ניתוק מכשירים" onClick={() => revokeDevices(p)} disabled={busy} />}
+                <IconButton icon={p.is_active ? IconBan : IconCheck} label={p.is_active ? 'השבתה' : 'הפעלה'} onClick={() => toggleActive(p)} disabled={busy} />
+              </div>
             </div>
             <div className="a-meta">
+              <Badge tone={p.is_active ? 'ok' : 'neutral'}>{p.is_active ? 'פעיל' : 'מושבת'}</Badge>
               {p.service_type && <Badge tone="info">{serviceLabel(p.service_type)}</Badge>}
               <Badge>{LANG_OPTIONS.find((l) => l.value === p.lang)?.label}</Badge>
               {p.is_demo && <Badge tone="warn">דמו</Badge>}
@@ -218,16 +224,6 @@ export default function ProvidersView() {
               <dt>נוכחות אחרונה</dt><dd>{formatDateTime(p.last_scan_at)}</dd>
               <dt>מכשירים מחוברים</dt><dd>{p.active_devices}</dd>
             </dl>
-            <div className="a-card__actions">
-              <button className="w-btn w-btn--small" onClick={() => setEditing(p)}><IconEdit size={20} />עריכה</button>
-              <button className="w-btn w-btn--ghost w-btn--small" onClick={() => setResetting(p)}><IconKey size={20} />סיסמה חדשה</button>
-              {p.active_devices > 0 && (
-                <button className="w-btn w-btn--ghost w-btn--small" onClick={() => revokeDevices(p)} disabled={busy}><IconDevice size={20} />ניתוק מכשירים</button>
-              )}
-              <button className="w-btn w-btn--ghost w-btn--small" onClick={() => toggleActive(p)} disabled={busy}>
-                {p.is_active ? <><IconBan size={20} />השבתה</> : <><IconCheck size={20} />הפעלה</>}
-              </button>
-            </div>
           </article>
         ))}
       </div>

@@ -1,11 +1,11 @@
 import React, { useCallback, useState } from 'react'
 import { adminApi, errorText, copyText } from '../api.js'
 import { useLoad, SERVICE_TYPES, serviceLabel } from '../hooks.js'
-import { Modal, Field, Badge, Switch, EmptyState, Spinner, useToast, useConfirm, useAction } from '../ui.jsx'
+import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { downloadDataUrl, safeFileName, useQrImage } from '../qr.js'
 import MapPicker from '../MapPicker.jsx'
 import PrintSheet from '../PrintSheet.jsx'
-import { IconPlus, IconEdit, IconQr, IconPrinter, IconDownload, IconCopy, IconRefresh, IconLocate, IconPin, IconAlert } from '../icons.jsx'
+import { IconPlus, IconEdit, IconQr, IconPrinter, IconDownload, IconCopy, IconRefresh, IconLocate, IconPin, IconAlert, IconTrash } from '../icons.jsx'
 
 const GPS = {
   required: { label: 'מיקום חובה', hint: 'לנקודות עם קליטה: חובה להיות בתוך הרדיוס של הנקודה (בתוספת 15 מטר לדיוק הסיכה ולסטיית ה-GPS של הטלפון). בלי מיקום תקין הנוכחות לא נרשמת.' },
@@ -236,6 +236,21 @@ export default function PointsView() {
   const [editing, setEditing] = useState(null) // null | 'new' | point
   const [qrFor, setQrFor] = useState(null)
   const [printJob, setPrintJob] = useState(null)
+  const confirm = useConfirm()
+  const [busy, run] = useAction(toast, errorText)
+
+  // Deleting a point is for good (its printed QR stops working), but the scans recorded there stay in the history.
+  const deletePoint = async (p) => {
+    const kept = p.scan_count === 0
+      ? 'לא נרשמו בה נוכחויות.'
+      : `${p.scan_count === 1 ? 'הנוכחות היחידה שנרשמה בה נשארת' : `${p.scan_count} הנוכחויות שנרשמו בה נשארות`} בהיסטוריה, עם שם הנקודה.`
+    const ok = await confirm({
+      title: `למחוק את "${p.name}"?`,
+      body: `${kept} הנקודה נמחקת לצמיתות וקוד ה-QR שלה יפסיק לעבוד. כדי רק להפסיק לקבל בה סריקות, אפשר לסמן אותה כלא פעילה בעריכה.`,
+      confirmLabel: 'מחיקת הנקודה', danger: true,
+    })
+    if (ok && await run(() => adminApi(`/points/${p.id}`, { method: 'DELETE' }), 'הנקודה נמחקה')) points.reload()
+  }
 
   const startPrint = useCallback((list, layout) => {
     if (!list.length) return toast.error('אין נקודות פעילות להדפסה.')
@@ -258,10 +273,8 @@ export default function PointsView() {
           <p>המקומות בבניין שבהם נותני השירות סורקים QR. כל נקודה מקבלת שלט מודפס.</p>
         </div>
         <div className="a-actions">
-          <button className="w-btn w-btn--ghost w-btn--small" onClick={() => startPrint(list.filter((p) => p.is_active), 'pair')} disabled={!list.length}>
-            <IconPrinter size={20} />הדפסת כל השלטים
-          </button>
-          <button className="w-btn w-btn--small" onClick={() => setEditing('new')}><IconPlus size={20} />נקודה חדשה</button>
+          <IconButton icon={IconPrinter} label="הדפסת כל השלטים" onClick={() => startPrint(list.filter((p) => p.is_active), 'pair')} disabled={!list.length} />
+          <IconButton icon={IconPlus} label="נקודה חדשה" tone="primary" onClick={() => setEditing('new')} />
         </div>
       </div>
 
@@ -286,9 +299,14 @@ export default function PointsView() {
                   <h2 className="a-card__title">{p.name}</h2>
                   {p.description && <p className="a-card__sub">{p.description}</p>}
                 </div>
-                <Badge tone={p.is_active ? 'ok' : 'neutral'}>{p.is_active ? 'פעילה' : 'לא פעילה'}</Badge>
+                <div className="a-card__tools">
+                  <IconButton icon={IconQr} label="QR והדפסה" onClick={() => setQrFor(p)} />
+                  <IconButton icon={IconEdit} label="עריכה" onClick={() => setEditing(p)} />
+                  <IconButton icon={IconTrash} label="מחיקת הנקודה" tone="danger" onClick={() => deletePoint(p)} disabled={busy} />
+                </div>
               </div>
               <div className="a-meta">
+                <Badge tone={p.is_active ? 'ok' : 'neutral'}>{p.is_active ? 'פעילה' : 'לא פעילה'}</Badge>
                 {p.service_type && <Badge tone="info">{serviceLabel(p.service_type)}</Badge>}
                 <Badge>{GPS[p.gps_mode].label}</Badge>
                 {missingCoords && <Badge tone="warn">חסר מיקום במפה</Badge>}
@@ -298,10 +316,6 @@ export default function PointsView() {
                 <dd>{p.provider_ids.length ? p.provider_ids.map((id) => names[id] ?? '…').join(', ') : 'כל נותני השירות'}</dd>
                 {p.gps_mode !== 'none' && (<><dt>רדיוס</dt><dd>{p.radius_m} מ׳</dd></>)}
               </dl>
-              <div className="a-card__actions">
-                <button className="w-btn w-btn--small" onClick={() => setQrFor(p)}><IconQr size={20} />QR והדפסה</button>
-                <button className="w-btn w-btn--ghost w-btn--small" onClick={() => setEditing(p)}><IconEdit size={20} />עריכה</button>
-              </div>
             </article>
           )
         })}
