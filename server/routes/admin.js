@@ -147,6 +147,19 @@ route('PATCH', '/admin/admins/:id', async ({ req, params, body }) => {
   return { admin: r.rows[0] }
 })
 
+// Deleting a committee member takes them off the list for good (their sessions go with them). You cannot delete
+// yourself, which also means the list is never left without someone who can sign in. To keep the person on the list but
+// shut them out for now, remove their access instead.
+route('DELETE', '/admin/admins/:id', async ({ req, params }) => {
+  const { admin } = await requireAdmin(req)
+  const id = requireUuid(params.id)
+  if (id === admin.id) throw conflict('cannot_delete_self', 'You cannot delete yourself')
+  const r = await query('delete from admins where id = $1 returning email, name', [id])
+  if (!r.rows.length) throw notFound('admin_not_found', 'Admin not found')
+  await audit(admin, 'admin.delete', 'admin', id, { email: r.rows[0].email, name: r.rows[0].name })
+  return { ok: true }
+})
+
 // ---------- points ----------
 
 const POINT_SELECT = `
@@ -304,7 +317,8 @@ const PROVIDER_SELECT = `
   select p.id, p.company, p.contact_name, p.service_type, p.lang, p.is_active, p.is_demo, p.created_at,
          (p.password_hash is not null) as has_password,
          (select count(*)::int from provider_devices d where d.provider_id = p.id and d.revoked_at is null) as active_devices,
-         (select max(s.checked_in_at) from scans s where s.provider_id = p.id and s.outcome = 'accepted' and s.voided_at is null) as last_scan_at
+         (select max(s.checked_in_at) from scans s where s.provider_id = p.id and s.outcome = 'accepted' and s.voided_at is null) as last_scan_at,
+         (select count(*)::int from scans s where s.provider_id = p.id) as scan_count -- scans recorded for them (they survive deleting them)
     from providers p`
 
 function providerFields(body, { create }) {
@@ -368,6 +382,23 @@ route('PATCH', '/admin/providers/:id', async ({ req, params, body }) => {
   await audit(admin, 'provider.update', 'provider', id, { ...loggable, password_changed: !!password_hash })
   const out = await query(`${PROVIDER_SELECT} where p.id = $1`, [id])
   return { provider: out.rows[0] }
+})
+
+// Deleting a provider is allowed. The scans recorded for them are NOT touched: they keep the provider's name (the
+// snapshot made when they were recorded). The provider's phones are signed out and their who-may-scan entries go with
+// them (both follow on delete cascade). To only stop someone signing in, deactivate them instead.
+route('DELETE', '/admin/providers/:id', async ({ req, params }) => {
+  const { admin } = await requireAdmin(req)
+  const id = requireUuid(params.id)
+  const gone = await tx(async (c) => {
+    const found = await c.query('select id, company, contact_name from providers where id = $1 for update', [id])
+    if (!found.rows.length) throw notFound('provider_not_found', 'Provider not found')
+    const kept = await c.query('select count(*)::int as n from scans where provider_id = $1', [id])
+    await c.query('delete from providers where id = $1', [id])
+    return { company: found.rows[0].company, contact_name: found.rows[0].contact_name, scans_kept: kept.rows[0].n }
+  })
+  await audit(admin, 'provider.delete', 'provider', id, gone)
+  return { ok: true, scans_kept: gone.scans_kept }
 })
 
 route('POST', '/admin/providers/:id/revoke-devices', async ({ req, params }) => {
@@ -467,11 +498,23 @@ route('POST', '/admin/api-keys', async ({ req, body }) => {
   return { status: 201, json: { api_key: rows[0], key } }
 })
 
-route('DELETE', '/admin/api-keys/:id', async ({ req, params }) => {
+// Revoking keeps the row (it shows as revoked, with when it was last used); the key stops working at once.
+route('POST', '/admin/api-keys/:id/revoke', async ({ req, params }) => {
   const { admin } = await requireAdmin(req)
   const id = requireUuid(params.id)
   const r = await query('update api_keys set revoked_at = now() where id = $1 and revoked_at is null returning id', [id])
   if (!r.rows.length) throw notFound('api_key_not_found', 'API key not found')
   await audit(admin, 'api_key.revoke', 'api_key', id)
+  return { ok: true }
+})
+
+// Deleting removes the row for good, revoked or not (a key that is still active stops working at once, because the
+// agent API looks the key up by its hash).
+route('DELETE', '/admin/api-keys/:id', async ({ req, params }) => {
+  const { admin } = await requireAdmin(req)
+  const id = requireUuid(params.id)
+  const r = await query('delete from api_keys where id = $1 returning name, key_prefix, revoked_at', [id])
+  if (!r.rows.length) throw notFound('api_key_not_found', 'API key not found')
+  await audit(admin, 'api_key.delete', 'api_key', id, { name: r.rows[0].name, key_prefix: r.rows[0].key_prefix, was_revoked: r.rows[0].revoked_at != null })
   return { ok: true }
 })

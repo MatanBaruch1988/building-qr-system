@@ -100,10 +100,32 @@ describe('the same design on a phone and on a computer', () => {
 })
 
 describe('the tiles and headers of the committee screens', () => {
-  it('red is used for exactly one thing: deleting (a point, or a scan row)', () => {
+  it('red is used for exactly one thing, deleting, and every screen that lists things has it', () => {
     const uses = views.flatMap((f) => [...read(f).matchAll(/<IconButton([^>]*tone="danger"[^>]*)/g)].map((m) => [f, m[1]]))
-    expect(uses.map(([f]) => f).sort()).toEqual(['HistoryView.jsx', 'PointsView.jsx'])
+    expect(uses.map(([f]) => f).sort()).toEqual([
+      'AgentView.jsx', 'CommitteeView.jsx', 'HistoryView.jsx', 'PointsView.jsx', 'ProvidersView.jsx',
+    ])
     for (const [f, attrs] of uses) expect(attrs, `${f}: a red button must be a trash can`).toContain('icon={IconTrash}')
+  })
+
+  it('the red trash can is the last icon of every tile and row, so it sits in the same place on every screen', () => {
+    let groups = 0
+    for (const f of views) {
+      const found = [...read(f).matchAll(/className="(?:a-card__tools|a-scan__tools)">([\s\S]*?)\n\s*<\/div>/g)].map((m) => m[1])
+      for (const group of found) {
+        groups++
+        // from the last button of the group to its end there is that button only, and it is the trash can
+        const fromLast = group.slice(group.lastIndexOf('<IconButton'))
+        expect(fromLast, `${f}: the last action of a tile is the trash can`).toContain('icon={IconTrash}')
+      }
+    }
+    expect(groups, 'points, providers, committee, agent keys and history rows').toBe(5)
+  })
+
+  it('removing something that can come back (switching off) uses the same icon on every screen: a circle with a bar', () => {
+    for (const f of ['PointsView.jsx', 'ProvidersView.jsx', 'CommitteeView.jsx', 'AgentView.jsx', 'HistoryView.jsx']) {
+      expect(read(f), f).toMatch(/icon=\{[^}]*IconBan[^}]*\}/)
+    }
   })
 
   it('no tile keeps a row of text buttons at its bottom (the actions are icons in its header)', () => {

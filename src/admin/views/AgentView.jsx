@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { adminApi, errorText, copyText } from '../api.js'
 import { useLoad, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
-import { IconPlus, IconKey, IconCopy, IconBan, IconAlert, IconInfo } from '../icons.jsx'
+import { IconPlus, IconKey, IconCopy, IconBan, IconAlert, IconInfo, IconTrash } from '../icons.jsx'
 
 function NewKeyDialog({ onClose, onCreated }) {
   const toast = useToast()
@@ -63,7 +63,19 @@ export default function AgentView() {
       body: 'כל מי שמשתמש בו יאבד גישה מיד. אי אפשר לשחזר מפתח שבוטל, אבל אפשר ליצור חדש.',
       confirmLabel: 'ביטול המפתח', danger: true,
     })
-    if (ok && await run(() => adminApi(`/api-keys/${k.id}`, { method: 'DELETE' }), 'המפתח בוטל')) keys.reload()
+    if (ok && await run(() => adminApi(`/api-keys/${k.id}/revoke`, { method: 'POST' }), 'המפתח בוטל')) keys.reload()
+  }
+
+  // Deleting removes the key from the list for good (an active one stops working at once, the same as revoking it).
+  const remove = async (k) => {
+    const ok = await confirm({
+      title: `למחוק את המפתח "${k.name}"?`,
+      body: k.revoked_at
+        ? 'המפתח כבר בוטל. המחיקה מסירה אותו מהרשימה לצמיתות.'
+        : 'כל מי שמשתמש בו יאבד גישה מיד, והמפתח נמחק מהרשימה לצמיתות. אפשר ליצור מפתח חדש.',
+      confirmLabel: 'מחיקת המפתח', danger: true,
+    })
+    if (ok && await run(() => adminApi(`/api-keys/${k.id}`, { method: 'DELETE' }), 'המפתח נמחק')) keys.reload()
   }
 
   const prompt = `You have read-only access to the attendance log of our building's service providers (cleaning, gardening).
@@ -98,11 +110,10 @@ Times are Israel time (checked_in_local, local_date). Flags are signals, not ver
           <article key={k.id} className={`a-card${k.revoked_at ? ' is-off' : ''}`}>
             <div className="a-card__top">
               <h2 className="a-card__title">{k.name}</h2>
-              {!k.revoked_at && (
-                <div className="a-card__tools">
-                  <IconButton icon={IconBan} label="ביטול המפתח" onClick={() => revoke(k)} disabled={busy} />
-                </div>
-              )}
+              <div className="a-card__tools">
+                {!k.revoked_at && <IconButton icon={IconBan} label="ביטול המפתח" onClick={() => revoke(k)} disabled={busy} />}
+                <IconButton icon={IconTrash} label="מחיקת המפתח" tone="danger" onClick={() => remove(k)} disabled={busy} />
+              </div>
             </div>
             <div className="a-meta"><Badge tone={k.revoked_at ? 'neutral' : 'ok'}>{k.revoked_at ? 'בוטל' : 'פעיל'}</Badge></div>
             <dl className="a-facts">

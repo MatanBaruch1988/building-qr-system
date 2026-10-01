@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { adminApi, errorText, copyText } from '../api.js'
 import { useLoad, SERVICE_TYPES, serviceLabel, LANG_OPTIONS, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
-import { IconPlus, IconEdit, IconKey, IconDevice, IconBan, IconCheck, IconCopy, IconRefresh, IconUsers, IconAlert } from '../icons.jsx'
+import { IconPlus, IconEdit, IconKey, IconDevice, IconBan, IconCheck, IconCopy, IconRefresh, IconUsers, IconAlert, IconTrash } from '../icons.jsx'
 
 // No look-alike characters (0/o, 1/l/i): the password gets read out or typed from a message.
 const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
@@ -168,6 +168,20 @@ export default function ProvidersView() {
     if (await run(() => adminApi(`/providers/${p.id}`, { method: 'PATCH', body: { is_active: !p.is_active } }), p.is_active ? 'נותן השירות הושבת' : 'נותן השירות הופעל')) providers.reload()
   }
 
+  // Deleting is for good, but the visits recorded for the person stay in the history under their name.
+  const deleteProvider = async (p) => {
+    const name = p.contact_name || p.company
+    const kept = p.scan_count === 0
+      ? 'לא נרשמו נוכחויות תחת השם הזה.'
+      : `${p.scan_count === 1 ? 'הנוכחות היחידה שנרשמה נשארת' : `${p.scan_count} הנוכחויות שנרשמו נשארות`} בהיסטוריה, תחת השם הזה.`
+    const ok = await confirm({
+      title: `למחוק את ${name}?`,
+      body: `${kept} המחיקה היא לצמיתות: כל המכשירים המחוברים מתנתקים, והשם יוסר גם מהרשימות של מי שמורשה לסרוק בכל נקודה. כדי רק למנוע כניסה, אפשר להשבית במקום.`,
+      confirmLabel: 'מחיקת נותן השירות', danger: true,
+    })
+    if (ok && await run(() => adminApi(`/providers/${p.id}`, { method: 'DELETE' }), 'נותן השירות נמחק')) providers.reload()
+  }
+
   const revokeDevices = async (p) => {
     const ok = await confirm({
       title: 'לנתק את כל המכשירים?',
@@ -207,10 +221,11 @@ export default function ProvidersView() {
                 {p.contact_name && <p className="a-card__sub">{p.company}</p>}
               </div>
               <div className="a-card__tools">
-                <IconButton icon={IconEdit} label="עריכה" onClick={() => setEditing(p)} />
-                <IconButton icon={IconKey} label="סיסמה חדשה" onClick={() => setResetting(p)} />
                 {p.active_devices > 0 && <IconButton icon={IconDevice} label="ניתוק מכשירים" onClick={() => revokeDevices(p)} disabled={busy} />}
+                <IconButton icon={IconKey} label="סיסמה חדשה" onClick={() => setResetting(p)} />
+                <IconButton icon={IconEdit} label="עריכה" onClick={() => setEditing(p)} />
                 <IconButton icon={p.is_active ? IconBan : IconCheck} label={p.is_active ? 'השבתה' : 'הפעלה'} onClick={() => toggleActive(p)} disabled={busy} />
+                <IconButton icon={IconTrash} label="מחיקת נותן השירות" tone="danger" onClick={() => deleteProvider(p)} disabled={busy} />
               </div>
             </div>
             <div className="a-meta">
