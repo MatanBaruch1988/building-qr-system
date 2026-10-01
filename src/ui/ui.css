@@ -33,7 +33,7 @@
   --w-overlay: rgba(0, 0, 0, 0.65);
   --w-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 
-  font-family: 'Rubik Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-family: 'Heebo Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
   font-size: 1.0625rem;
   line-height: 1.45;
   color: var(--w-text);
@@ -90,7 +90,11 @@
 
 .w-app *, .w-app *::before, .w-app *::after, .a-app *, .a-app *::before, .a-app *::after { box-sizing: border-box; }
 .w-app h1, .w-app h2, .w-app h3, .w-app p, .a-app h1, .a-app h2, .a-app h3, .a-app p { margin: 0; padding: 0; border: 0; }
-.w-app button, .w-app select, .w-app input, .w-app textarea, .a-app button, .a-app select, .a-app input, .a-app textarea { font: inherit; color: inherit; }
+/* Controls start from the surrounding type and colour. :where() gives this reset no specificity, so every class rule
+   below (a button's weight, size and colour, a nav item's, a field's) applies as written. With the plain selectors it
+   outranked them, and buttons came out at weight 400 and the colour of whatever surrounded them: green text on the
+   blue button of the "recorded" screen (2.9:1, even in dark), dark text on blue in the light theme. */
+:where(.w-app, .a-app) :where(button, select, input, textarea) { font: inherit; color: inherit; }
 
 .w-app :focus-visible, .a-app :focus-visible { outline: 3px solid var(--w-focus); outline-offset: 2px; }
 
@@ -102,7 +106,7 @@
   padding-block: max(14px, env(safe-area-inset-top)) 10px;
 }
 .w-topbar__tools { display: flex; align-items: center; gap: 8px; }
-.w-brand { font-size: 0.9375rem; font-weight: 600; color: var(--w-text-2); letter-spacing: 0.01em; }
+.w-brand { font-size: 0.9375rem; font-weight: var(--w-weight-semibold); color: var(--w-text-2); }
 .w-lang { position: relative; display: inline-flex; align-items: center; }
 .w-lang svg { position: absolute; inset-inline-start: 12px; pointer-events: none; color: var(--w-text-2); }
 .w-lang select {
@@ -118,13 +122,13 @@
 .w-theme--pill { width: 48px; height: 48px; border-radius: 24px; background: var(--w-surface-2); border: 1px solid var(--w-field-border); }
 .w-theme--plain { width: 44px; height: 44px; border-radius: 12px; }
 .w-theme--plain:hover { background: var(--w-surface-2); color: var(--w-text); }
-.w-theme--row { justify-content: flex-start; gap: 12px; width: 100%; min-height: 48px; padding-inline: 14px; border-radius: 14px; font-weight: 500; font-size: 1.0625rem; }
+.w-theme--row { justify-content: flex-start; gap: 12px; width: 100%; min-height: 48px; padding-inline: 14px; border-radius: 14px; font-weight: var(--w-weight-medium); font-size: 1.0625rem; }
 .w-theme--row:hover { background: var(--w-surface-2); color: var(--w-text); }
 
 .w-main { flex: 1; display: flex; flex-direction: column; gap: 16px; padding-block: 8px 16px; }
 
 /* ----- text ----- */
-.w-h1 { font-size: 1.75rem; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
+.w-h1 { font-size: 1.75rem; line-height: 1.2; font-weight: var(--w-weight-bold); }
 .w-lead { color: var(--w-text-2); font-size: 1.0625rem; }
 .w-small { color: var(--w-text-3); font-size: 0.875rem; line-height: 1.5; }
 
@@ -133,7 +137,7 @@
   display: inline-flex; align-items: center; justify-content: center; gap: 10px;
   min-height: 56px; padding-inline: 24px; width: 100%;
   border: 0; border-radius: 16px; cursor: pointer;
-  font-size: 1.125rem; font-weight: 600;
+  font-size: 1.125rem; font-weight: var(--w-weight-semibold);
   background: var(--w-primary); color: #fff;
   transition: background 0.15s, transform 0.1s;
 }
@@ -142,14 +146,9 @@
 .w-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 .w-btn--quiet { background: var(--w-surface-2); border: 1px solid var(--w-field-border); color: var(--w-text); }
 .w-btn--quiet:hover { background: var(--w-surface-3); }
-/* The reset near the top (.w-app button { color: inherit }) outranks a plain .w-btn rule, so a button took the colour
-   of whatever surrounded it: green text on the blue button of the "recorded" screen (2.9:1 even in dark), and dark text
-   on blue in the light theme. The button colours are spelled out here with enough specificity. */
-.w-app .w-btn, .a-app .w-btn { color: #fff; }
-.w-app .w-btn--quiet, .a-app .w-btn--quiet, .w-app .w-btn--ghost, .a-app .w-btn--ghost { color: var(--w-text); }
 .w-btn--small { min-height: 48px; width: auto; font-size: 1rem; padding-inline: 18px; border-radius: 14px; }
 .w-link {
-  background: none; border: 0; cursor: pointer; color: var(--w-info); font-size: 1rem; font-weight: 500;
+  background: none; border: 0; cursor: pointer; color: var(--w-info); font-size: 1rem; font-weight: var(--w-weight-medium);
   min-height: 48px; padding-inline: 8px; text-decoration: underline; text-underline-offset: 3px; align-self: center;
 }
 
@@ -183,17 +182,17 @@
 .w-person:active { transform: scale(0.99); }
 .w-avatar {
   flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
-  background: var(--w-info-bg); color: var(--w-info); font-weight: 700; font-size: 1.125rem;
+  background: var(--w-info-bg); color: var(--w-info); font-weight: var(--w-weight-bold); font-size: 1.125rem;
 }
 .w-person__text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.w-person__name { font-size: 1.125rem; font-weight: 600; overflow-wrap: anywhere; }
+.w-person__name { font-size: 1.125rem; font-weight: var(--w-weight-semibold); overflow-wrap: anywhere; }
 .w-person__sub { font-size: 0.9375rem; color: var(--w-text-2); overflow-wrap: anywhere; }
 .w-person svg { flex: none; color: var(--w-text-3); }
 [dir='rtl'] .w-flip { transform: scaleX(-1); }
 
 /* ----- form ----- */
 .w-field { display: flex; flex-direction: column; gap: 8px; }
-.w-label { font-size: 1rem; font-weight: 500; color: var(--w-text-2); }
+.w-label { font-size: 1rem; font-weight: var(--w-weight-medium); color: var(--w-text-2); }
 .w-input-wrap { position: relative; display: flex; }
 .w-input {
   width: 100%; min-height: 56px; padding-inline: 16px 56px; font-size: 1.125rem; /* >=16px: no iOS zoom */
@@ -205,7 +204,7 @@
   position: absolute; inset-block: 0; inset-inline-end: 0; width: 56px; display: grid; place-items: center;
   background: none; border: 0; cursor: pointer; color: var(--w-text-2); border-radius: 16px;
 }
-.w-error { color: var(--w-danger); font-size: 1rem; font-weight: 500; display: flex; gap: 8px; align-items: flex-start; }
+.w-error { color: var(--w-danger); font-size: 1rem; font-weight: var(--w-weight-medium); display: flex; gap: 8px; align-items: flex-start; }
 .w-error svg { flex: none; margin-block-start: 2px; }
 .w-switch { display: flex; gap: 14px; align-items: flex-start; cursor: pointer; padding-block: 10px; min-height: 48px; }
 .w-switch input { width: 24px; height: 24px; margin-block-start: 2px; accent-color: var(--w-primary); flex: none; }
@@ -215,10 +214,10 @@
 .w-visits { list-style: none; margin: 0; padding: 0; }
 .w-visit { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-block-end: 1px solid var(--w-border); }
 .w-visit:last-child { border-block-end: 0; }
-.w-visit__time { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 3.4em; direction: ltr; text-align: start; }
+.w-visit__time { font-variant-numeric: tabular-nums; font-weight: var(--w-weight-bold); min-width: 3.4em; direction: ltr; text-align: start; }
 .w-visit__point { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.w-tag { font-size: 0.8125rem; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--w-warn-bg); color: var(--w-warn); white-space: nowrap; }
-.w-section-title { font-size: 1.0625rem; font-weight: 600; margin-block-end: 4px; }
+.w-tag { font-size: 0.8125rem; font-weight: var(--w-weight-semibold); padding: 3px 10px; border-radius: 999px; background: var(--w-warn-bg); color: var(--w-warn); white-space: nowrap; }
+.w-section-title { font-size: 1.0625rem; font-weight: var(--w-weight-semibold); margin-block-end: 4px; }
 
 /* ----- result screen ----- */
 .w-result { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 14px; padding-block: 12px; }
@@ -228,10 +227,10 @@
 .w-result--info { color: var(--w-info); } .w-result--info .w-ring { background: var(--w-info-bg); }
 .w-result--warn { color: var(--w-warn); } .w-result--warn .w-ring { background: var(--w-warn-bg); }
 .w-result--danger { color: var(--w-danger); } .w-result--danger .w-ring { background: var(--w-danger-bg); }
-.w-result h1 { color: var(--w-text); font-size: 1.875rem; font-weight: 700; line-height: 1.2; }
+.w-result h1 { color: var(--w-text); font-size: 1.875rem; font-weight: var(--w-weight-bold); line-height: 1.2; }
 .w-result h1:focus { outline: none; }
 .w-result__body { color: var(--w-text-2); font-size: 1.1875rem; max-width: 22em; }
-.w-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; background: var(--w-surface-2); border: 1px solid var(--w-border); color: var(--w-text); font-weight: 600; }
+.w-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; background: var(--w-surface-2); border: 1px solid var(--w-border); color: var(--w-text); font-weight: var(--w-weight-semibold); }
 .w-who { display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--w-text-2); font-size: 1rem; }
 .w-actions { display: flex; flex-direction: column; gap: 10px; width: 100%; margin-block-start: 12px; }
 

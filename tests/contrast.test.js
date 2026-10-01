@@ -61,12 +61,16 @@ describe.each(Object.entries(themes))('%s theme meets WCAG AA', (name, t) => {
   })
 })
 
-describe('button text is not left to inheritance', () => {
-  // `.w-app button { color: inherit }` outranks a bare `.w-btn { color: #fff }`, so without these higher-specificity
-  // rules a button took the colour around it (green on blue on the "recorded" screen; dark on blue in the light theme).
-  it('spells out white for the filled button and the text colour for quiet and ghost ones', () => {
-    expect(css).toMatch(/\.w-app \.w-btn, \.a-app \.w-btn \{ color: #fff; \}/)
-    expect(css).toMatch(/\.w-app \.w-btn--quiet, \.a-app \.w-btn--quiet, \.w-app \.w-btn--ghost, \.a-app \.w-btn--ghost \{ color: var\(--w-text\); \}/)
+describe('controls do not lose their own type and colour to the reset', () => {
+  // `.w-app button { font: inherit; color: inherit }` outranked a plain `.w-btn { color: #fff; font-weight: ... }`, so a
+  // button took the colour around it (green on blue on the "recorded" screen; dark on blue in the light theme) and
+  // lost its weight and size. The reset must have no specificity of its own.
+  it('resets controls inside :where(), so the class rules win', () => {
+    expect(css).toContain(':where(.w-app, .a-app) :where(button, select, input, textarea) { font: inherit; color: inherit; }')
+    expect(css).not.toMatch(/\.w-app button|\.a-app button/)
+  })
+  it('the filled button is white text on the primary colour', () => {
+    expect(css).toMatch(/\.w-btn \{[^}]*background: var\(--w-primary\); color: #fff;/)
   })
 })
 
