@@ -13,12 +13,13 @@ const readStored = () => {
 }
 
 /**
- * Provides t(), formatters and language switching. `providerLang` is the signed-in provider's
- * profile language; it applies only until the person picks a language on this phone.
+ * Provides t(), formatters and language switching. The language is the person's own choice: it is saved on this phone
+ * (localStorage, like the light/dark choice) only when they change it, and it stays after signing out. Until then the
+ * app is in Hebrew.
  */
-export function I18nProvider({ providerLang, children }) {
+export function I18nProvider({ children }) {
   const [stored, setStored] = useState(readStored)
-  const lang = pickLang({ stored, provider: providerLang })
+  const lang = pickLang({ stored })
   const dir = dirOf(lang)
 
   useLayoutEffect(() => {

@@ -27,14 +27,13 @@ export function translate(lang, key, params) {
 }
 
 /**
- * Explicit choice on this phone > the provider's profile language > Hebrew.
+ * The person's own choice on this phone, otherwise Hebrew. The committee does not set a language for anyone: it is
+ * the person's choice, kept on their phone (see I18nProvider), the same as light/dark.
  * The phone's own language is deliberately NOT used: most phones here are set to English, but the people
- * using this app expect it to open in Hebrew (the committee sets another language per provider when needed).
+ * using this app expect it to open in Hebrew.
  */
-export function pickLang({ stored, provider } = {}) {
-  if (isLang(stored)) return stored
-  if (isLang(provider)) return provider
-  return DEFAULT_LANG
+export function pickLang({ stored } = {}) {
+  return isLang(stored) ? stored : DEFAULT_LANG
 }
 
 const LOCALES = { he: 'he-IL', en: 'en-GB', ru: 'ru-RU', ar: 'ar-u-nu-latn' } // Arabic with Western digits

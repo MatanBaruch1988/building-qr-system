@@ -45,7 +45,6 @@ export const ADMIN_SESSION_DAYS = 14
 export const ADMIN_COOKIE = 'qr_admin'
 
 export const PASSWORD_MIN_LENGTH = 8
-export const SERVICE_LANGS = ['he', 'en', 'ru', 'ar']
 
 export const DEFAULT_PAGE_SIZE = 100
 export const MAX_PAGE_SIZE = 500

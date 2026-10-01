@@ -34,7 +34,7 @@ route('GET', '/agent/v1/points', async ({ req }) => {
 route('GET', '/agent/v1/providers', async ({ req }) => {
   await requireApiKey(req)
   const { rows } = await query(
-    `select p.id, p.company, p.contact_name, p.service_type, p.lang, p.is_active, p.is_demo, p.created_at,
+    `select p.id, p.company, p.contact_name, p.service_type, p.is_active, p.is_demo, p.created_at,
             (select max(s.checked_in_at) from scans s
               where s.provider_id = p.id and s.outcome = 'accepted' and s.voided_at is null) as last_scan_at
        from providers p order by p.company, p.contact_name`,

@@ -13,7 +13,7 @@ import '../ui/ui.css'
 export default function WorkerApp() {
   const [session, setSession] = useState(loadSession)
   return (
-    <I18nProvider providerLang={session?.provider?.lang}>
+    <I18nProvider>
       <WorkerShell session={session} setSession={setSession} />
     </I18nProvider>
   )

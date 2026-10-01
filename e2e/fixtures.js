@@ -3,8 +3,9 @@
 import { test as base, expect } from '@playwright/test'
 import he from '../src/i18n/he.js'
 import en from '../src/i18n/en.js'
+import ru from '../src/i18n/ru.js'
 
-export { expect, he, en }
+export { expect, he, en, ru }
 
 /** What the browser logs for every request that fails because the test switched the network off on purpose. */
 export const OFFLINE_NOISE = /net::ERR_INTERNET_DISCONNECTED/
@@ -25,8 +26,8 @@ export const POINTS = {
   gym: 'BQR-dev00000000000000000003', // GPS required, only for Lior
 }
 export const PEOPLE = {
-  lior: { name: 'ליאור', password: 'dev-pass-1' }, // profile language: Hebrew
-  john: { name: 'John', password: 'dev-pass-4' }, // profile language: English, so the screens turn English after sign-in
+  lior: { name: 'ליאור', password: 'dev-pass-1' },
+  john: { name: 'John', password: 'dev-pass-4' }, // reads English: he picks it on his phone, nobody sets it for him
 }
 export const ADMIN_EMAIL = 'dev@example.test'
 export const FAR = { latitude: 32.3632, longitude: 34.9442, accuracy: 10 } // about 5.5 km from the sample points
@@ -60,11 +61,11 @@ export const test = base.extend({
 
 // ---- helpers ---------------------------------------------------------------------------------------------------
 
-/** Picks a person on the sign-in list and signs in. */
-export async function signIn(page, person) {
+/** Picks a person on the sign-in list and signs in. `words` is the dictionary of the language the screen is in now. */
+export async function signIn(page, person, words = he) {
   await page.getByRole('button', { name: new RegExp(person.name) }).click()
-  await page.getByLabel(he['login.passwordLabel'], { exact: true }).fill(person.password)
-  await page.getByRole('button', { name: he['login.submit'], exact: true }).click()
+  await page.getByLabel(words['login.passwordLabel'], { exact: true }).fill(person.password)
+  await page.getByRole('button', { name: words['login.submit'], exact: true }).click()
 }
 
 /** Signs the committee in through the local-only shortcut that the scratch-schema API offers. */

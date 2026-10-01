@@ -49,8 +49,9 @@ test('scanning the same point again says it was already recorded', async ({ page
 test('a point that is not assigned to the person is refused with its own message, in the person\'s language', async ({ page }) => {
   allowConsoleErrors(page, /status of 403/) // the browser notes the 403 this test provokes
   await page.goto(scanLink(POINTS.gym)) // the gym is Lior's only
-  await signIn(page, PEOPLE.john)
-  // John's profile language is English: once signed in, the screens follow it (until he picks a language himself)
+  // John reads English: he picks it himself on his phone (the committee does not set a language for anyone)
+  await page.getByLabel(he['lang.label']).selectOption('en')
+  await signIn(page, PEOPLE.john, en)
   await expect(page.getByText(en['error.not_assigned'])).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
   await expect(page.getByRole('button', { name: en['checkin.retry'] })).toHaveCount(0) // trying again cannot help

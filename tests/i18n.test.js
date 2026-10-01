@@ -40,11 +40,17 @@ describe('translate', () => {
 })
 
 describe('language choice', () => {
-  it('prefers an explicit choice, then the provider profile, then Hebrew', () => {
-    expect(pickLang({ stored: 'ru', provider: 'ar' })).toBe('ru')
-    expect(pickLang({ stored: null, provider: 'ar' })).toBe('ar')
-    expect(pickLang({ stored: 'klingon', provider: 'nope' })).toBe('he')
+  it("is the person's own saved choice, otherwise Hebrew", () => {
+    expect(pickLang({ stored: 'ru' })).toBe('ru')
+    expect(pickLang({ stored: 'ar' })).toBe('ar')
+    expect(pickLang({ stored: null })).toBe('he')
+    expect(pickLang({ stored: 'klingon' })).toBe('he')
     expect(pickLang()).toBe('he')
+  })
+  it('has no language that the committee sets for someone: a provider hint, as the old code took, has no effect', () => {
+    expect(pickLang({ provider: 'ar' })).toBe('he')
+    expect(pickLang({ stored: null, provider: 'ru' })).toBe('he')
+    expect(pickLang({ stored: 'en', provider: 'ru' })).toBe('en') // only the person's own choice counts
   })
   it("ignores the phone's own language: the app opens in Hebrew even on an English phone", () => {
     // a `browser` hint (what the old code accepted) must have no effect any more

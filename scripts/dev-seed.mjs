@@ -34,16 +34,16 @@ const { rows } = await query('select count(*)::int n from providers')
 if (rows[0].n === 0) {
   // Committee members sign in with Google; locally the API's dev-only shortcut accepts this e-mail.
   await query('insert into admins (email, name) values ($1,$2)', ['dev@example.test', 'Dev Admin'])
-  const provider = async (company, contact, service, lang, pw, demo = false) =>
+  const provider = async (company, contact, service, pw, demo = false) =>
     (await query(
-      'insert into providers (company, contact_name, service_type, lang, password_hash, is_demo) values ($1,$2,$3,$4,$5,$6) returning id',
-      [company, contact, service, lang, await hashPassword(pw), demo],
+      'insert into providers (company, contact_name, service_type, password_hash, is_demo) values ($1,$2,$3,$4,$5) returning id',
+      [company, contact, service, await hashPassword(pw), demo],
     )).rows[0].id
-  const lior = await provider('ניקיון', 'ליאור', 'cleaning', 'he', 'dev-pass-1')
-  await provider('גינון', 'חמודי', 'gardening', 'ar', 'dev-pass-2')
-  await provider('Уборка', 'Иван', 'cleaning', 'ru', 'dev-pass-3')
-  await provider('Cleaning Co', 'John', 'cleaning', 'en', 'dev-pass-4')
-  await provider('דמו', 'לקוח דמה', null, 'he', 'dev-pass-5', true)
+  const lior = await provider('ניקיון', 'ליאור', 'cleaning', 'dev-pass-1')
+  await provider('גינון', 'חמודי', 'gardening', 'dev-pass-2')
+  await provider('Уборка', 'Иван', 'cleaning', 'dev-pass-3')
+  await provider('Cleaning Co', 'John', 'cleaning', 'dev-pass-4')
+  await provider('דמו', 'לקוח דמה', null, 'dev-pass-5', true)
 
   const point = async (name, mode, token, extra = {}) =>
     (await query(

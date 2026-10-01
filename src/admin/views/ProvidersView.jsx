@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { adminApi, errorText, copyText } from '../api.js'
-import { useLoad, SERVICE_TYPES, serviceLabel, LANG_OPTIONS, formatDateTime } from '../hooks.js'
+import { useLoad, SERVICE_TYPES, serviceLabel, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconEdit, IconKey, IconDevice, IconBan, IconCheck, IconCopy, IconRefresh, IconUsers, IconAlert, IconTrash } from '../icons.jsx'
 
@@ -43,8 +43,8 @@ function PasswordHandover({ provider, password, onClose }) {
 function ProviderForm({ provider, onClose, onSaved }) {
   const toast = useToast()
   const [form, setForm] = useState(provider
-    ? { company: provider.company, contact_name: provider.contact_name, service_type: provider.service_type ?? '', lang: provider.lang, password: '', is_demo: provider.is_demo, is_active: provider.is_active }
-    : { company: '', contact_name: '', service_type: '', lang: 'he', password: generatePassword(), is_demo: false, is_active: true })
+    ? { company: provider.company, contact_name: provider.contact_name, service_type: provider.service_type ?? '', password: '', is_demo: provider.is_demo, is_active: provider.is_active }
+    : { company: '', contact_name: '', service_type: '', password: generatePassword(), is_demo: false, is_active: true })
   const [errors, setErrors] = useState({})
   const [busy, run] = useAction(toast, errorText)
   const set = (k, v) => { setForm((f) => ({ ...f, [k]: v })); setErrors((e) => ({ ...e, [k]: undefined })) }
@@ -59,7 +59,7 @@ function ProviderForm({ provider, onClose, onSaved }) {
     if (Object.keys(next).length) return
     const body = {
       company: form.company.trim(), contact_name: form.contact_name.trim(), service_type: form.service_type || null,
-      lang: form.lang, is_demo: form.is_demo, ...(provider ? { is_active: form.is_active } : {}),
+      is_demo: form.is_demo, ...(provider ? { is_active: form.is_active } : {}),
       ...(form.password ? { password: form.password } : {}),
     }
     const res = await run(
@@ -87,19 +87,12 @@ function ProviderForm({ provider, onClose, onSaved }) {
         <Field label="שם העובד" hint="השם שיופיע ברשימה במסך הכניסה של הטלפון.">
           <input className="a-input" value={form.contact_name} onChange={(e) => set('contact_name', e.target.value)} maxLength={120} />
         </Field>
-        <div className="a-form-row">
-          <Field label="סוג שירות">
-            <select className="a-input" value={form.service_type} onChange={(e) => set('service_type', e.target.value)}>
-              <option value="">לא מוגדר</option>
-              {SERVICE_TYPES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </select>
-          </Field>
-          <Field label="שפת הממשק בטלפון">
-            <select className="a-input" value={form.lang} onChange={(e) => set('lang', e.target.value)}>
-              {LANG_OPTIONS.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
-            </select>
-          </Field>
-        </div>
+        <Field label="סוג שירות">
+          <select className="a-input" value={form.service_type} onChange={(e) => set('service_type', e.target.value)}>
+            <option value="">לא מוגדר</option>
+            {SERVICE_TYPES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+        </Field>
         <Field label={provider ? 'סיסמה חדשה (לא חובה)' : 'סיסמה'} error={errors.password}
           hint={provider ? 'להשאיר ריק כדי לא לשנות. שינוי סיסמה מנתק את העובד מכל המכשירים.' : 'העובד יזין אותה פעם אחת בטלפון. אפשר ליצור סיסמה קלה להקלדה.'}>
           <PasswordBox value={form.password} onChange={(v) => set('password', v)} />
@@ -231,7 +224,6 @@ export default function ProvidersView() {
             <div className="a-meta">
               <Badge tone={p.is_active ? 'ok' : 'neutral'}>{p.is_active ? 'פעיל' : 'מושבת'}</Badge>
               {p.service_type && <Badge tone="info">{serviceLabel(p.service_type)}</Badge>}
-              <Badge>{LANG_OPTIONS.find((l) => l.value === p.lang)?.label}</Badge>
               {p.is_demo && <Badge tone="warn">דמו</Badge>}
               {!p.has_password && <Badge tone="danger">אין סיסמה</Badge>}
             </div>
