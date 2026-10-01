@@ -8,7 +8,7 @@ import PrintSheet from '../PrintSheet.jsx'
 import { IconPlus, IconEdit, IconQr, IconPrinter, IconDownload, IconCopy, IconRefresh, IconLocate, IconPin, IconAlert } from '../icons.jsx'
 
 const GPS = {
-  required: { label: 'מיקום חובה', hint: 'לנקודות בחוץ: נדרש מיקום תקין ליד הנקודה כדי לרשום נוכחות.' },
+  required: { label: 'מיקום חובה', hint: 'לנקודות עם קליטה: חובה להיות בתוך הרדיוס של הנקודה (בתוספת 15 מטר לדיוק הסיכה ולסטיית ה-GPS של הטלפון). בלי מיקום תקין הנוכחות לא נרשמת.' },
   optional: { label: 'מיקום אם אפשר', hint: 'ברירת המחדל. אם יש מיקום הוא נבדק, ואם אין קליטה הנוכחות נרשמת ומסומנת "מיקום לא מאומת".' },
   none: { label: 'בלי מיקום', hint: 'למרתפים וחדרים בלי קליטה: המיקום לא נבדק בכלל.' },
 }

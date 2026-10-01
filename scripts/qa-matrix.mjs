@@ -79,14 +79,16 @@ try {
       await fresh()
       const edge = await scan({ lat: here.lat + 0.0006, lng: here.lng, accuracy: 16 }) // ~67 m away, ±16 m: just outside a 50 m circle
       await fresh()
+      const out120 = await scan({ lat: here.lat + 0.00108, lng: here.lng, accuracy: 10 }) // ~120 m away at a good fix
+      await fresh()
       const near = await scan(here) // good fix at the point
 
       const brief = (r) => (r.status !== 200 ? `${r.status}:${r.json?.error?.code}` : `${r.json.scan.outcome}${r.json.duplicate ? '(dup)' : ''}${r.json.scan.flags.length ? '[' + r.json.scan.flags.join(',') + ']' : ''}`)
-      rows.push({ provider: label, point: pt.name, gps_mode: pt.gps_mode, radius: pt.radius_m, allowed: allowed ? 'yes' : 'no', far: brief(far), none: brief(none), edge67m: brief(edge), near: brief(near) })
+      rows.push({ provider: label, point: pt.name, gps_mode: pt.gps_mode, radius: pt.radius_m, allowed: allowed ? 'yes' : 'no', far: brief(far), none: brief(none), edge67m: brief(edge), out120m: brief(out120), near: brief(near) })
 
       // --- expectations
       if (!allowed) {
-        for (const [n, r] of [['far', far], ['none', none], ['edge', edge], ['near', near]]) {
+        for (const [n, r] of [['far', far], ['none', none], ['edge', edge], ['out120', out120], ['near', near]]) {
           if (r.status !== 403 || r.json?.error?.code !== 'not_assigned') note(`${label} @ ${pt.name} (${n}): expected 403 not_assigned, got ${brief(r)}`)
         }
         continue
@@ -97,8 +99,11 @@ try {
       const expectNone = pt.gps_mode === 'required' ? 'rejected_no_location' : 'accepted'
       if (none.status !== 200 || none.json.scan.outcome !== expectNone) note(`${label} @ ${pt.name}: no GPS expected ${expectNone}, got ${brief(none)}`)
       if (near.status !== 200 || near.json.scan.outcome !== 'accepted') note(`${label} @ ${pt.name}: near fix expected accepted, got ${brief(near)}`)
-      // soft GPS: a phone just outside the circle is accepted (and flagged when clearly outside); only a clearly far one is refused
+      // just outside a 50 m circle (67 m, +/-16 m): inside the tolerance everywhere
       if (edge.status !== 200 || edge.json.scan.outcome !== 'accepted') note(`${label} @ ${pt.name}: fix ~67 m away expected accepted, got ${brief(edge)}`)
+      // 120 m at a good fix: 'required' points refuse it (circle + 15 m); 'optional'/'none' are lenient by design
+      const expectOut120 = pt.gps_mode === 'required' && Number(pt.radius_m) + 15 < 110 ? 'rejected_far' : 'accepted'
+      if (out120.status !== 200 || out120.json.scan.outcome !== expectOut120) note(`${label} @ ${pt.name}: fix ~120 m away expected ${expectOut120}, got ${brief(out120)}`)
       // the demo account's scans must be tagged
       if (prov.is_demo && near.status === 200 && !near.json.scan.flags.includes('demo')) note(`${label} @ ${pt.name}: demo scan not tagged`)
       if (!prov.is_demo && near.status === 200 && near.json.scan.flags.includes('demo')) note(`${label} @ ${pt.name}: non-demo scan tagged demo`)

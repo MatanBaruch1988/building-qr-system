@@ -1,5 +1,8 @@
 // Self-describing contract for the agent API. Served at GET /api/agent/v1/schema and mirrored in AGENTS.md.
-import { TIMEZONE, SCAN_COOLDOWN_MINUTES, GPS_MAX_USABLE_ACCURACY_M, GPS_REJECT_MARGIN_M } from './config.js'
+import {
+  TIMEZONE, SCAN_COOLDOWN_MINUTES, GPS_MAX_USABLE_ACCURACY_M, GPS_REJECT_MARGIN_M,
+  GPS_REQUIRED_PIN_TOLERANCE_M, GPS_REQUIRED_MAX_CREDIT_M,
+} from './config.js'
 
 export const schemaDoc = {
   version: 'v1',
@@ -56,6 +59,7 @@ export const schemaDoc = {
     gps_policy: {
       max_usable_accuracy_m: GPS_MAX_USABLE_ACCURACY_M,
       reject_when_farther_than_m: GPS_REJECT_MARGIN_M,
+      required_points: `Strict: the phone must be inside the point radius plus ${GPS_REQUIRED_PIN_TOLERANCE_M} m, after crediting its own reported accuracy (up to ${GPS_REQUIRED_MAX_CREDIT_M} m). 'reject_when_farther_than_m' applies to 'optional' points.`,
       note: "Points can be 'required', 'optional' or 'none' (no reception). 'none' points are never judged by GPS.",
     },
     history: 'Nothing is deleted. Providers and points are deactivated, scans are voided.',

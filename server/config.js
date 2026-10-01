@@ -10,6 +10,14 @@ export const SCAN_COOLDOWN_MINUTES = 10
 export const GPS_MAX_USABLE_ACCURACY_M = 150
 export const GPS_REJECT_MARGIN_M = 250
 
+// Points that are 'required' are strict: the phone has to be inside the point's circle, with two allowances.
+//  - a few metres for a pin that was placed by hand on a map,
+//  - the phone's own reported inaccuracy (a weak reading is not the worker's fault), credited up to a cap so a
+//    very vague reading cannot stretch the circle far.
+// At the usual outdoor accuracy (~10 m) a 50 m point therefore accepts up to ~75 m; at most 50 + 15 + 50 = 115 m.
+export const GPS_REQUIRED_PIN_TOLERANCE_M = 15
+export const GPS_REQUIRED_MAX_CREDIT_M = 50
+
 // Offline scans keep the phone's clock only if it is plausible.
 export const MAX_SYNC_BATCH = 20
 export const CLOCK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
