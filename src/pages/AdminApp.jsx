@@ -11,7 +11,7 @@ import AgentView from '../admin/views/AgentView.jsx'
 import CommitteeView from '../admin/views/CommitteeView.jsx'
 import { applyUpdate, isUpdateReady, subscribeUpdate } from '../worker/update.js'
 import ThemeSwitch, { HEBREW_THEME_LABELS as THEME_LABELS } from '../ui/ThemeSwitch.jsx'
-import { IconPin, IconUsers, IconList, IconKey, IconShield, IconLogout, IconQr, IconAlert, IconRefresh } from '../admin/icons.jsx'
+import { IconPin, IconUsers, IconList, IconKey, IconShield, IconLogout, IconQr, IconDevice, IconAlert, IconRefresh } from '../admin/icons.jsx'
 
 const TABS = [
   { key: 'points', label: 'נקודות', icon: IconPin, View: PointsView },
@@ -40,6 +40,18 @@ function NavItem({ tab, current, onGo, className, size }) {
     <button className={className} onClick={() => onGo(tab.key)} aria-current={current ? 'page' : undefined}>
       <tab.icon size={size} />{tab.label}
     </button>
+  )
+}
+
+// The same three icons on every screen size (the side rail on a computer, the top bar on a phone): the provider app,
+// light / dark, and signing out. Only the place they sit changes with the width, never what they look like.
+function ShellTools({ onSignOut }) {
+  return (
+    <div className="a-tools">
+      <IconButton icon={IconDevice} label="אפליקציית נותני השירות" href="/" />
+      <ThemeSwitch labels={THEME_LABELS} />
+      <IconButton icon={IconLogout} label="יציאה" onClick={onSignOut} />
+    </div>
   )
 }
 
@@ -75,22 +87,17 @@ function Shell({ admin, onSignedOut }) {
       <aside className="a-side">
         <div className="a-brand"><span className="a-brand__mark"><IconQr size={22} /></span>נוכחות בבניין</div>
         <nav className="a-nav" aria-label="ניווט ראשי">
-          {TABS.map((t) => <NavItem key={t.key} tab={t} current={tab === t.key} onGo={goTo} className="a-nav__item" size={22} />)}
+          {TABS.map((t) => <NavItem key={t.key} tab={t} current={tab === t.key} onGo={goTo} className="a-nav__item" size={24} />)}
         </nav>
         <div className="a-side__foot">
           <div className="a-user"><strong>{admin.name || 'חבר ועד'}</strong><span dir="ltr">{admin.email}</span></div>
-          <ThemeSwitch variant="row" labels={THEME_LABELS} />
-          <a className="a-nav__item" href="/"><IconQr />אפליקציית נותני השירות</a>
-          <button className="a-nav__item" onClick={signOut}><IconLogout />יציאה</button>
+          <ShellTools onSignOut={signOut} />
         </div>
       </aside>
 
       <header className="a-top">
         <div className="a-brand"><span className="a-brand__mark"><IconQr size={22} /></span>{label}</div>
-        <div className="a-actions" style={{ gap: 4 }}>
-          <ThemeSwitch labels={THEME_LABELS} />
-          <IconButton icon={IconLogout} label="יציאה" onClick={signOut} />
-        </div>
+        <ShellTools onSignOut={signOut} />
       </header>
 
       <main className="a-main" ref={mainRef} tabIndex={-1} style={{ outline: 'none' }}>
