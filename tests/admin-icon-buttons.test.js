@@ -89,13 +89,13 @@ describe('the same design on a phone and on a computer', () => {
     expect(theme).not.toMatch(/variant/)
   })
 
-  it('a date field stays inside its column (Safari on iPhone gave it a width that made two of them overlap)', () => {
-    const rule = css.match(/\.a-input\[type='date'\]\s*\{([^}]*)\}/)?.[1] ?? ''
-    expect(rule).toContain('appearance: none')
-    expect(rule).toContain('width: 100%')
+  it('a date field stays inside its column, and always reads DD/MM/YYYY (the native date field did neither on iPhone)', () => {
+    const rule = css.match(/\.a-input--date\s*\{([^}]*)\}/)?.[1] ?? ''
     expect(rule).toContain('min-width: 0')
-    expect(rule).toContain('direction: ltr') // the device's own date order, not one jumbled by an RTL page
+    expect(rule).toContain('direction: ltr') // the digits run left to right, not jumbled by an RTL page
     expect(css).toMatch(/\.a-filters > \*\s*\{\s*min-width:\s*0/)
+    expect(css).not.toContain("[type='date']") // no native date field is left to style
+    for (const f of views) expect(read(f), `${f} uses a native date field`).not.toMatch(/type=["']date["']/)
   })
 })
 

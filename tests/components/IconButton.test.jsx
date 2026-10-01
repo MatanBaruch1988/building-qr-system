@@ -38,6 +38,13 @@ describe('IconButton', () => {
     expect(link.getAttribute('download')).toBe('scans.csv')
   })
 
+  it('a disabled link is a disabled button: a link cannot be switched off, and must not be followed meanwhile', () => {
+    render(<IconButton icon={IconEdit} label="ייצוא" href="/api/export.csv" download="x.csv" disabled />)
+    const button = screen.getByRole('button', { name: 'ייצוא' })
+    expect(button.disabled).toBe(true)
+    expect(screen.queryByRole('link')).toBeNull()
+  })
+
   it('has a grey default, a red danger tone and a filled primary tone', () => {
     render(
       <>

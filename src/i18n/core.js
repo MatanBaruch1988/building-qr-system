@@ -3,6 +3,7 @@ import he from './he.js'
 import en from './en.js'
 import ru from './ru.js'
 import ar from './ar.js'
+import { formatTime } from '../../shared/datetime.js'
 
 export const LANGS = [
   { code: 'he', label: 'עברית', dir: 'rtl' },
@@ -37,15 +38,13 @@ export function pickLang({ stored } = {}) {
 }
 
 const LOCALES = { he: 'he-IL', en: 'en-GB', ru: 'ru-RU', ar: 'ar-u-nu-latn' } // Arabic with Western digits
-export const BUILDING_TZ = 'Asia/Jerusalem'
 
 export function makeFormatters(lang) {
   const locale = LOCALES[lang] ?? LOCALES.he
-  const time = new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: BUILDING_TZ })
   const meters = new Intl.NumberFormat(locale, { style: 'unit', unit: 'meter', unitDisplay: 'short', maximumFractionDigits: 0 })
   const km = new Intl.NumberFormat(locale, { style: 'unit', unit: 'kilometer', unitDisplay: 'short', maximumFractionDigits: 1 })
   return {
-    time: (d) => time.format(new Date(d)),
+    time: formatTime, // HH:MM in the building's time, the same in every language (shared/datetime.js)
     distance: (m) => (m >= 1000 ? km.format(m / 1000) : meters.format(Math.max(1, Math.round(m)))),
   }
 }

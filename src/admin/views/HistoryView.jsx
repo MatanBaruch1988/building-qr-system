@@ -1,14 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { adminApi, errorText } from '../api.js'
 import { useLoad } from '../hooks.js'
-import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
+import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, DateInput, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconList, IconDownload, IconRefresh, IconBan, IconUndo, IconAlert, IconTrash } from '../icons.jsx'
+import { formatDay, formatDateTime, formatTime, isoDay } from '../../../shared/datetime.js'
 
-const il = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }) // YYYY-MM-DD
-const isoDay = (d) => il.format(d)
 const daysAgo = (n) => isoDay(new Date(Date.now() - n * 86_400_000))
-const dayLabel = (ymd) =>
-  new Intl.DateTimeFormat('he-IL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${ymd}T12:00:00Z`))
+const dayLabel = formatDay // the heading of a day: DD/MM/YYYY
 
 // What the agent-facing flags mean, in words a committee member understands.
 const FLAGS = {
@@ -55,7 +53,7 @@ function VoidDialog({ scan, onClose, onDone }) {
           <button type="submit" form="void-form" className="w-btn w-btn--danger w-btn--small" disabled={busy}>{busy ? 'מבטל…' : 'ביטול הנוכחות'}</button>
         </>
       )}>
-      <p className="w-lead">{scan.point_name} · {scan.provider_name} · {scan.checked_in_local.slice(0, 16)}</p>
+      <p className="w-lead">{scan.point_name} · {scan.provider_name} · {formatDateTime(scan.checked_in_at)}</p>
       <form id="void-form" className="a-form" onSubmit={submit}>
         <Field label="סיבה (לא חובה)" hint="הרשומה לא נמחקת: היא נשארת בהיסטוריה מסומנת כמבוטלת ואפשר לשחזר אותה.">
           <textarea className="a-input" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} placeholder="לדוגמה: נסרק בטעות" />
@@ -71,6 +69,9 @@ export default function HistoryView() {
   const providers = useLoad(() => adminApi('/providers'))
   const [filters, setFilters] = useState(DEFAULTS) // what the inputs show
   const [applied, setApplied] = useState(filters) // what is actually queried (after a short pause in typing)
+  // A date field that is half typed shows something other than what is queried (the last good date). The list may stay,
+  // but the export must not quietly use a range that differs from the fields, so it waits until both are finished.
+  const [unfinished, setUnfinished] = useState({ from: false, to: false })
   const [{ rows, cursor, status }, setList] = useState({ rows: [], cursor: null, status: 'loading' })
   const [voiding, setVoiding] = useState(null)
   const confirm = useConfirm()
@@ -120,7 +121,7 @@ export default function HistoryView() {
   const remove = async (s) => {
     const ok = await confirm({
       title: 'למחוק את הנוכחות לצמיתות?',
-      body: `${s.point_name} · ${s.provider_name} · ${s.checked_in_local.slice(0, 16)}. אי אפשר לשחזר אותה. אם רק רוצים להוציא אותה מהדוחות, אפשר לבטל אותה במקום.`,
+      body: `${s.point_name} · ${s.provider_name} · ${formatDateTime(s.checked_in_at)}. אי אפשר לשחזר אותה. אם רק רוצים להוציא אותה מהדוחות, אפשר לבטל אותה במקום.`,
       confirmLabel: 'מחיקה', danger: true,
     })
     if (ok && await run(() => adminApi(`/scans/${s.id}`, { method: 'DELETE' }), 'הנוכחות נמחקה')) {
@@ -148,13 +149,13 @@ export default function HistoryView() {
         </div>
         <div className="a-actions">
           <IconButton icon={IconRefresh} label="רענון" onClick={load} />
-          <IconButton icon={IconDownload} label="ייצוא ל-Excel" href={`/api/admin/scans?${query(applied, { format: 'csv' })}`} download="scans.csv" />
+          <IconButton icon={IconDownload} label="ייצוא ל-Excel" href={`/api/admin/scans?${query(applied, { format: 'csv' })}`} download="scans.csv" disabled={unfinished.from || unfinished.to} />
         </div>
       </div>
 
       <div className="a-filters">
-        <Field label="מתאריך"><input className="a-input" type="date" value={filters.from} max={filters.to} onChange={(e) => set('from', e.target.value)} /></Field>
-        <Field label="עד תאריך"><input className="a-input" type="date" value={filters.to} min={filters.from} onChange={(e) => set('to', e.target.value)} /></Field>
+        <Field label="מתאריך"><DateInput value={filters.from} onChange={(v) => set('from', v)} onPendingChange={(p) => setUnfinished((u) => ({ ...u, from: p }))} /></Field>
+        <Field label="עד תאריך"><DateInput value={filters.to} onChange={(v) => set('to', v)} onPendingChange={(p) => setUnfinished((u) => ({ ...u, to: p }))} /></Field>
         <Field label="נקודה">
           <select className="a-input" value={filters.point_id} onChange={(e) => set('point_id', e.target.value)}>
             <option value="">כל הנקודות</option>
@@ -194,7 +195,7 @@ export default function HistoryView() {
           <ul className="a-scans">
             {g.items.map((s) => (
               <li key={s.id} className={`a-scan${s.voided ? ' is-void' : ''}`}>
-                <span className="a-scan__time">{s.checked_in_local.slice(11, 16)}</span>
+                <span className="a-scan__time">{formatTime(s.checked_in_at)}</span>
                 <div className="a-scan__main">
                   <div className="a-scan__point">{s.point_name}</div>
                   <div className="a-scan__who">{s.provider_name}</div>
