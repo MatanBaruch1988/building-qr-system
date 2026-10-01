@@ -52,6 +52,7 @@ export default {
   'checkin.queuedTemp.body': 'לא הצלחנו לשמור בזיכרון הטלפון. השאירו את האפליקציה פתוחה והנוכחות תישלח כשתהיה קליטה.',
   'checkin.done': 'סיימתי',
   'checkin.retry': 'נסו שוב',
+  'checkin.asUser': 'משתמש: {name}',
 
   'error.invalid_code': 'קוד ה-QR הזה לא שייך למערכת.',
   'error.unknown_code': 'קוד ה-QR לא מוכר. ייתכן שהוחלף. פנו לוועד הבית.',

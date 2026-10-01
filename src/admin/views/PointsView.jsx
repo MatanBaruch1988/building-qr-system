@@ -38,6 +38,9 @@ function PointForm({ point, providers, onClose, onSaved }) {
   const lng = coord(form.lng)
   const radius = Number(String(form.radius_m).trim() || NaN)
   const usesLocation = form.gps_mode !== 'none' // with "no location" the map and its fields are hidden: do not check them
+  // The demo account may scan every point, so it has no place in a per-point list.
+  const assignable = providers.filter((p) => !p.is_demo)
+  const hasDemo = assignable.length !== providers.length
 
   const locate = () => {
     if (!navigator.geolocation) return toast.error('הדפדפן לא תומך במיקום.')
@@ -147,13 +150,14 @@ function PointForm({ point, providers, onClose, onSaved }) {
         <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
           <legend className="w-label" style={{ marginBlockEnd: 6 }}>מי רשאי לסרוק כאן</legend>
           <div className="a-check-list">
-            {providers.length === 0 && <p className="w-small" style={{ padding: 8 }}>עוד אין נותני שירות.</p>}
-            {providers.map((p) => (
+            {assignable.length === 0 && <p className="w-small" style={{ padding: 8 }}>עוד אין נותני שירות.</p>}
+            {assignable.map((p) => (
               <Switch key={p.id} checked={form.provider_ids.includes(p.id)} onChange={(on) => toggleProvider(p.id, on)}
                 label={`${p.contact_name || p.company}${p.contact_name ? ` · ${p.company}` : ''}${p.is_active ? '' : ' (מושבת)'}`} />
             ))}
           </div>
-          <p className="w-small" style={{ marginBlockStart: 6 }}>{form.provider_ids.length === 0 ? 'לא נבחר אף אחד: כל נותני השירות רשאים לסרוק.' : 'רק הנבחרים רשאים לסרוק בנקודה הזו.'}</p>
+          <p className="w-small" style={{ marginBlockStart: 6 }}>{!form.provider_ids.some((id) => assignable.some((p) => p.id === id)) ? 'לא נבחר אף אחד: כל נותני השירות רשאים לסרוק.' : 'רק הנבחרים רשאים לסרוק בנקודה הזו.'}</p>
+          {hasDemo && <p className="w-small" style={{ marginBlockStart: 4 }}>חשבון הדמו מורשה לסרוק בכל הנקודות, ולכן אינו מופיע ברשימה.</p>}
         </fieldset>
 
         {point && (

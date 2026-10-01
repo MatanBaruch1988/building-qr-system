@@ -211,11 +211,14 @@ function providerIds(body) {
 async function replaceAssignments(c, pointId, ids) {
   await c.query('delete from point_providers where point_id = $1', [pointId])
   if (!ids.length) return
-  const found = await c.query('select id from providers where id = any($1::uuid[])', [ids])
+  const found = await c.query('select id, is_demo from providers where id = any($1::uuid[])', [ids])
   if (found.rows.length !== ids.length) throw bad('unknown_provider', 'One of the providers does not exist')
+  // The demo account may scan every point (see recordScan), so it is never listed per point.
+  const real = found.rows.filter((r) => !r.is_demo).map((r) => r.id)
+  if (!real.length) return
   await c.query(
     'insert into point_providers (point_id, provider_id) select $1, unnest($2::uuid[])',
-    [pointId, ids],
+    [pointId, real],
   )
 }
 

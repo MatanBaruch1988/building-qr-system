@@ -189,6 +189,7 @@ function WorkerShell({ session, setSession }) {
             <ResultView
               result={result}
               pointName={result.point?.name}
+              provider={session.provider}
               onDone={done}
               onRetry={() => runCheckIn(result.qrCode, result.point)}
             />

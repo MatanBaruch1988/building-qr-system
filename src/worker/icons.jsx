@@ -22,6 +22,7 @@ export const IconInfo = (p) => <Svg {...p}><circle cx="12" cy="12" r="9" /><path
 export const IconPin = (p) => (
   <Svg {...p}><path d="M12 21s-6.5-6-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15 12 21 12 21z" /><circle cx="12" cy="10.5" r="2.2" /></Svg>
 )
+export const IconUser = (p) => <Svg {...p}><circle cx="12" cy="8" r="3.6" /><path d="M4.5 20c.8-3.9 3.8-6 7.5-6s6.7 2.1 7.5 6" /></Svg>
 export const IconGlobe = (p) => (
   <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.6 2.6 3.9 5.6 3.9 9s-1.3 6.4-3.9 9c-2.6-2.6-3.9-5.6-3.9-9S9.4 5.6 12 3z" /></Svg>
 )

@@ -50,6 +50,7 @@ export default {
   'checkin.queuedTemp.body': 'We could not save this in the phone storage. Keep the app open and the check-in will be sent when you have signal.',
   'checkin.done': 'Done',
   'checkin.retry': 'Try again',
+  'checkin.asUser': 'Signed in as {name}',
 
   'error.invalid_code': 'This QR code does not belong to this system.',
   'error.unknown_code': 'QR code not recognised. It may have been replaced. Contact the building committee.',

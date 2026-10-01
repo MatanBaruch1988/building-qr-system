@@ -5,6 +5,9 @@
  */
 export const withScanContext = (result, { qrCode, point }) => ({ ...result, qrCode, point })
 
+/** "Lior · Cleaning": who is signed in, as the committee named them (the same shape as its own lists). */
+export const providerLabel = (p) => (p?.contact_name ? `${p.contact_name} · ${p.company}` : p?.company ?? '')
+
 // The whole "scan → recorded" journey as one function with injectable dependencies, so every branch
 // (success, duplicate, no signal, too far, …) is unit-tested without a browser.
 //
@@ -19,7 +22,9 @@ export async function performCheckIn({ code, point, session, deps, onPhase = () 
   let locationReason = null
   if (point?.gps_mode !== 'none') {
     onPhase('locating')
-    const res = await getFix()
+    // A point that MUST verify location gets a fresh reading: a position the phone remembers from a few minutes
+    // earlier (fine for "optional" points, and quicker) would let someone scan right after leaving the building.
+    const res = await getFix(point?.gps_mode === 'required' ? { maxAgeMs: 0 } : undefined)
     gps = res.fix
     locationReason = res.reason
   }

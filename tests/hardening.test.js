@@ -1,6 +1,7 @@
 // Regression tests for the issues found in the independent backend review.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
+import fs from 'node:fs'
 import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
 
 let db, cookie, token, provider
@@ -230,6 +231,30 @@ describe('demo account', () => {
     expect(view.rows[0].n).toBe(0)
     const providers = (await call('GET', '/api/agent/v1/providers', { token: key })).json.providers
     expect(providers.find((x) => x.id === demo.id).is_demo).toBe(true)
+  })
+
+  it('is never listed under a point: it may scan everywhere, so an assignment would only mislead', async () => {
+    const demo = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'דמו3', contact_name: 'בודק', password: 'demo-9012', is_demo: true } })).json.provider
+    const created = await point({ name: 'listed-' + randomUUID().slice(0, 6), provider_ids: [provider.id, demo.id] })
+    expect(created.provider_ids).toEqual([provider.id]) // the demo id was dropped on create
+
+    const edited = (await call('PATCH', `/api/admin/points/${created.id}`, { cookie, body: { provider_ids: [demo.id, provider.id] } })).json.point
+    expect(edited.provider_ids).toEqual([provider.id]) // ...and on edit
+  })
+
+  it("migration 003 removes its old assignments, but never leaves a point with nobody listed (that would open it to everyone)", async () => {
+    const demo = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'דמו4', contact_name: 'בודק', password: 'demo-3456', is_demo: true } })).json.provider
+    const shared = await point({ name: 'shared-' + randomUUID().slice(0, 6) })
+    const onlyDemo = await point({ name: 'only-demo-' + randomUUID().slice(0, 6) })
+    for (const [p, who] of [[shared, provider], [shared, demo], [onlyDemo, demo]]) {
+      await db.pool.query('insert into point_providers (point_id, provider_id) values ($1, $2)', [p.id, who.id])
+    }
+
+    await db.pool.query(fs.readFileSync(new URL('../db/migrations/003_demo_not_assigned.sql', import.meta.url), 'utf8'))
+
+    const left = async (p) => (await db.pool.query('select provider_id from point_providers where point_id = $1', [p.id])).rows.map((r) => r.provider_id)
+    expect(await left(shared)).toEqual([provider.id])
+    expect(await left(onlyDemo)).toEqual([demo.id]) // kept: removing it would have made the point open to all
   })
 
   it('may scan every point, including ones assigned to somebody else (a tester must reach all QR codes)', async () => {

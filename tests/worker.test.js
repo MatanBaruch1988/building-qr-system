@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { performCheckIn, withScanContext } from '../src/worker/checkIn.js'
+import { performCheckIn, withScanContext, providerLabel } from '../src/worker/checkIn.js'
 import { KNOWN_ERROR_CODES, errorMessageKey, isKnownError } from '../src/worker/errors.js'
 import { createQueue, flushQueue } from '../src/worker/scanQueue.js'
 import { api, ApiError } from '../src/api/client.js'
@@ -39,6 +39,20 @@ describe('performCheckIn', () => {
     expect(t.getFix).not.toHaveBeenCalled()
     expect(phases).toEqual(['saving'])
     expect(t.apiFn.mock.calls[0][1].body.gps).toBeNull()
+  })
+
+  it("asks for a fresh position (no remembered one) only on points that 'require' location", async () => {
+    const t = setup({ apiImpl: async () => scanRes() })
+    await t.run({ gps_mode: 'required' })
+    expect(t.getFix).toHaveBeenLastCalledWith({ maxAgeMs: 0 })
+    await t.run({ gps_mode: 'optional' })
+    expect(t.getFix).toHaveBeenLastCalledWith(undefined) // the default (a position up to 5 minutes old is fine)
+  })
+
+  it("labels who is signed in the way the committee named them", () => {
+    expect(providerLabel({ contact_name: 'ליאור', company: 'ניקיון' })).toBe('ליאור · ניקיון')
+    expect(providerLabel({ contact_name: '', company: 'ניקיון' })).toBe('ניקיון')
+    expect(providerLabel(null)).toBe('')
   })
 
   it('still records when there is no fix (server flags it, does not refuse)', async () => {

@@ -3,9 +3,10 @@ import { useI18n } from '../i18n/index.jsx'
 import { api } from '../api/client.js'
 import { applyUpdate, isUpdateReady, subscribeUpdate } from './update.js'
 import { errorMessageKey, isKnownError } from './errors.js'
+import { providerLabel } from './checkIn.js'
 import {
   IconAlert, IconChevron, IconCheck, IconCloudOff, IconEye, IconEyeOff, IconGlobe, IconInfo, IconLock, IconPin,
-  IconPinOff, IconQr, IconRefresh, IconSend, IconX,
+  IconPinOff, IconQr, IconRefresh, IconSend, IconUser, IconX,
 } from './icons.jsx'
 
 const initial = (text) => Array.from((text || '?').trim())[0]?.toUpperCase() ?? '?'
@@ -286,7 +287,7 @@ export function WorkingView({ phase }) {
 
 /* ----------------------------------------------------------------- result */
 
-export function ResultView({ result, pointName, onDone, onRetry }) {
+export function ResultView({ result, pointName, provider, onDone, onRetry }) {
   const { t, time, distance } = useI18n()
   const headingRef = useRef(null)
   useEffect(() => {
@@ -331,6 +332,8 @@ export function ResultView({ result, pointName, onDone, onRetry }) {
       {v.done && point && (
         <span className="w-chip"><IconPin size={18} />{point}</span>
       )}
+      {/* On every outcome: on a shared phone, or after a refusal, the first question is "who am I signed in as?" */}
+      {provider && <p className="w-who"><IconUser size={18} />{t('checkin.asUser', { name: providerLabel(provider) })}</p>}
       <div className="w-actions">
         {v.retry && <button className="w-btn" onClick={onRetry}>{t('checkin.retry')}</button>}
         <button className={`w-btn${v.retry ? ' w-btn--quiet' : ''}`} onClick={onDone}>{t('checkin.done')}</button>

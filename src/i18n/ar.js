@@ -50,6 +50,7 @@ export default {
   'checkin.queuedTemp.body': 'تعذّر الحفظ في ذاكرة الهاتف. أبقِ التطبيق مفتوحًا وسيُرسَل الحضور عند توفر التغطية.',
   'checkin.done': 'تم',
   'checkin.retry': 'حاول مرة أخرى',
+  'checkin.asUser': 'المستخدم: {name}',
 
   'error.invalid_code': 'رمز QR هذا لا يتبع النظام.',
   'error.unknown_code': 'رمز QR غير معروف. ربما تم استبداله. تواصل مع لجنة البناية.',

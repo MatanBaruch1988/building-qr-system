@@ -1,6 +1,8 @@
 // End-to-end QA: every provider x every printed QR x GPS situations, against the REAL imported data
 // (same points, same assignments) in a throwaway schema. Nothing touches the real tables.
-// Usage: node scripts/qa-matrix.mjs [firestore-export-dir]
+// Usage: node scripts/qa-matrix.mjs [firestore-export-dir]   (the points as first imported)
+//        node scripts/qa-matrix.mjs --live                    (the committee's CURRENT points, GPS modes and assignments,
+//                                                              copied read-only from the real tables)
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -8,7 +10,9 @@ import { setupDb, call } from '../tests/helpers.js'
 import { importFirestore } from '../server/importFirestore.js'
 import { hashPassword } from '../server/crypto.js'
 
-const dir = process.argv[2] ?? path.join('..', 'backups', 'firestore-2026-10-01')
+const args = process.argv.slice(2)
+const live = args.includes('--live')
+const dir = args.find((a) => !a.startsWith('--')) ?? path.join('..', 'backups', 'firestore-2026-10-01')
 const read = (n) => (fs.existsSync(path.join(dir, `${n}.json`)) ? JSON.parse(fs.readFileSync(path.join(dir, `${n}.json`), 'utf8')) : [])
 const PASSWORD = 'qa-matrix-pass-1'
 
@@ -17,19 +21,29 @@ const problems = []
 const note = (msg) => problems.push(msg)
 
 try {
-  const c = await db.pool.connect()
-  await c.query('begin')
-  const report = await importFirestore(c, { locations: read('locations'), workers: read('workers'), scans: read('scans'), failedScans: read('failedScans') })
-  await c.query('commit')
-  c.release()
-  console.log(`imported: ${JSON.stringify(report.inserted)}`)
+  if (live) {
+    // Read-only on the real tables: the scratch schema gets copies, every scan below lands in the scratch schema.
+    await db.pool.query('insert into providers select * from public.providers')
+    await db.pool.query('insert into points select * from public.points')
+    await db.pool.query('insert into point_providers select * from public.point_providers')
+    console.log('using the live points, providers and assignments (copied into a scratch schema)')
+  } else {
+    const c = await db.pool.connect()
+    await c.query('begin')
+    const report = await importFirestore(c, { locations: read('locations'), workers: read('workers'), scans: read('scans'), failedScans: read('failedScans') })
+    await c.query('commit')
+    c.release()
+    console.log(`imported: ${JSON.stringify(report.inserted)}`)
+  }
+  // Each probe is judged on its own: a recorded visit would otherwise turn the next probe into a "duplicate".
+  const fresh = () => db.pool.query("update scans set voided_at = now(), void_reason = 'qa probe' where voided_at is null")
 
   const hash = await hashPassword(PASSWORD)
   await db.pool.query('update providers set password_hash = $1', [hash])
 
   const providers = (await db.pool.query('select id, company, contact_name, is_demo from providers order by company')).rows
   const points = (await db.pool.query(
-    `select p.id, p.name, p.gps_mode, p.lat, p.lng, p.qr_token,
+    `select p.id, p.name, p.gps_mode, p.radius_m, p.lat, p.lng, p.qr_token,
             coalesce(array_agg(pp.provider_id) filter (where pp.provider_id is not null), '{}') as assigned
        from points p left join point_providers pp on pp.point_id = p.id group by p.id order by p.name`,
   )).rows
@@ -58,16 +72,21 @@ try {
       const code = OLD_URL(pt.qr_token)
       const scan = (gps) => call('POST', '/api/scan', { token, body: { id: randomUUID(), code, client_time: new Date().toISOString(), gps } })
 
+      await fresh()
       const far = await scan(away) // clearly far
+      await fresh()
       const none = await scan(null) // no GPS at all (basement)
+      await fresh()
+      const edge = await scan({ lat: here.lat + 0.0006, lng: here.lng, accuracy: 16 }) // ~67 m away, ±16 m: just outside a 50 m circle
+      await fresh()
       const near = await scan(here) // good fix at the point
 
       const brief = (r) => (r.status !== 200 ? `${r.status}:${r.json?.error?.code}` : `${r.json.scan.outcome}${r.json.duplicate ? '(dup)' : ''}${r.json.scan.flags.length ? '[' + r.json.scan.flags.join(',') + ']' : ''}`)
-      rows.push({ provider: label, point: pt.name, gps_mode: pt.gps_mode, allowed: allowed ? 'yes' : 'no', far: brief(far), none: brief(none), near: brief(near) })
+      rows.push({ provider: label, point: pt.name, gps_mode: pt.gps_mode, radius: pt.radius_m, allowed: allowed ? 'yes' : 'no', far: brief(far), none: brief(none), edge67m: brief(edge), near: brief(near) })
 
       // --- expectations
       if (!allowed) {
-        for (const [n, r] of [['far', far], ['none', none], ['near', near]]) {
+        for (const [n, r] of [['far', far], ['none', none], ['edge', edge], ['near', near]]) {
           if (r.status !== 403 || r.json?.error?.code !== 'not_assigned') note(`${label} @ ${pt.name} (${n}): expected 403 not_assigned, got ${brief(r)}`)
         }
         continue
@@ -78,6 +97,8 @@ try {
       const expectNone = pt.gps_mode === 'required' ? 'rejected_no_location' : 'accepted'
       if (none.status !== 200 || none.json.scan.outcome !== expectNone) note(`${label} @ ${pt.name}: no GPS expected ${expectNone}, got ${brief(none)}`)
       if (near.status !== 200 || near.json.scan.outcome !== 'accepted') note(`${label} @ ${pt.name}: near fix expected accepted, got ${brief(near)}`)
+      // soft GPS: a phone just outside the circle is accepted (and flagged when clearly outside); only a clearly far one is refused
+      if (edge.status !== 200 || edge.json.scan.outcome !== 'accepted') note(`${label} @ ${pt.name}: fix ~67 m away expected accepted, got ${brief(edge)}`)
       // the demo account's scans must be tagged
       if (prov.is_demo && near.status === 200 && !near.json.scan.flags.includes('demo')) note(`${label} @ ${pt.name}: demo scan not tagged`)
       if (!prov.is_demo && near.status === 200 && near.json.scan.flags.includes('demo')) note(`${label} @ ${pt.name}: non-demo scan tagged demo`)

@@ -171,6 +171,7 @@
 .w-result h1:focus { outline: none; }
 .w-result__body { color: var(--w-text-2); font-size: 1.1875rem; max-width: 22em; }
 .w-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; background: var(--w-surface-2); border: 1px solid var(--w-border); color: var(--w-text); font-weight: 600; }
+.w-who { display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--w-text-2); font-size: 1rem; }
 .w-actions { display: flex; flex-direction: column; gap: 10px; width: 100%; margin-block-start: 12px; }
 
 /* ----- working ----- */
