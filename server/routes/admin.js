@@ -7,7 +7,7 @@ import {
 } from '../http.js'
 import { requireAdmin, guardLogin } from '../auth.js'
 import { verifyGoogleCredential } from '../google.js'
-import { listScans, listAllScans, scanJson, SCAN_CSV_COLUMNS } from '../scans.js'
+import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvRow } from '../scans.js'
 import {
   ADMIN_COOKIE, ADMIN_SESSION_DAYS, PASSWORD_MIN_LENGTH,
 } from '../config.js'
@@ -416,7 +416,7 @@ route('GET', '/admin/scans', async ({ req, query: q }) => {
     // The export is the committee's archive: every matching row, not one page.
     const { scans, truncated } = await listAllScans({ ...q, cursor: undefined })
     return {
-      text: toCsv(scans, SCAN_CSV_COLUMNS),
+      text: toCsv(scans.map(committeeCsvRow), COMMITTEE_CSV_COLUMNS),
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': 'attachment; filename="scans.csv"',

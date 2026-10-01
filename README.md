@@ -60,6 +60,7 @@ npm test                          # שתיהן
 ```
 api/index.js           נקודת הכניסה של Vercel (כל /api/* מנותב אליה ב-vercel.json)
 server/                ה-API: routes/, auth, scans (הכללים), google (אימות), db, migrate
+shared/                קוד שרץ גם בדפדפן וגם בשרת: shared/datetime.js כותב כל תאריך ושעה שאדם רואה, תמיד DD/MM/YYYY ו-HH:MM
 db/migrations/         סכמת ה-DB
 scripts/               מיגרציה, יצירת אדמין, זריעת פיתוח, ייצוא/ייבוא מ-Firestore
 src/worker, src/i18n   אפליקציית נותני השירות

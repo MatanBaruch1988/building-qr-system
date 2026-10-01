@@ -35,6 +35,7 @@ test('signing in checks in at the point, names who signed in, and lists the visi
   await page.getByRole('button', { name: he['checkin.done'] }).click()
   await expect(page.getByRole('heading', { name: /שלום/ })).toContainText('ליאור')
   await expect(page.getByRole('list').getByText('לובי')).toBeVisible()
+  await expect(page.getByRole('list').getByText(/^\d{2}:\d{2}$/)).toBeVisible() // the time of the visit: HH:MM
 })
 
 test('scanning the same point again says it was already recorded', async ({ page }) => {

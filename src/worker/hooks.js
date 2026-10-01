@@ -4,6 +4,7 @@ import { parseQrToken } from '../../server/scanLogic.js' // one definition of "w
 import { safeStorage, readJson } from './storage.js'
 import { getCachedPoint, setCachedPoint, dropCachedPoint } from './pointCache.js'
 import { flushQueue } from './scanQueue.js'
+import { isoDay } from '../../shared/datetime.js'
 
 /** Provider names for the login tiles. Shows the last list instantly and refreshes in the background. */
 export function useProviders() {
@@ -67,7 +68,7 @@ export function usePoint(code) {
   return state
 }
 
-const israelToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date())
+const israelToday = () => isoDay()
 
 /**
  * Today's visits: confirmed ones from the server plus check-ins still waiting on the phone.

@@ -26,5 +26,5 @@ export const SERVICE_TYPES = [
 ]
 export const serviceLabel = (value) => SERVICE_TYPES.find((s) => s.value === value)?.label ?? value ?? ''
 
-const dateTime = new Intl.DateTimeFormat('he-IL', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Jerusalem' })
-export const formatDateTime = (iso) => (iso ? dateTime.format(new Date(iso)) : '-')
+// Every date and time on the committee screens is written by the shared module: DD/MM/YYYY and HH:MM.
+export { formatDateTime } from '../../shared/datetime.js'

@@ -1,4 +1,5 @@
 import { query, tx } from './db.js'
+import { formatDateTime, formatDay } from '../shared/datetime.js'
 import { ApiError, bad, forbidden, notFound, requireUuid, isUuid } from './http.js'
 import { parseQrToken, evaluateGps, resolveClock } from './scanLogic.js'
 import {
@@ -267,3 +268,13 @@ export const SCAN_CSV_COLUMNS = [
   'provider_id', 'provider_name', 'service_type', 'source', 'outcome',
   'distance_m', 'gps_accuracy_m', 'flags', 'voided', 'void_reason',
 ]
+
+// The committee's file is read by people (in Excel): dates are DD/MM/YYYY and times HH:MM, in the building's time, and
+// the UTC instant is left out (the same moment is in checked_in_local). The agent's CSV keeps SCAN_CSV_COLUMNS as they
+// are: a machine reads ISO dates and must not have to guess day-month or month-day.
+export const COMMITTEE_CSV_COLUMNS = SCAN_CSV_COLUMNS.filter((column) => column !== 'checked_in_at')
+export const committeeCsvRow = (scan) => ({
+  ...scan,
+  checked_in_local: formatDateTime(scan.checked_in_at),
+  local_date: formatDay(scan.local_date),
+})

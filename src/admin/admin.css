@@ -130,11 +130,9 @@ select.a-input {
 /* ----- filters + history ----- */
 .a-filters { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items: end; padding: 16px; background: var(--w-surface); border: 1px solid var(--w-border); border-radius: 20px; margin-block-end: 16px; }
 .a-filters > * { min-width: 0; }
-/* A date field must stay inside its column. Safari on iPhone gives it an intrinsic width wider than a half-width column,
-   so two of them overlapped. Stripped of the native sizing it shrinks to fit, shows the date in the device's own
-   left-to-right order (an RTL page jumbled it into "Oct 2026 1") and sits at the end of its cell like the labels. */
-.a-input[type='date'] { -webkit-appearance: none; appearance: none; display: block; width: 100%; min-width: 0; max-width: 100%; min-height: 48px; direction: ltr; text-align: end; }
-.a-input[type='date']::-webkit-date-and-time-value { text-align: end; }
+/* The date fields are text fields that always read DD/MM/YYYY (DateInput in src/admin/ui.jsx): the digits run left to
+   right whatever the page direction, and sit at the end of the field like the labels. They shrink to fit their column. */
+.a-input--date { min-width: 0; direction: ltr; text-align: end; }
 .a-day { font-size: 0.9375rem; font-weight: var(--w-weight-semibold); color: var(--w-text-2); margin-block: 18px 8px; }
 .a-scans { list-style: none; margin: 0; padding: 0; background: var(--w-surface); border: 1px solid var(--w-border); border-radius: 20px; overflow: hidden; }
 .a-scan { display: grid; gap: 4px 14px; grid-template-columns: auto 1fr auto; align-items: center; padding: 12px 16px; border-block-end: 1px solid var(--w-border); }

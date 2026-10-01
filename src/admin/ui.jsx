@@ -3,6 +3,7 @@ import React, {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { IconAlert, IconCheck, IconX } from './icons.jsx'
+import { formatDay, parseDay, maskDay } from '../../shared/datetime.js'
 
 const appRoot = () => document.querySelector('.a-app') ?? document.body // portals must stay inside .a-app (design tokens)
 
@@ -23,6 +24,36 @@ export function IconButton({ icon: Icon, label, onClick, tone = 'default', size 
     return <a className={className} href={href} download={download} aria-label={label} title={label} {...rest}>{icon}</a>
   }
   return <button type="button" className={className} onClick={onClick} disabled={disabled} aria-label={label} title={label} {...rest}>{icon}</button>
+}
+
+/* ------------------------------------------------------------ date field */
+
+/**
+ * A date field that always reads DD/MM/YYYY, whatever the phone's region is (the browser's own date field shows the
+ * device's format, and on some phones it is month first). The person types the digits and the slashes come by
+ * themselves. `value` and `onChange` use 'YYYY-MM-DD', what the API takes: onChange is called only with a real date, or
+ * with '' when the field is emptied, never with half a date typed digit by digit.
+ */
+export function DateInput({ value, onChange, 'aria-invalid': invalid, ...rest }) {
+  const [text, setText] = useState(() => (value ? formatDay(value) : ''))
+  // The value can also change from outside (a reset): then the field follows it.
+  useEffect(() => {
+    if (parseDay(text) !== (value || null)) setText(value ? formatDay(value) : '')
+  }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
+  const change = (event) => {
+    const next = maskDay(event.target.value)
+    setText(next)
+    if (next === '') onChange('')
+    else if (parseDay(next)) onChange(parseDay(next))
+  }
+  const unfinished = text.length === 10 && !parseDay(text) // 10 characters, and still not a real date: 31/02/2026
+  return (
+    <input
+      className="a-input a-input--date" type="text" inputMode="numeric" autoComplete="off" spellCheck="false"
+      placeholder="DD/MM/YYYY" maxLength={10} dir="ltr"
+      {...rest} value={text} onChange={change} aria-invalid={invalid || unfinished ? true : undefined}
+    />
+  )
 }
 
 /* ---------------------------------------------------------------- modal */

@@ -195,6 +195,25 @@ describe('CSV exports', () => {
     expect(csv.headers['x-truncated']).toBeUndefined()
   })
 
+  it('the committee file is written for people (DD/MM/YYYY, HH:MM), the agent file for machines (ISO)', async () => {
+    const p = await point({ name: 'dates-point' })
+    // 05:12 UTC on 30 September is 08:12 in Israel (summer time)
+    await db.pool.query(
+      `insert into scans (id, point_id, provider_id, point_name, provider_name, checked_in_at, local_date, source, outcome, flags)
+       values (gen_random_uuid(), $1, $2, 'dates-point', 'x', '2026-09-30T05:12:00Z', '2026-09-30', 'online', 'accepted', '{}')`,
+      [p.id, provider.id],
+    )
+    const people = (await call('GET', `/api/admin/scans?point_id=${p.id}&format=csv`, { cookie })).text.replace('\ufeff', '').split('\r\n')
+    expect(people[0].split(',').slice(0, 3)).toEqual(['id', 'checked_in_local', 'local_date']) // no UTC column
+    expect(people[1]).toContain(',30/09/2026 08:12,30/09/2026,')
+    expect(people[1]).not.toMatch(/2026-09-30|T05:12|:00Z/)
+
+    const key = (await call('POST', '/api/admin/api-keys', { cookie, body: { name: 'csv-dates' } })).json.key
+    const machine = (await call('GET', `/api/agent/v1/scans?point_id=${p.id}&format=csv`, { token: key })).text.split('\r\n')
+    expect(machine[0].split(',').slice(0, 4)).toEqual(['id', 'checked_in_at', 'checked_in_local', 'local_date'])
+    expect(machine[1]).toContain(',2026-09-30T05:12:00.000Z,2026-09-30 08:12:00,2026-09-30,')
+  })
+
   it('cells a spreadsheet would run as formulas are defused', async () => {
     const names = ['=HYPERLINK("http://evil.example","click")', '+1+1', '@SUM(A1)', '-2+3', 'plain']
     for (const name of names) {

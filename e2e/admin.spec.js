@@ -286,3 +286,97 @@ test('the provider form and card have no language: each person chooses theirs on
   await expect(dialog.getByText('שפת הממשק')).toHaveCount(0)
   await expect(dialog.getByRole('option', { name: 'Русский' })).toHaveCount(0)
 })
+
+// ---- dates and times: DD/MM/YYYY and HH:MM everywhere ---------------------------------------------------------------
+
+test.describe('dates on the committee screens', () => {
+  // An English device: the browser's own date field would show month first here. Ours reads DD/MM/YYYY anyway.
+  test.use({ locale: 'en-US' })
+
+  const DAY = /^\d{2}\/\d{2}\/\d{4}$/
+  const DAY_TIME = /^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/
+  // what must never be on a screen: a day with a month name ("1 באוק׳", not a word that happens to contain one), a weekday,
+  // an ISO date, a 12-hour clock
+  const OTHER_FORMATS = /\d{1,2}\s*ב?(ינו|פבר|מרץ|אפר|מאי|יוני|יולי|אוג|ספט|אוק|נוב|דצמ)|יום (ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת)|\d{4}-\d{2}-\d{2}|\b[AP]M\b/i
+
+  test('every date and time is DD/MM/YYYY and HH:MM, and the date fields read the same on an English device', async ({ page, playwright }) => {
+    await adminSignIn(page)
+    const tag = randomUUID().slice(0, 6)
+    const key = (await (await page.request.post('/api/admin/api-keys', { data: { name: `מפתח ${tag}` } })).json()).api_key
+    // Lior makes a visit, so there is a "last visit" for him and a row in the history
+    const phone = await playwright.request.newContext({ baseURL: page.url().split('/admin')[0] })
+    try {
+      const providers = (await (await phone.get('/api/public/providers')).json()).providers
+      const lior = providers.find((p) => p.contact_name === PEOPLE.lior.name)
+      const session = await (await phone.post('/api/session', { data: { provider_id: lior.id, password: PEOPLE.lior.password } })).json()
+      const visit = await phone.post('/api/scan', { headers: { authorization: `Bearer ${session.token}` }, data: { id: randomUUID(), code: POINTS.basement, gps: null } })
+      expect((await visit.json()).scan.outcome).toBe('accepted')
+
+      const noOtherFormat = async (what) => {
+        const text = await page.getByRole('main').innerText()
+        expect(text, `${what}: another way of writing a date`).not.toMatch(OTHER_FORMATS)
+      }
+
+      // providers: the last visit
+      await page.goto('/admin#providers')
+      await loaded(page, 'נותני שירות')
+      const liorCard = page.getByRole('article').filter({ hasText: PEOPLE.lior.name })
+      await expect(liorCard.locator('dd').nth(0)).toHaveText(DAY_TIME) // "last visit"
+      await noOtherFormat('providers')
+
+      // committee: the last sign-in of the member who is signed in now
+      await page.goto('/admin#committee')
+      await loaded(page, 'חברי הוועד')
+      await expect(page.getByRole('article').first().locator('dd').first()).toHaveText(DAY_TIME)
+      await noOtherFormat('committee')
+
+      // agent keys: created
+      await page.goto('/admin#agent')
+      await loaded(page, "גישה לאייג'נט")
+      const keyCard = page.getByRole('article').filter({ hasText: `מפתח ${tag}` })
+      await expect(keyCard.locator('dd').nth(1)).toHaveText(DAY_TIME) // "created"
+      await noOtherFormat('agent keys')
+
+      // history: the two date fields, the heading of the day, the time of the visit, and the confirmation
+      await page.goto('/admin#history')
+      await loaded(page, 'היסטוריית נוכחות')
+      const from = page.getByLabel('מתאריך')
+      const to = page.getByLabel('עד תאריך')
+      await expect(from).toHaveValue(DAY)
+      await expect(to).toHaveValue(DAY)
+      await expect(page.getByRole('heading', { level: 2 }).filter({ hasText: /\d{2}\/\d{2}\/\d{4}/ }).first()).toHaveText(/^\d{2}\/\d{2}\/\d{4} · \d+$/)
+      const row = page.getByRole('listitem').filter({ hasText: 'מינוס 1' }).first()
+      await expect(row).toContainText(/\b\d{2}:\d{2}\b/)
+      await row.getByRole('button', { name: 'מחיקת הנוכחות לצמיתות' }).click()
+      await expect(page.getByRole('dialog')).toContainText(/\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}/)
+      await page.getByRole('dialog').getByRole('button', { name: 'סגירה' }).click() // close without deleting
+      await noOtherFormat('history')
+
+      // typing a date: the slashes come by themselves, and half a date does not change the list
+      await from.fill('')
+      await from.pressSequentially('01012026')
+      await expect(from).toHaveValue('01/01/2026')
+      await to.fill('')
+      await to.pressSequentially('3102')
+      await expect(to).toHaveValue('31/02')
+      await to.pressSequentially('2026')
+      await expect(to).toHaveValue('31/02/2026')
+      await expect(to).toHaveAttribute('aria-invalid', 'true') // there is no 31 February
+      await to.fill('')
+      await to.pressSequentially('15112026')
+      await expect(to).toHaveValue('15/11/2026')
+      await expect(to).not.toHaveAttribute('aria-invalid', 'true')
+    } finally {
+      await phone.dispose()
+      await page.request.delete(`/api/admin/api-keys/${key.id}`)
+    }
+  })
+
+  test('the committee file has DD/MM/YYYY dates and no UTC column', async ({ page }) => {
+    await adminSignIn(page)
+    const csv = await (await page.request.get('/api/admin/scans?format=csv&outcome=all&include_voided=true')).text()
+    const lines = csv.replace('\ufeff', '').trim().split('\r\n')
+    expect(lines[0].split(',').slice(0, 3)).toEqual(['id', 'checked_in_local', 'local_date'])
+    for (const line of lines.slice(1)) expect(line).toMatch(/,\d{2}\/\d{2}\/\d{4} \d{2}:\d{2},\d{2}\/\d{2}\/\d{4},/)
+  })
+})
