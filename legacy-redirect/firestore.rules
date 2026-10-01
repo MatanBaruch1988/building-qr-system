@@ -1,0 +1,12 @@
+rules_version = '2';
+
+// The old attendance app is retired: the data now lives in Postgres and nothing reads Firestore any more.
+// Everything is locked. The one-time export (service account) is not affected by rules, and the data stays
+// here untouched as a backup until the Firebase project is deleted.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

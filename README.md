@@ -40,19 +40,15 @@ npm test                          # כל הבדיקות (הבדיקות יוצר
 4. העתיקו את ה-Client ID אל `GOOGLE_CLIENT_ID` ב-Vercel (Production) וב-`.env.local`.
 5. הוסיפו את חבר הוועד הראשון: `npm run db:create-admin -- you@gmail.com "השם שלכם"`. את האחרים מוסיפים ממסך "ועד".
 
-## מעבר מהמערכת הישנה (Firebase) — צ'קליסט
+## המעבר מהמערכת הישנה (Firebase) — בוצע
 
-1. גיבוי טרי: `npm run db:export-firestore -- ../backups/firestore-<date>`
-2. ייבוא, קודם ניסוי בלי כתיבה ואז אמיתי:
-   `npm run db:import-firestore -- ../backups/firestore-<date>` ואחר כך עם `--apply`.
-   הייבוא שומר את קודי ה-QR המודפסים כפי שהם. **סיסמאות לא עוברות** (הישנות היו SHA-256 בלי מלח): הגדירו סיסמה חדשה לכל ספק במסך "נותני שירות".
-3. `npm run db:migrate` מול המסד האמיתי.
-4. משתני סביבה ב-Vercel: `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `APP_BASE_URL` (הכתובת הציבורית, בלי `/` בסוף).
-5. הפריסה עצמה (`vercel --prod` או Redeploy בדשבורד). אחרי הפריסה מחקו מ-Vercel את `FIREBASE_SERVICE_ACCOUNT_KEY` ואת משתני `VITE_FIREBASE_*`.
-6. ה-QR שכבר מודפסים מצביעים על `building-qr-system.web.app`. כדי שימשיכו לעבוד, פרסו את אתר ההפניה הקטן:
-   `cd legacy-redirect && firebase deploy --only hosting` (אם יש דומיין אחר, עדכנו `NEW_ORIGIN` ב-`legacy-redirect/public/index.html`).
-7. סרקו QR מודפס אחד בטלפון אמיתי וודאו שהוא נפתח ומתעד נוכחות.
-8. השאירו את Firestore לקריאה בלבד כגיבוי כ-30 יום, ואז אפשר למחוק את הפרויקט ב-Firebase.
+המעבר הושלם ב-1.10.2026. מה נשאר ממנו:
+
+- **הנתונים** יובאו ל-Postgres (`npm run db:import-firestore -- <תיקיית יצוא>`, ניסוי בלי כתיבה ואז עם `--apply`). קודי ה-QR המודפסים נשמרו כפי שהם. **סיסמאות לא עברו** (הישנות היו SHA-256 בלי מלח), ולכן הוגדרו סיסמאות חדשות במסך "נותני שירות".
+- **הגיבוי** של Firestore (קבצי JSON) שמור מחוץ ל-git, בתיקייה `../backups/firestore-2026-10-01`. סקריפט היצוא וההתלות שלו הוסרו.
+- **ה-QR שכבר מודפסים** מצביעים על `building-qr-system.web.app`. אתר ההפניה הקטן ב-`legacy-redirect/` מעביר אותם לכתובת החדשה (ומנקה את ה-PWA הישנה מהטלפונים). אם הכתובת הציבורית משתנה, עדכנו `NEW_ORIGIN` ב-`legacy-redirect/public/index.html` ופרסו מחדש: `cd legacy-redirect && firebase deploy --only hosting`.
+- **Firestore נעול** (`legacy-redirect/firestore.rules`: אסור הכול) והנתונים הישנים נשארים בו כגיבוי. כשמחליטים שהגיבוי מיותר אפשר למחוק את הפרויקט ב-Firebase, אחרי שה-QR המודפסים הוחלפו או שאתר ההפניה כבר לא נחוץ.
+- **משתני Vercel** של Firebase נמחקו.
 
 ## מבנה
 
