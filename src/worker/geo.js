@@ -16,7 +16,8 @@ const ask = (options, watchdogMs) =>
       resolve(value)
     }
     navigator.geolocation.getCurrentPosition(
-      (p) => done({ fix: { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy } }),
+      // age_s: how old the reading is. A remembered position (maximumAge) is where the phone WAS, not where it is.
+      (p) => done({ fix: { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy, age_s: Math.max(0, Math.round((Date.now() - p.timestamp) / 1000)) } }),
       (e) => done({ reason: e.code === 1 ? 'denied' : e.code === 3 ? 'timeout' : 'unavailable' }),
       options,
     )
@@ -25,7 +26,7 @@ const ask = (options, watchdogMs) =>
 /**
  * 1) Accept a position up to 5 minutes old: people usually arrive from outside, where GPS worked,
  *    so this is instant and works indoors. 2) If that is too vague, try once for a fresh fix.
- * Returns { fix, reason } where fix is {lat, lng, accuracy} or null.
+ * Returns { fix, reason } where fix is {lat, lng, accuracy, age_s} or null.
  */
 export async function getFix({ quickMs = 4000, preciseMs = 3000, maxAgeMs = 5 * 60_000 } = {}) {
   const quick = await ask({ enableHighAccuracy: false, timeout: quickMs, maximumAge: maxAgeMs }, quickMs + 2500)

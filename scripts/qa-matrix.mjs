@@ -27,6 +27,13 @@ try {
     await db.pool.query('insert into points select * from public.points')
     await db.pool.query('insert into point_providers select * from public.point_providers')
     console.log('using the live points, providers and assignments (copied into a scratch schema)')
+    // --gps=optional|required|none: judge how every point would behave in that mode (the scratch copy only)
+    const forced = args.find((a) => a.startsWith('--gps='))?.slice(6)
+    if (forced) {
+      if (!['required', 'optional', 'none'].includes(forced)) throw new Error(`--gps must be required, optional or none, not ${forced}`)
+      await db.pool.query('update points set gps_mode = $1', [forced])
+      console.log(`every point forced to gps_mode '${forced}' in the scratch copy`)
+    }
   } else {
     const c = await db.pool.connect()
     await c.query('begin')
@@ -101,8 +108,8 @@ try {
       if (near.status !== 200 || near.json.scan.outcome !== 'accepted') note(`${label} @ ${pt.name}: near fix expected accepted, got ${brief(near)}`)
       // just outside a 50 m circle (67 m, +/-16 m): inside the tolerance everywhere
       if (edge.status !== 200 || edge.json.scan.outcome !== 'accepted') note(`${label} @ ${pt.name}: fix ~67 m away expected accepted, got ${brief(edge)}`)
-      // 120 m at a good fix: 'required' points refuse it (circle + 15 m); 'optional'/'none' are lenient by design
-      const expectOut120 = pt.gps_mode === 'required' && Number(pt.radius_m) + 15 < 110 ? 'rejected_far' : 'accepted'
+      // 120 m at a good fix: every judged point ('required' and 'optional') refuses it (circle + 15 m); 'none' is never judged
+      const expectOut120 = pt.gps_mode !== 'none' && Number(pt.radius_m) + 15 < 110 ? 'rejected_far' : 'accepted'
       if (out120.status !== 200 || out120.json.scan.outcome !== expectOut120) note(`${label} @ ${pt.name}: fix ~120 m away expected ${expectOut120}, got ${brief(out120)}`)
       // the demo account's scans must be tagged
       if (prov.is_demo && near.status === 200 && !near.json.scan.flags.includes('demo')) note(`${label} @ ${pt.name}: demo scan not tagged`)

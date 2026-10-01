@@ -38,11 +38,6 @@ describe('evaluateGps (soft GPS)', () => {
     expect(r.distance_m).toBeLessThan(20)
     expect(r.gps_accuracy_m).toBe(15)
   })
-  it('flags but accepts a fix a bit outside the radius', () => {
-    const r = evaluateGps({ mode: 'optional', point, gps: { ...at(150), accuracy: 10 } })
-    expect(r.outcome).toBe('accepted')
-    expect(r.flags).toEqual(['location_outside_radius'])
-  })
   it('rejects a usable fix that is clearly far away (scan from home)', () => {
     const r = evaluateGps({ mode: 'optional', point, gps: { ...at(5000), accuracy: 20 } })
     expect(r.outcome).toBe('rejected_far')
@@ -64,39 +59,71 @@ describe('evaluateGps (soft GPS)', () => {
     expect(evaluateGps({ mode: 'required', point, gps: { ...at(5), accuracy: 900 } }).outcome).toBe('rejected_no_location')
     expect(evaluateGps({ mode: 'required', point, gps: { ...at(5), accuracy: 10 } }).outcome).toBe('accepted')
   })
-  describe("'required' points are strict: the circle + 15 m, crediting the phone's own inaccuracy (up to 50 m)", () => {
-    const req = (metersAway, accuracy) => evaluateGps({ mode: 'required', point, gps: { ...at(metersAway), accuracy } })
+  // 'required' and 'optional' judge a usable fix identically; they differ only when there is none (tests above).
+  describe.each(['required', 'optional'])("%s points are strict about a usable fix: the circle + 15 m, crediting the phone's own inaccuracy (up to 50 m)", (mode) => {
+    const judge = (metersAway, accuracy) => evaluateGps({ mode, point, gps: { ...at(metersAway), accuracy } })
     it('accepts inside the circle without a flag', () => {
-      const r = req(40, 10)
+      const r = judge(40, 10)
       expect(r.outcome).toBe('accepted')
       expect(r.flags).toEqual([])
     })
     it('accepts just outside the circle (inside the 15 m pin tolerance) but flags it', () => {
       // 60 m away at 5 m accuracy: 55 m after credit, 5 m outside a 50 m circle
-      const r = req(60, 5)
+      const r = judge(60, 5)
       expect(r.outcome).toBe('accepted')
       expect(r.flags).toEqual(['location_outside_radius'])
     })
     it('refuses beyond circle + 15 m: 100 m away at a good fix is not "near the point"', () => {
-      const r = req(100, 10)
+      const r = judge(100, 10)
       expect(r.outcome).toBe('rejected_far')
       expect(r.distance_m).toBeGreaterThan(95)
     })
+    it('no longer accepts a fix a few hundred metres away (the old 250 m margin is gone)', () => {
+      expect(judge(150, 10).outcome).toBe('rejected_far')
+      expect(judge(300, 10).outcome).toBe('rejected_far')
+    })
     it("credits the phone's own inaccuracy, so an honest weak reading is not punished", () => {
-      expect(req(100, 40).outcome).toBe('accepted') // 100 - 40 = 60 <= 50 + 15
+      expect(judge(100, 40).outcome).toBe('accepted') // 100 - 40 = 60 <= 50 + 15
     })
     it('but only up to 50 m: a very vague reading cannot stretch the circle', () => {
-      expect(req(200, 140).outcome).toBe('rejected_far') // credit capped at 50: 150 > 65
-      expect(req(110, 50).outcome).toBe('accepted') // 60 <= 65
-      expect(req(120, 50).outcome).toBe('rejected_far') // 70 > 65
+      expect(judge(200, 140).outcome).toBe('rejected_far') // credit capped at 50: 150 > 65
+      expect(judge(110, 50).outcome).toBe('accepted') // 60 <= 65
+      expect(judge(120, 50).outcome).toBe('rejected_far') // 70 > 65
     })
-    it("still refuses when there is no usable fix (unchanged)", () => {
-      expect(evaluateGps({ mode: 'required', point, gps: null }).outcome).toBe('rejected_no_location')
+  })
+  describe('a remembered position is where the phone WAS', () => {
+    const remembered = (mode, metersAway, accuracy, age_s) => evaluateGps({ mode, point, gps: { ...at(metersAway), accuracy, age_s } })
+    it('a fresh reading (or one under a minute old) is judged as is, with no flag', () => {
+      expect(remembered('optional', 40, 10, 5).flags).toEqual([])
+      expect(remembered('optional', 100, 10, 30).outcome).toBe('rejected_far')
     })
-    it("leaves 'optional' points as they were: only clearly distant fixes are refused", () => {
-      expect(evaluateGps({ mode: 'optional', point, gps: { ...at(100), accuracy: 10 } }).outcome).toBe('accepted')
-      expect(evaluateGps({ mode: 'optional', point, gps: { ...at(400), accuracy: 10 } }).outcome).toBe('rejected_far')
+    it("'optional': an honest walk since the reading is allowed for (2 m/s) and the reading is flagged", () => {
+      // from the lobby 4 minutes ago: 300 m away then, 240 s * 2 m/s = 480 m of room
+      const r = remembered('optional', 300, 10, 240)
+      expect(r.outcome).toBe('accepted')
+      expect(r.flags).toEqual(['location_stale'])
     })
+    it("'optional': but not a reading from kilometres away, however old", () => {
+      expect(remembered('optional', 5000, 10, 240).outcome).toBe('rejected_far')
+      expect(remembered('optional', 5000, 10, 86_400).outcome).toBe('rejected_far') // the room is capped at 5 minutes of walking
+    })
+    it("'required' points get no such room: they ask for a fresh reading", () => {
+      expect(remembered('required', 300, 10, 240).outcome).toBe('rejected_far')
+      const near = remembered('required', 30, 10, 240) // still flagged when it is near
+      expect(near.outcome).toBe('accepted')
+      expect(near.flags).toEqual(['location_stale'])
+    })
+    it('a missing or nonsense age means "fresh"', () => {
+      for (const age_s of [undefined, null, NaN, 'x', -5]) expect(remembered('optional', 300, 10, age_s).outcome).toBe('rejected_far')
+    })
+  })
+  it("the two modes differ only when the phone cannot say where it is", () => {
+    for (const gps of [null, { ...at(5), accuracy: 900 }]) {
+      expect(evaluateGps({ mode: 'required', point, gps }).outcome).toBe('rejected_no_location')
+      const optional = evaluateGps({ mode: 'optional', point, gps })
+      expect(optional.outcome).toBe('accepted')
+      expect(optional.flags).toEqual(['location_unverified'])
+    }
   })
   it("never judges 'none' points but still records the evidence", () => {
     const r = evaluateGps({ mode: 'none', point, gps: { ...at(5000), accuracy: 10 } })

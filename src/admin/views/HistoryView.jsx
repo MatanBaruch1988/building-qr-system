@@ -14,6 +14,7 @@ const dayLabel = (ymd) =>
 const FLAGS = {
   location_unverified: { label: 'מיקום לא מאומת', tone: 'warn' },
   location_outside_radius: { label: 'מחוץ לרדיוס', tone: 'warn' },
+  location_stale: { label: 'מיקום ישן', tone: 'warn' },
   offline_sync: { label: 'נשלח אחרי חוסר קליטה', tone: 'info' },
   clock_skew: { label: 'שעון הטלפון לא תקין', tone: 'warn' },
   demo: { label: 'דמו', tone: 'neutral' },

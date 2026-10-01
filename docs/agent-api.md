@@ -56,13 +56,16 @@ curl -H "Authorization: Bearer $KEY" \
 - `outcome: accepted` is a real check-in. `rejected_far` / `rejected_no_location` are refused attempts, kept for the record.
 - **Flags are signals, not verdicts.** Report them, weigh them, but do not treat one as proof of anything:
   - `location_unverified`: no usable GPS fix. Normal in basements and stairwells.
-  - `location_outside_radius`: a good fix slightly outside the point's radius (on `required` points, within the 15 m pin tolerance).
+  - `location_outside_radius`: a good fix slightly outside the point's radius (within the 15 m pin tolerance).
+  - `location_stale`: the phone used a position it remembered (older than a minute), typically from just outside the building.
   - `offline_sync`: scanned without signal, uploaded later (`checked_in_at` is the phone's time).
   - `clock_skew`: the phone's clock was off by more than 5 minutes.
   - `demo`: the demo account (hidden unless `include_demo=true`).
 - The same provider at the same point within 10 minutes is stored once.
 - Nothing is deleted. A committee member can void a scan (hidden unless `include_voided=true`).
-- Points can be `required`, `optional` or `none` for GPS (`gps_mode` in `/points`): `none` points are never judged by location.
+- Points can be `required`, `optional` or `none` for GPS (`gps_mode` in `/points`). A usable fix is judged the same way on
+  `required` and `optional` points (inside the radius + 15 m, crediting the phone's own accuracy up to 50 m). They differ only
+  when there is no usable fix: `required` refuses the scan, `optional` accepts it with `location_unverified`. `none` points are never judged.
 - Patterns worth looking for are yours to define, for example: missing visits on expected days, the same phone used by
   two providers, two distant points minutes apart, or a run of `location_unverified` at a point that usually has GPS.
 
