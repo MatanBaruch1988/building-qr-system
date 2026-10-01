@@ -12,6 +12,9 @@ L.Icon.Default.mergeOptions({
 
 const FALLBACK_CENTER = [32.0853, 34.7818]
 
+// The check-in circle is drawn by Leaflet, not CSS: take its colour from the theme's focus colour.
+const ringColor = (el) => (el && getComputedStyle(el).getPropertyValue('--w-focus').trim()) || '#7cc0ff'
+
 /**
  * Click the map to place a point. The map is created once and updated in place: (unlike the old version)
  * typing in a coordinate field no longer snaps the view back or cancels the user's panning.
@@ -35,9 +38,13 @@ export default function MapPicker({ lat, lng, radius, onPick, hint }) {
     }).addTo(map)
     map.on('click', (e) => pick.current({ lat: e.latlng.lat, lng: e.latlng.lng }))
     state.current = { map, marker: null, circle: null }
+    // Switching light/dark while the map is open: recolour the circle.
+    const recolour = () => state.current.circle?.setStyle({ color: ringColor(box.current) })
+    window.addEventListener('qr-theme-change', recolour)
     // The dialog is still animating in when this runs: recompute the map size afterwards.
     const t = setTimeout(() => map.invalidateSize(), 120)
     return () => {
+      window.removeEventListener('qr-theme-change', recolour)
       clearTimeout(t)
       map.remove()
       state.current = {}
@@ -60,7 +67,7 @@ export default function MapPicker({ lat, lng, radius, onPick, hint }) {
     else state.current.marker = L.marker(at).addTo(map)
     const r = Number.isFinite(radius) ? radius : 50
     if (state.current.circle) state.current.circle.setLatLng(at).setRadius(r)
-    else state.current.circle = L.circle(at, { radius: r, color: '#7cc0ff', weight: 2, fillOpacity: 0.12 }).addTo(map)
+    else state.current.circle = L.circle(at, { radius: r, color: ringColor(box.current), weight: 2, fillOpacity: 0.12 }).addTo(map)
     if (!map.getBounds().contains(at)) map.setView(at) // only recentre when the point left the view
   }, [lat, lng, radius])
 

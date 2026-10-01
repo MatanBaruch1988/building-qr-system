@@ -1,5 +1,10 @@
 /* Page-level basics shared by both apps. Everything else is scoped in ui.css / admin.css. */
+/* One typeface for everything (Heebo, bundled in main.jsx). Hierarchy comes from weight alone, in four named steps:
+   regular = body text; medium = labels, links, navigation; semibold = titles, names, buttons, chips; bold = headings, times. */
+:root { --w-weight-regular: 400; --w-weight-medium: 500; --w-weight-semibold: 600; --w-weight-bold: 700; }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 html, body { margin: 0; padding: 0; background: #0b0b0d; }
-body { font-family: 'Rubik Variable', system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+/* The light page background (the same value as --w-bg in ui.css, which is scoped to the two app roots). */
+html[data-theme='light'], html[data-theme='light'] body { background: #f4f5f7; }
+body { font-family: 'Heebo Variable', system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
 #root { min-height: 100vh; min-height: 100dvh; }

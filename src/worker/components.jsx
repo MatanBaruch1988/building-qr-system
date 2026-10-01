@@ -4,6 +4,7 @@ import { api } from '../api/client.js'
 import { applyUpdate, isUpdateReady, subscribeUpdate } from './update.js'
 import { errorMessageKey, isKnownError } from './errors.js'
 import { providerLabel } from './checkIn.js'
+import ThemeSwitch from '../ui/ThemeSwitch.jsx'
 import {
   IconAlert, IconChevron, IconCheck, IconCloudOff, IconEye, IconEyeOff, IconGlobe, IconInfo, IconLock, IconPin,
   IconPinOff, IconQr, IconRefresh, IconSend, IconUser, IconX,
@@ -24,18 +25,22 @@ export function AdminLink() {
 
 export function TopBar() {
   const { t, lang, setLang, langs } = useI18n()
+  const themeLabels = { label: t('theme.label'), system: t('theme.system'), light: t('theme.light'), dark: t('theme.dark') }
   return (
     <header className="w-topbar">
       <p className="w-brand">{t('app.name')}</p>
-      <label className="w-lang">
-        <span className="w-sr">{t('lang.label')}</span>
-        <IconGlobe size={20} />
-        <select value={lang} onChange={(e) => setLang(e.target.value)}>
-          {langs.map((l) => (
-            <option key={l.code} value={l.code} lang={l.code}>{l.label}</option>
-          ))}
-        </select>
-      </label>
+      <div className="w-topbar__tools">
+        <ThemeSwitch labels={themeLabels} />
+        <label className="w-lang">
+          <span className="w-sr">{t('lang.label')}</span>
+          <IconGlobe size={20} />
+          <select value={lang} onChange={(e) => setLang(e.target.value)}>
+            {langs.map((l) => (
+              <option key={l.code} value={l.code} lang={l.code}>{l.label}</option>
+            ))}
+          </select>
+        </label>
+      </div>
     </header>
   )
 }

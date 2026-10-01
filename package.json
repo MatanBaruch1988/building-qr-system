@@ -15,7 +15,7 @@
     "db:import-firestore": "node scripts/import-firestore.mjs"
   },
   "dependencies": {
-    "@fontsource-variable/rubik": "^5.3.0",
+    "@fontsource-variable/heebo": "^5.3.0",
     "jose": "^6.2.12",
     "leaflet": "^1.9.4",
     "pg": "^8.23.0",

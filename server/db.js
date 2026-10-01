@@ -19,7 +19,7 @@ export function poolConfig(connectionString, schema) {
     max: 3,
     idleTimeoutMillis: 10_000,
     // Fail instead of queueing every request behind one hung connection, but leave room for a Neon
-    // compute that is waking from sleep (a few seconds) — Vercel gives the function 30 s.
+    // compute that is waking from sleep (a few seconds); Vercel gives the function 30 s.
     connectionTimeoutMillis: 10_000,
     statement_timeout: 15_000,
     idle_in_transaction_session_timeout: 20_000,

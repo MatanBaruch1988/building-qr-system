@@ -51,6 +51,10 @@ export default {
   'checkin.done': 'Done',
   'checkin.retry': 'Try again',
   'checkin.asUser': 'Signed in as {name}',
+  'theme.label': 'Appearance',
+  'theme.system': 'Match device',
+  'theme.light': 'Light',
+  'theme.dark': 'Dark',
 
   'error.invalid_code': 'This QR code does not belong to this system.',
   'error.unknown_code': 'QR code not recognised. It may have been replaced. Contact the building committee.',
