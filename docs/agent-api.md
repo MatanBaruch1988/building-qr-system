@@ -4,7 +4,7 @@ Building attendance log: one row per QR scan by a service provider (cleaning com
 The app records facts and signals only. It never analyses, scores or judges: that is your job.
 
 - **Base URL:** `https://<your-domain>/api/agent/v1` (the committee sees the exact address in the admin screen, tab "אייג׳נט")
-- **Auth:** `Authorization: Bearer qrk_…` — a key the committee creates and can revoke at any time. Read-only.
+- **Auth:** `Authorization: Bearer qrk_…`, a key the committee creates and can revoke at any time. Read-only.
 - **Self-description:** `GET /schema` returns this contract as JSON. Read it first.
 - **Ready-made system prompt for the committee's agent (Hebrew):** [`agent-prompt.md`](agent-prompt.md).
 - **Time:** all human-readable times are Israel time. `checked_in_at` is UTC ISO, `checked_in_local` is

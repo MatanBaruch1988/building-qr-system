@@ -34,4 +34,4 @@ export const LANG_OPTIONS = [
 ]
 
 const dateTime = new Intl.DateTimeFormat('he-IL', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Jerusalem' })
-export const formatDateTime = (iso) => (iso ? dateTime.format(new Date(iso)) : '—')
+export const formatDateTime = (iso) => (iso ? dateTime.format(new Date(iso)) : '-')

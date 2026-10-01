@@ -1,10 +1,13 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
-import '@fontsource-variable/rubik' // Hebrew, Arabic, Cyrillic and Latin, bundled: no external request, works offline
+import '@fontsource-variable/heebo' // the one typeface (Hebrew + Latin), variable weight, bundled: no external request, works offline
 import App from './App.jsx'
 import { setUpdater, markUpdateReady } from './worker/update.js'
 import './ui/base.css'
+import { initTheme } from './ui/theme.js'
+
+initTheme() // light / dark: the person's choice, else the device's setting
 
 // Offline support. A new version is downloaded in the background and announced in the UI (HomeView and the
 // committee shell show an "update" button); it is applied only when the person taps it, never mid check-in.

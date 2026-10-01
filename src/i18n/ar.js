@@ -51,6 +51,10 @@ export default {
   'checkin.done': 'تم',
   'checkin.retry': 'حاول مرة أخرى',
   'checkin.asUser': 'المستخدم: {name}',
+  'theme.label': 'المظهر',
+  'theme.system': 'حسب الجهاز',
+  'theme.light': 'فاتح',
+  'theme.dark': 'داكن',
 
   'error.invalid_code': 'رمز QR هذا لا يتبع النظام.',
   'error.unknown_code': 'رمز QR غير معروف. ربما تم استبداله. تواصل مع لجنة البناية.',

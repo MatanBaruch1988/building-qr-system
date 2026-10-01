@@ -1,7 +1,7 @@
 # Security & Bug Fixes Design
 
 ## Purpose
-Fix all 26 issues found in the full project code review (5 critical, 8 major, 13 minor). The project currently has no real security — Firestore rules allow unauthenticated read/write, worker PINs are in plaintext, and auth is client-side only.
+Fix all 26 issues found in the full project code review (5 critical, 8 major, 13 minor). The project currently has no real security, Firestore rules allow unauthenticated read/write, worker PINs are in plaintext, and auth is client-side only.
 
 ## Users
 - **Admins**: Building managers using Google Sign-in (existing)
@@ -15,7 +15,7 @@ Fix all 26 issues found in the full project code review (5 critical, 8 major, 13
 - [ ] Cloud Functions require authentication
 - [ ] All 5 critical, 8 major, and 13 minor issues resolved
 - [ ] Existing worker UX preserved (simple PIN entry, offline support)
-- [ ] No new features added — fixes only
+- [ ] No new features added: fixes only
 
 ## Constraints
 - Must maintain offline-first PWA behavior
@@ -95,40 +95,40 @@ failedScans:
 ## Components
 
 ### New Cloud Functions
-1. `validateWorkerPIN(workerId, pin)` — validates PIN, returns custom token
-2. `setAdminClaim(uid)` — sets admin custom claim (callable by existing admin only)
-3. `hashWorkerPIN(workerId, pin)` — used by admin when creating/updating workers
+1. `validateWorkerPIN(workerId, pin)`: validates PIN, returns custom token
+2. `setAdminClaim(uid)`: sets admin custom claim (callable by existing admin only)
+3. `hashWorkerPIN(workerId, pin)`: used by admin when creating/updating workers
 
 ### Modified Files
 
-**Phase 1 — Auth & Security:**
-- `firestore.rules` — complete rewrite with auth requirements
-- `functions/index.js` — add validateWorkerPIN, setAdminClaim, hashWorkerPIN
-- `src/hooks/useWorkerAuth.js` — Anonymous Auth + custom token flow
-- `src/hooks/useAdminAuth.js` — remove hardcoded email, use admin claim
-- `src/components/WorkerLogin.jsx` — call Cloud Function instead of client-side check
-- `src/components/WorkerManagement.jsx` — hash PINs on create/edit
-- `src/services/firebase.js` — ensure anonymous auth provider enabled
+**Phase 1, Auth & Security:**
+- `firestore.rules`: complete rewrite with auth requirements
+- `functions/index.js`: add validateWorkerPIN, setAdminClaim, hashWorkerPIN
+- `src/hooks/useWorkerAuth.js`: Anonymous Auth + custom token flow
+- `src/hooks/useAdminAuth.js`: remove hardcoded email, use admin claim
+- `src/components/WorkerLogin.jsx`: call Cloud Function instead of client-side check
+- `src/components/WorkerManagement.jsx`: hash PINs on create/edit
+- `src/services/firebase.js`: ensure anonymous auth provider enabled
 
-**Phase 2 — Backend Fixes:**
-- `functions/index.js` — fix timestamp queries (use createdAt), add auth to getDailyStats/syncScanToCalendar, implement syncScanToCalendar stub
-- `functions/package.json` — no new dependencies needed (crypto is built-in)
+**Phase 2, Backend Fixes:**
+- `functions/index.js`: fix timestamp queries (use createdAt), add auth to getDailyStats/syncScanToCalendar, implement syncScanToCalendar stub
+- `functions/package.json`: no new dependencies needed (crypto is built-in)
 
-**Phase 3 — Frontend Fixes:**
-- `src/services/offlineStorage.js` — fix event listener cleanup (store references)
-- `src/services/syncService.js` — fix setInterval cleanup, add cleanup function
-- `src/services/scanProcessor.js` — add offline fallback on Firebase save failure
-- `src/utils/qrGenerator.js` — fix XSS in document.write (escape title)
-- `src/hooks/useFirebaseData.js` — listen for connection changes, establish listeners on reconnect
-- `src/components/ScansHistory.jsx` — add server-side workerId filtering
-- `src/components/WorkerApp.jsx` — fix 50ms polling interval
+**Phase 3, Frontend Fixes:**
+- `src/services/offlineStorage.js`: fix event listener cleanup (store references)
+- `src/services/syncService.js`: fix setInterval cleanup, add cleanup function
+- `src/services/scanProcessor.js`: add offline fallback on Firebase save failure
+- `src/utils/qrGenerator.js`: fix XSS in document.write (escape title)
+- `src/hooks/useFirebaseData.js`: listen for connection changes, establish listeners on reconnect
+- `src/components/ScansHistory.jsx`: add server-side workerId filtering
+- `src/components/WorkerApp.jsx`: fix 50ms polling interval
 
-**Phase 4 — UX/A11y Polish:**
-- `src/components/ui/IconButton.jsx` — add aria-label
-- `src/components/ui/Modal.jsx` — add focus trapping, close-on-Escape
-- `src/components/WorkerLogin.jsx` — add role="alert", inputMode="numeric"
-- `src/components/AdminPanel.jsx` — auto-dismiss success/error messages
-- `src/components/LocationForm.jsx` — fix radius 0 fallback
+**Phase 4, UX/A11y Polish:**
+- `src/components/ui/IconButton.jsx`: add aria-label
+- `src/components/ui/Modal.jsx`: add focus trapping, close-on-Escape
+- `src/components/WorkerLogin.jsx`: add role="alert", inputMode="numeric"
+- `src/components/AdminPanel.jsx`: auto-dismiss success/error messages
+- `src/components/LocationForm.jsx`: fix radius 0 fallback
 
 ## Data Flow
 
@@ -162,6 +162,6 @@ Worker scans QR → app receives ?code= parameter
 - Q: How should worker auth work?
   A: Firebase Anonymous Auth + Server PIN validation via Cloud Function returning custom token
 - Q: What scope of fixes?
-  A: Everything — all 26 issues
+  A: Everything, all 26 issues
 - Q: What's out of scope?
-  A: No new features — fixes only
+  A: No new features, fixes only

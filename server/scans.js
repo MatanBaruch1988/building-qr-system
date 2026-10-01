@@ -67,7 +67,7 @@ export function normalizeGps(gps) {
 /**
  * Records one scan on behalf of an authenticated provider.
  * Safe to call again with the same `input.id` (offline retries): the stored row is returned.
- * Returns { scan, duplicate } — `duplicate` means an equal visit was already recorded within the cooldown.
+ * Returns { scan, duplicate }, where `duplicate` means an equal visit was already recorded within the cooldown.
  */
 export async function recordScan({ provider, deviceId, input, source, now = new Date() }) {
   const id = requireUuid(input?.id, 'invalid_scan_id')

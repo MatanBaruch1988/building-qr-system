@@ -5,7 +5,22 @@
     <link rel="icon" type="image/svg+xml" href="/pwa-192x192.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0b0b0d" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Light / dark, applied before the first paint so there is no flash of the wrong one. Same logic as
+         src/ui/theme.js (the key, the three values): tests/theme.test.js keeps them in step. -->
+    <script>
+      (function () {
+        var choice = 'system';
+        try { var saved = localStorage.getItem('qr.theme'); if (saved === 'light' || saved === 'dark') choice = saved; } catch (e) {}
+        var light = choice === 'light' || (choice === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+        var theme = light ? 'light' : 'dark';
+        var root = document.documentElement;
+        root.setAttribute('data-theme', theme);
+        root.style.colorScheme = theme;
+        var chrome = document.querySelector('meta[name="theme-color"]');
+        if (chrome) chrome.setAttribute('content', light ? '#f4f5f7' : '#0b0b0d');
+      })();
+    </script>
     <meta name="description" content="רישום נוכחות נותני שירות בבניין באמצעות QR" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
@@ -13,7 +28,7 @@
     <meta name="apple-mobile-web-app-title" content="נוכחות" />
     <link rel="apple-touch-icon" href="/pwa-192x192.svg" />
     <title>נוכחות בבניין</title>
-    <!-- No external stylesheets: the Rubik font is bundled (main.jsx) and the map CSS ships with the committee
+    <!-- No external stylesheets: the Heebo font is bundled (main.jsx) and the map CSS ships with the committee
          app only, so first paint never waits on a third-party server, even on one bar of signal. -->
   </head>
   <body>

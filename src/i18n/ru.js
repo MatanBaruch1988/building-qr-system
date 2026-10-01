@@ -51,6 +51,10 @@ export default {
   'checkin.done': 'Готово',
   'checkin.retry': 'Попробовать снова',
   'checkin.asUser': 'Вы вошли как {name}',
+  'theme.label': 'Оформление',
+  'theme.system': 'Как на устройстве',
+  'theme.light': 'Светлое',
+  'theme.dark': 'Тёмное',
 
   'error.invalid_code': 'Этот QR-код не относится к системе.',
   'error.unknown_code': 'QR-код не найден. Возможно, его заменили. Обратитесь в правление дома.',
