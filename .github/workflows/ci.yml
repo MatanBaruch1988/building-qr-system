@@ -4,6 +4,7 @@
 #   e2e (android-chrome)   Playwright, Chromium as a Pixel 7
 #   e2e (iphone-webkit)    Playwright, WebKit as an iPhone 14
 # Every third-party action is pinned to a full commit SHA (the tag is in the comment): a tag can be moved, a SHA cannot.
+# The Postgres service image is pinned to a digest for the same reason.
 name: CI
 
 on:
@@ -89,7 +90,11 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:18
+        # Pinned to a digest, like the actions: the tag postgres:18 moves with every patch release. This is the multi-arch
+        # index of postgres:18 as Docker Hub had it on 2026-10-02. It is updated by hand (Dependabot does not update
+        # service-container images in a workflow): to move it, resolve postgres:18 again and replace the digest here and in
+        # the e2e job.
+        image: postgres:18@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -128,7 +133,7 @@ jobs:
             browser: webkit
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722 # the same digest as in the unit job
         env:
           POSTGRES_PASSWORD: postgres
         ports:

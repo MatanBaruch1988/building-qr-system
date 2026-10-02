@@ -6,24 +6,78 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { checkMigrations, findContractRisks, hasContractLine, stripComments } from '../scripts/check-migrations.mjs'
-import { checkTests, lineProblem, parseAddedLines, parseLabels, OVERRIDE_LABEL } from '../scripts/check-tests.mjs'
+import { checkTests, isDiscovered, lineProblem, parseAddedLines, parseLabels, OVERRIDE_LABEL } from '../scripts/check-tests.mjs'
 import { isValidTitle } from '../scripts/check-pr-title.mjs'
-import { parseNameStatus, isSafeRef } from '../scripts/ci-git.mjs'
+import { parseNameStatus, splitNul, unquoteGitPath, isSafeRef } from '../scripts/ci-git.mjs'
 
 const root = decodeURIComponent(new URL('..', import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, '$1')
 const dot = (word) => `.${word}`
+// The bracket form of a member access, `[<quote>word<quote>]`, assembled so that this file has no literal one.
+const bracket = (word, quote = "'") => `[${quote}${word}${quote}]`
+// What `git diff --name-status -z` prints: every field ends with a NUL.
+const nul = (...fields) => fields.map((field) => `${field}\0`).join('')
 const EXISTING = ['db/migrations/001_init.sql', 'db/migrations/004_deleting_on_purpose.sql', 'db/migrations/005_delete_everywhere.sql']
 const added = (name) => ({ status: 'A', path: `db/migrations/${name}` })
 const sqlFor = (name, sql) => ({ [`db/migrations/${name}`]: sql })
 
 describe('git helpers', () => {
-  it('reads git name-status output, including renames', () => {
-    expect(parseNameStatus('A\tdb/migrations/006_x.sql\nM\ta.js\nD\tb.js\nR100\told.js\tnew.js\n')).toEqual([
+  it('reads NUL-separated git name-status output, including renames and copies', () => {
+    const output = nul('A', 'db/migrations/006_x.sql', 'M', 'a.js', 'D', 'b.js', 'R100', 'old.js', 'new.js', 'C75', 'src.js', 'copy.js', 'T', 'c.js')
+    expect(parseNameStatus(output)).toEqual([
       { status: 'A', path: 'db/migrations/006_x.sql' },
       { status: 'M', path: 'a.js' },
       { status: 'D', path: 'b.js' },
       { status: 'R', oldPath: 'old.js', path: 'new.js' },
+      { status: 'C', oldPath: 'src.js', path: 'copy.js' },
+      { status: 'T', path: 'c.js' },
     ])
+  })
+
+  it('has nothing to say about empty output', () => {
+    expect(parseNameStatus('')).toEqual([])
+  })
+
+  it('keeps a file name with a tab, a newline, a quote or a backslash exactly, also in a rename', () => {
+    const odd = 'tests/we\tird\nname "q" \\ x.test.js'
+    expect(parseNameStatus(nul('A', odd, 'D', 'tests/a b.test.js', 'R076', 'tests/old.test.js', odd))).toEqual([
+      { status: 'A', path: odd },
+      { status: 'D', path: 'tests/a b.test.js' },
+      { status: 'R', oldPath: 'tests/old.test.js', path: odd },
+    ])
+    // The old, line based parse would have seen two different files in the first entry.
+    expect(odd.split(/\r?\n/)).toHaveLength(2)
+  })
+
+  it('does not take a rename old path for the status of the next entry', () => {
+    expect(parseNameStatus(nul('R100', 'M', 'D', 'M', 'x.js'))).toEqual([
+      { status: 'R', oldPath: 'M', path: 'D' },
+      { status: 'M', path: 'x.js' },
+    ])
+  })
+
+  it('refuses output that stops in the middle of an entry', () => {
+    expect(() => parseNameStatus(nul('R100', 'old.js'))).toThrow(/Unexpected/)
+    expect(() => parseNameStatus(nul('M'))).toThrow(/Unexpected/)
+    expect(() => parseNameStatus(nul('M', ''))).toThrow(/Unexpected/)
+  })
+
+  it('splits git -z lists (ls-tree --name-only) at the NUL only', () => {
+    expect(splitNul(nul('db/migrations/001_init.sql', 'db/migrations/we\tird\nname.sql'))).toEqual([
+      'db/migrations/001_init.sql',
+      'db/migrations/we\tird\nname.sql',
+    ])
+    expect(splitNul('')).toEqual([])
+  })
+
+  it('undoes the quoting that git uses for a file name in a patch header', () => {
+    expect(unquoteGitPath('b/tests/plain.test.js')).toBe('b/tests/plain.test.js')
+    // A name with a space is not quoted, but git adds a TAB after it.
+    expect(unquoteGitPath('b/tests/with space.test.js\t')).toBe('b/tests/with space.test.js')
+    expect(unquoteGitPath('"b/tests/we\\tird \\"q\\" \\\\ x\\n.test.js"')).toBe('b/tests/we\tird "q" \\ x\n.test.js')
+    expect(unquoteGitPath('"b/tests/we\\tird x.test.js"\t')).toBe('b/tests/we\tird x.test.js')
+    expect(unquoteGitPath('"b/tests/caf\\303\\251.test.js"')).toBe('b/tests/café.test.js')
+    expect(unquoteGitPath('"b/tests/שלום\\t.test.js"')).toBe('b/tests/שלום\t.test.js')
+    expect(unquoteGitPath('/dev/null')).toBe('/dev/null')
   })
 
   it('only lets something that looks like a ref through to git', () => {
@@ -293,6 +347,65 @@ describe('check-tests: reading the diff', () => {
   it('has nothing to say about an empty diff', () => {
     expect(parseAddedLines('')).toEqual([])
   })
+
+  it('reads the real name of a file that git wrote in quotes, so its lines are still checked', () => {
+    const diff = [
+      'diff --git "a/e2e/we\\tird \\"q\\".spec.js" "b/e2e/we\\tird \\"q\\".spec.js"',
+      '--- "a/e2e/we\\tird \\"q\\".spec.js"',
+      '+++ "b/e2e/we\\tird \\"q\\".spec.js"\t',
+      '@@ -3,0 +4 @@',
+      '+added',
+      'diff --git a/tests/with space.test.js b/tests/with space.test.js',
+      '--- a/tests/with space.test.js\t',
+      '+++ b/tests/with space.test.js\t',
+      '@@ -1 +1 @@',
+      '+changed',
+    ].join('\n')
+    expect(parseAddedLines(diff)).toEqual([
+      { file: 'e2e/we\tird "q".spec.js', line: 4, text: 'added' },
+      { file: 'tests/with space.test.js', line: 1, text: 'changed' },
+    ])
+    // The checker then treats it as a file under e2e/ (a name left in quotes would not start with it).
+    const { problems } = checkTests([], [{ file: 'e2e/we\tird "q".spec.js', line: 4, text: `test${dot('fixme')}('later', async () => {})` }])
+    expect(problems).toHaveLength(1)
+  })
+})
+
+describe('check-tests: what the runners pick up', () => {
+  it.each([
+    ['tests/api.test.js', true],
+    ['tests/components/Row.test.jsx', true],
+    ['tests/a/b/c/deep.test.js', true],
+    ['e2e/admin.spec.js', true],
+    ['e2e/odd.test.js', true],
+    ['e2e/sub/deep.spec.mjs', true],
+    ['e2e/typed.spec.ts', true],
+    // Vitest only runs *.test.js and *.test.jsx under tests/
+    ['tests/api.spec.js', false],
+    ['tests/api.test.mjs', false],
+    ['tests/api.test.ts', false],
+    ['tests/api.test.txt', false],
+    ['tests/api.js', false],
+    ['tests/helpers.js', false],
+    // Playwright only runs *.spec.* and *.test.* under e2e/
+    ['e2e/fixtures.js', false],
+    ['e2e/spec.js', false],
+    ['e2e/admin.spec.json', false],
+    ['scripts/api.test.js', false],
+    ['src/thing.test.js', false],
+    ['api.test.js', false],
+  ])('%s: %s', (file, picked) => {
+    expect(isDiscovered(file)).toBe(picked)
+  })
+
+  it('matches the configuration of the two runners (change both together)', () => {
+    const vitest = fs.readFileSync(path.join(root, 'vitest.config.js'), 'utf8')
+    expect(vitest).toContain("include: ['tests/**/*.test.{js,jsx}']")
+    const playwright = fs.readFileSync(path.join(root, 'playwright.config.js'), 'utf8')
+    expect(playwright).toContain("testDir: './e2e'")
+    // No testMatch: Playwright's default (**/*.@(spec|test).?(c|m)[jt]s?(x)) is what isDiscovered mirrors.
+    expect(playwright).not.toMatch(/testMatch|testIgnore/)
+  })
 })
 
 describe('check-tests: deleted tests', () => {
@@ -313,6 +426,54 @@ describe('check-tests: deleted tests', () => {
 
   it('accepts a test file renamed or moved within the test folders', () => {
     expect(checkTests([{ status: 'R', oldPath: 'tests/api.test.js', path: 'tests/components/api.test.js' }], []).problems).toEqual([])
+  })
+
+  it.each([
+    ['tests/api.test.js', 'tests/api.spec.js'],
+    ['tests/api.test.js', 'tests/api.test.mjs'],
+    ['tests/api.test.js', 'tests/api.test.ts'],
+    ['tests/api.test.js', 'tests/api.test.js.txt'],
+    ['tests/api.test.js', 'tests/api.js'],
+    ['tests/api.test.js', 'tests/api'],
+    ['tests/components/Row.test.jsx', 'tests/components/Row.jsx'],
+    ['tests/api.test.js', 'e2e/helpers.js'],
+    ['e2e/admin.spec.js', 'e2e/admin.js'],
+    ['e2e/admin.spec.js', 'e2e/admin.spec.json'],
+    ['e2e/admin.spec.js', 'tests/admin.spec.js'],
+  ])('refuses a rename that nothing runs any more: %s to %s', (oldPath, newPath) => {
+    const { problems, warnings } = checkTests([{ status: 'R', oldPath, path: newPath }], [])
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain(oldPath)
+    expect(problems[0]).toContain(newPath)
+    expect(problems[0]).toContain('renamed')
+    expect(warnings).toEqual([])
+  })
+
+  it.each([
+    ['tests/api.test.js', 'tests/api-v2.test.js'],
+    ['tests/api.test.js', 'tests/components/api.test.jsx'],
+    ['tests/components/Row.test.jsx', 'tests/Row.test.js'],
+    ['e2e/admin.spec.js', 'e2e/committee.spec.js'],
+    ['e2e/admin.spec.js', 'e2e/admin/screens.spec.js'],
+    ['e2e/admin.spec.js', 'e2e/admin.test.js'],
+    ['e2e/admin.spec.js', 'e2e/admin.spec.mjs'],
+    // tests/api.test.js moved into e2e/ with a .test.js name is still found: by Playwright, by its default testMatch.
+    // (A Vitest file does not run there: it would fail at once, which is loud, not silent.)
+    ['tests/api.test.js', 'e2e/api.test.js'],
+  ])('accepts a rename that a runner still finds: %s to %s', (oldPath, newPath) => {
+    expect(checkTests([{ status: 'R', oldPath, path: newPath }], [])).toEqual({ problems: [], warnings: [] })
+  })
+
+  it('does not mind a rename of a file that no runner picked up before', () => {
+    expect(checkTests([{ status: 'R', oldPath: 'tests/helpers.js', path: 'tests/utils.js' }], []).problems).toEqual([])
+    expect(checkTests([{ status: 'R', oldPath: 'e2e/fixtures.js', path: 'e2e/support.js' }], []).problems).toEqual([])
+  })
+
+  it('turns a refused rename into a warning with the allow-test-removal label', () => {
+    const change = { status: 'R', oldPath: 'tests/api.test.js', path: 'tests/api.spec.js' }
+    const { problems, warnings } = checkTests([change], [], [OVERRIDE_LABEL])
+    expect(problems).toEqual([])
+    expect(warnings).toHaveLength(1)
   })
 
   it('accepts deleting a helper that is not a test, or a file somewhere else', () => {
@@ -344,6 +505,48 @@ describe('check-tests: focused and skipped tests', () => {
     `test${dot('skip')}(browserName === 'webkit', '')`,
     `describe${dot('skip')}(browserName === 'webkit', 'a reason on a describe is still a skipped group')`,
     `  it${dot('skip')}${dot('each')}([1, 2])('works', () => {})`,
+    // postponed with a todo
+    `it${dot('todo')}('later')`,
+    `  test${dot('todo')}('later', () => {})`,
+    `describe${dot('todo')}('later')`,
+    // the same things written with a bracket instead of a dot
+    `test${bracket('skip')}('works', async () => {})`,
+    `it${bracket('only', '"')}('works', () => {})`,
+    `  describe${bracket('skip', '`')}('group', () => {})`,
+    `test${bracket('fixme')}('works', async () => {})`,
+    `it${bracket('todo')} ('later')`,
+    `test${dot('describe')}${bracket('only')}('group', () => {`,
+    `test${bracket('skip')}(browserName === 'webkit', 'a bracket skip has no allowed form')`,
+    // a condition that is a constant skips for every browser, so it is not a conditional skip
+    `test${dot('skip')}(1, 'always')`,
+    `test${dot('skip')}(0, 'never mind')`,
+    `test${dot('skip')}(true, 'x')`,
+    `test${dot('skip')}(false, 'x')`,
+    `test${dot('skip')}(!0, 'x')`,
+    `test${dot('skip')}((true), 'x')`,
+    `test${dot('skip')}(null, 'x')`,
+    `test${dot('skip')}("always", 'x')`,
+    `test${dot('skip')}(\`always\`, 'x')`,
+    `test${dot('skip')}(1.5e3, 'x')`,
+    `testInfo${dot('skip')}(true, 'x')`,
+    // two arguments exactly: a reason and nothing else, and the condition is not missing
+    `test${dot('skip')}(browserName === 'webkit', 'reason', async () => {})`,
+    `test${dot('skip')}(, 'reason')`,
+    `test${dot('skip')}(browserName === 'webkit', browserReason)`,
+    // the exception covers one skip and nothing else on the same line
+    `test${dot('skip')}(browserName === 'webkit', 'a reason'); it${dot('skip')}('works', () => {})`,
+    `test${dot('skip')}(browserName === 'webkit', 'a reason'); test${dot('skip')}(true, 'x')`,
+    `test${dot('skip')}(browserName === 'webkit', 'a reason') && it${dot('skip')}('works', () => {})`,
+    `it${dot('skip')}('works', () => {}); test${dot('skip')}(browserName === 'webkit', 'a reason')`,
+    `test${dot('skip')}(browserName === 'webkit', 'a reason'), ${'x'}${'it'}('works', () => {})`,
+    `test${dot('skip')}(browserName === 'webkit', 'a reason'); it${dot('todo')}('later')`,
+    `test${dot('skip')}(browserName === 'webkit', 'a reason'); test${dot('fixme')}('works', () => {})`,
+    `test${dot('skip')}(browserName === 'webkit', 'a reason'); it${bracket('skip')}('works', () => {})`,
+    `test${dot('skip')}(browserName === 'webkit', 'a reason'); it${dot('only')}('works', () => {})`,
+    // a skip hidden in the condition of an allowed one
+    `test${dot('skip')}(!!test${dot('skip')}(true, 'x'), 'a reason')`,
+    // not the test object: another object's skip method
+    `page${dot('test')}${dot('skip')}(browserName === 'webkit', 'a reason')`,
   ]
 
   it.each(refused)('refuses an added line: %s', (text) => {
@@ -358,7 +561,16 @@ describe('check-tests: focused and skipped tests', () => {
     `  test${dot('skip')}(isMobile, "mobile has no hover")`,
     `test${dot('skip')}(!process.env.CI, \`only meaningful on CI\`)`,
     `testInfo${dot('skip')}(project.name !== 'android-chrome', 'android only')`,
+    // the condition may be a call with commas, a function or a comparison with a string: it is still not a constant
+    `test${dot('skip')}(isIn(browserName, ['webkit', 'firefox']), 'those cannot do it')`,
+    `test${dot('skip')}(({ browserName }) => browserName === 'webkit', 'a function is a condition too')`,
+    `test${dot('skip')}('webkit' === browserName, 'a comparison is not a literal')`,
+    `test${dot('skip')}(browserName === 'webkit', 'the reason may mention ${dot('skip')}( as text')`,
+    `test${dot('skip')}(browserName === 'webkit', 'it has a, comma') // and a trailing comment`,
+    `test${dot('skip')}(browserName === 'webkit', 'trailing comma',)`,
     `it('does not run anything with an only in its name', () => {})`,
+    `const todoList = ['skip', 'only']`,
+    `expect(labels['skip']).toBe(1)`,
     `const skipped = skipLibCheck + onlyOnce`,
     `// ${'it'}${dot('only')}( and ${'x'}${'it'}( in a comment do nothing`,
     ` * ${'test'}${dot('skip')}('inside a doc comment')`,

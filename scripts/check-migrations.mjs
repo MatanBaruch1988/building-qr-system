@@ -20,8 +20,12 @@
 //     ALTER COLUMN ... TYPE and ALTER COLUMN ... SET NOT NULL. DROP CONSTRAINT, DROP INDEX, DROP TRIGGER, DROP FUNCTION
 //     and CREATE OR REPLACE are fine without the line.
 // Comments are ignored when looking for the SQL, so a word inside a `--` or `/* */` comment never triggers it.
+//
+// The destructive-SQL detection is a heuristic: it reads the text of the file, so it cannot see SQL that is assembled at
+// run time (for example EXECUTE 'DR' || 'OP TABLE x' in a DO block), and a clever or careless statement can slip past
+// it. It catches the common ways and the accidents. The owner's review of every migration stays required.
 import path from 'node:path'
-import { runGit, parseNameStatus, argValue, isSafeRef, isMain } from './ci-git.mjs'
+import { runGit, parseNameStatus, splitNul, argValue, isSafeRef, isMain } from './ci-git.mjs'
 
 const DIR = 'db/migrations/'
 const NAME = /^(\d{3})_[a-z0-9_]+\.sql$/
@@ -145,14 +149,14 @@ function main() {
   let sqlByPath = {}
   let existing
   try {
-    changes = parseNameStatus(runGit(['diff', '--name-status', `${base}...HEAD`, '--', 'db/migrations']))
+    changes = parseNameStatus(runGit(['diff', '--name-status', '-z', `${base}...HEAD`, '--', 'db/migrations']))
     for (const change of changes) {
       if (['A', 'R', 'C'].includes(change.status) && inDir(change.path)) {
         sqlByPath[norm(change.path)] = runGit(['show', `HEAD:${change.path}`])
       }
     }
     const mergeBase = runGit(['merge-base', base, 'HEAD']).trim()
-    existing = runGit(['ls-tree', '-r', '--name-only', mergeBase, '--', 'db/migrations']).split(/\r?\n/).filter(Boolean)
+    existing = splitNul(runGit(['ls-tree', '-r', '-z', '--name-only', mergeBase, '--', 'db/migrations']))
   } catch (err) {
     console.error(`Could not read the migrations from git (base ${base}): ${String(err.stderr || err.message).trim()}`)
     process.exit(2)

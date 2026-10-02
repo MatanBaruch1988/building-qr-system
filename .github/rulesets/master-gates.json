@@ -28,10 +28,10 @@
         "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "guards" },
-          { "context": "unit" },
-          { "context": "e2e (android-chrome)" },
-          { "context": "e2e (iphone-webkit)" }
+          { "context": "guards", "integration_id": 15368 },
+          { "context": "unit", "integration_id": 15368 },
+          { "context": "e2e (android-chrome)", "integration_id": 15368 },
+          { "context": "e2e (iphone-webkit)", "integration_id": 15368 }
         ]
       }
     }
