@@ -1,5 +1,7 @@
 # נוכחות בבניין עם QR
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/MatanBaruch1988/building-qr-system/badge)](https://scorecard.dev/viewer/?uri=github.com/MatanBaruch1988/building-qr-system)
+
 כלי לוועד הבית מול נותני שירות (חברת ניקיון, גנן):
 
 1. **הוועד** מגדיר נקודות בבניין ומדפיס לכל אחת שלט עם QR.
@@ -69,3 +71,11 @@ tests/                 vitest (לוגיקה, API מול Postgres אמיתי בס
 e2e/                   Playwright (PWA, אפליקציית נותני השירות, ממשק הוועד) על פיקסל ואייפון
 legacy-redirect/       אתר הפניה ל-QR המודפסים הישנים
 ```
+
+## קוד פתוח
+
+הפרויקט פתוח תחת רישיון MIT ([LICENSE](LICENSE)): כל ועד בית יכול להתקין אותו ולהפעיל אותו לעצמו.
+
+- **תרומה לפרויקט** (באג, רעיון או קוד): [CONTRIBUTING.md](CONTRIBUTING.md). אפשר לכתוב בעברית או באנגלית.
+- **בעיית אבטחה**: מדווחים בפרטיות, לא ב-issue ציבורי. ההסבר ב-[SECURITY.md](SECURITY.md).
+- **כללי התנהגות**: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

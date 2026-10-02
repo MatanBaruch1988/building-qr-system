@@ -1,0 +1,7 @@
+# Every issue uses one of the forms in this folder (bug, feature, agent task), so blank issues are off.
+# A security problem never goes in a public issue: this link sends it to the private channel (see SECURITY.md).
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/MatanBaruch1988/building-qr-system/security/advisories/new
+    about: Report it privately to the maintainer. Never open a public issue for a vulnerability.

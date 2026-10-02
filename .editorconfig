@@ -1,0 +1,16 @@
+# Editor settings, read by most editors. They match what the files in the repository already use:
+# UTF-8, LF line endings (Git stores LF, whatever the machine does), a final newline and two spaces for indentation
+# in every file type (js, jsx, mjs, css, sql, json, yml, html).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# In Markdown two trailing spaces are a line break, so they are not trimmed.
+[*.md]
+trim_trailing_whitespace = false

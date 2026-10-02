@@ -1,0 +1,43 @@
+name: Feature request
+description: An idea that would make the app more useful
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the idea. Hebrew or English is fine.
+
+        Please do not include personal data (names, phone numbers, passwords, real attendance records, connection
+        strings or keys). For a large idea, a short description of the problem is enough: we can agree on the solution
+        here before anybody writes code.
+  - type: dropdown
+    id: audience
+    attributes:
+      label: Who is it for?
+      options:
+        - The building committee
+        - Service providers
+        - The committee's AI agent
+        - People who host it themselves
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is the problem?
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What do you propose?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else?

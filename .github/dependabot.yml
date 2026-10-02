@@ -1,0 +1,63 @@
+# Dependabot: weekly version updates for the npm dependencies and for the GitHub Actions used in .github/workflows/.
+# The pull requests it opens are checked by the same four CI checks as any other (see ci.yml), and the owner reviews
+# and merges them like any other.
+#
+# There is no `ignore` rule anywhere in this file, on purpose: an ignore rule also blocks the security updates for that
+# dependency, and a security update is the one we never want to hold back.
+#
+# The cooldown (a new release waits 7 days before Dependabot proposes it) applies to version updates only. Dependabot
+# never delays a security update, so a fix for a known vulnerability still arrives at once.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Jerusalem
+    cooldown:
+      default-days: 7
+    # The title becomes "build(deps): ..." or "build(deps-dev): ...", which scripts/check-pr-title.mjs accepts.
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      # Minor and patch updates arrive together, as one pull request a week.
+      npm-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+      # Major upgrades arrive as one grouped pull request. It is a prompt, not something to merge as it is: every major
+      # version needs code changes, so they are done by hand, one major at a time.
+      npm-major:
+        applies-to: version-updates
+        update-types:
+          - major
+      # Security updates are grouped separately, for every package, so that one pull request fixes them all.
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Jerusalem
+    cooldown:
+      default-days: 7
+    # The title becomes "ci(deps): ...".
+    commit-message:
+      prefix: ci
+      include: scope
+    # Every action is pinned to a full commit SHA with the tag in a comment. Dependabot moves the SHA and the comment
+    # together.
+    groups:
+      actions:
+        patterns:
+          - "*"
+# Not covered here: the Postgres service image in .github/workflows/ci.yml is pinned to a digest and is updated by hand
+# (Dependabot does not update service-container images in a workflow). ci.yml says how.
