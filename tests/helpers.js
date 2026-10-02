@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { loadEnv } from '../server/loadEnv.js'
 import { migrate } from '../server/migrate.js'
 import { setPool, poolConfig, guardPool } from '../server/db.js'
+import { assertNotProduction } from '../server/dbGuard.js'
 import { setGoogleVerifier } from '../server/google.js'
 
 loadEnv()
@@ -14,6 +15,13 @@ export async function setupDb() {
   if (!raw) throw new Error('DATABASE_URL(_UNPOOLED) is not set (see .env.local)')
   const schema = 't_' + randomBytes(6).toString('hex')
   const control = guardPool(new pg.Pool(poolConfig(raw)))
+  // Never create anything on a database that is marked as production (see server/dbGuard.js).
+  try {
+    await assertNotProduction(control)
+  } catch (err) {
+    await control.end()
+    throw err
+  }
   await control.query(`create schema ${schema}`)
   const pool = guardPool(new pg.Pool({ ...poolConfig(raw, schema), max: 6 }))
   setPool(pool)

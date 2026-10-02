@@ -13,6 +13,16 @@ if (schemaArg) {
 }
 if (process.env.DB_SCHEMA) console.log(`Using scratch schema "${process.env.DB_SCHEMA}"`)
 
+// Refuse to start on a production database (the scratch schema, if any, lives in the same database).
+const { getPool } = await import('./db.js')
+const { assertNotProduction } = await import('./dbGuard.js')
+try {
+  await assertNotProduction(getPool())
+} catch (err) {
+  console.error(err.message)
+  process.exit(1)
+}
+
 const { handle } = await import('./index.js')
 const port = Number(process.env.API_PORT || 3001)
 
