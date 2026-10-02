@@ -25,7 +25,10 @@ jobs:
     name: analysis
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # A job that lists permissions gets none of the others, so the read access to the code is listed too.
     permissions:
+      # Read the repository (actions/checkout).
+      contents: read
       # Upload the results to the Security tab (code scanning).
       security-events: write
       # Publish the results to the Scorecard API and get the badge: the action proves who it is with an OIDC token.
