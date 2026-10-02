@@ -43,7 +43,17 @@ npm test                          # שתיהן
 2. **Authorized JavaScript origins**: הכתובת של האתר (למשל `https://building-qr-system.vercel.app`) ו-`http://localhost:3000` לפיתוח.
 3. אם מסך ההסכמה במצב Testing: הוסיפו את כתובות ה-Gmail של הוועד תחת **Test users** (או פרסמו את האפליקציה).
 4. העתיקו את ה-Client ID אל `GOOGLE_CLIENT_ID` ב-Vercel (Production) וב-`.env.local`.
-5. הוסיפו את חבר הוועד הראשון: `npm run db:create-admin -- you@gmail.com "השם שלכם"`. את האחרים מוסיפים ממסך "ועד".
+5. הוסיפו את חבר הוועד הראשון של האתר. הפקודה `npm run db:create-admin` כותבת אל מסד הנתונים שב-`DATABASE_URL`, וב-`.env.local` זה מסד הפיתוח (לא ה-Production), ולכן בלי הכנה היא תוסיף את החבר לשם ולא לאתר. כדי להוסיף את חבר הוועד הראשון של האתר מריצים אותה עם מחרוזת החיבור הישירה של מסד האתר, שנמסרת רק לפקודה הזו:
+
+   ```powershell
+   $env:DATABASE_URL = '<connection string>'; npm run db:create-admin -- you@gmail.com "השם שלכם"; Remove-Item Env:DATABASE_URL
+   ```
+
+   ```bash
+   DATABASE_URL='<connection string>' npm run db:create-admin -- you@gmail.com "השם שלכם"
+   ```
+
+   הפקודה מדפיסה לאיזה מסד כתבה (סוג המסד והכתובת עם אמצע מוסתר, בלי סיסמה): בדקו שכתוב `production`. מחרוזת החיבור היא סוד, ולכן היא לא נכנסת לשום קובץ במאגר. את האחרים מוסיפים ממסך "ועד".
 
 ## המעבר מהמערכת הישנה (Firebase): בוצע
 

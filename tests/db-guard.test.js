@@ -1,7 +1,7 @@
-// assertNotProduction against fake `query` objects (no database), and the connection-string normalizer that decides
-// how the tooling reaches the database.
+// readEnvironmentMarker and assertNotProduction against fake `query` objects (no database), the host masking that
+// create-admin prints, and the connection-string normalizer that decides how the tooling reaches the database.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { assertNotProduction } from '../server/dbGuard.js'
+import { assertNotProduction, maskDatabaseHost, readEnvironmentMarker } from '../server/dbGuard.js'
 import { normalizeConnectionString } from '../server/db.js'
 
 /** A fake pg client: `marker` is the rows of public.environment_marker, or null when the table does not exist. */
@@ -19,16 +19,81 @@ function fakeDb(marker) {
 }
 
 const row = (environment) => ({ environment })
-let savedVercelEnv
+const VERCEL_KEYS = ['VERCEL_ENV', 'VERCEL']
+let savedVercel
 
 beforeEach(() => {
-  savedVercelEnv = process.env.VERCEL_ENV
-  delete process.env.VERCEL_ENV
+  savedVercel = Object.fromEntries(VERCEL_KEYS.map((key) => [key, process.env[key]]))
+  for (const key of VERCEL_KEYS) delete process.env[key]
 })
 
 afterEach(() => {
-  if (savedVercelEnv === undefined) delete process.env.VERCEL_ENV
-  else process.env.VERCEL_ENV = savedVercelEnv
+  for (const key of VERCEL_KEYS) {
+    if (savedVercel[key] === undefined) delete process.env[key]
+    else process.env[key] = savedVercel[key]
+  }
+})
+
+describe('readEnvironmentMarker', () => {
+  it('returns production, nonprod or null', async () => {
+    await expect(readEnvironmentMarker(fakeDb([row('production')]))).resolves.toBe('production')
+    await expect(readEnvironmentMarker(fakeDb([row('nonprod')]))).resolves.toBe('nonprod')
+  })
+
+  it('returns null when the table is missing, without reading it', async () => {
+    const db = fakeDb(null)
+    await expect(readEnvironmentMarker(db)).resolves.toBeNull()
+    expect(db.sent).toHaveLength(1)
+  })
+
+  it('returns null when the table has no row, or a value it does not know', async () => {
+    await expect(readEnvironmentMarker(fakeDb([]))).resolves.toBeNull()
+    await expect(readEnvironmentMarker(fakeDb([row('staging')]))).resolves.toBeNull()
+  })
+
+  it('lets production win when there are several rows, in any order', async () => {
+    await expect(readEnvironmentMarker(fakeDb([row('nonprod'), row('production')]))).resolves.toBe('production')
+    await expect(readEnvironmentMarker(fakeDb([row('production'), row('nonprod')]))).resolves.toBe('production')
+  })
+
+  it('ignores case and surrounding spaces in the stored value', async () => {
+    await expect(readEnvironmentMarker(fakeDb([row(' Production ')]))).resolves.toBe('production')
+    await expect(readEnvironmentMarker(fakeDb([row('NONPROD')]))).resolves.toBe('nonprod')
+  })
+
+  it('reads the schema-qualified table, so a search_path cannot hide it', async () => {
+    const db = fakeDb([row('nonprod')])
+    await readEnvironmentMarker(db)
+    expect(db.sent).toHaveLength(2)
+    for (const text of db.sent) expect(text).toContain('public.environment_marker')
+  })
+
+  it('lets a failing database query through as an error', async () => {
+    const db = { query: async () => Promise.reject(new Error('connection refused')) }
+    await expect(readEnvironmentMarker(db)).rejects.toThrow('connection refused')
+  })
+})
+
+describe('maskDatabaseHost', () => {
+  it('keeps 6 characters of the first label, masks the rest of it and keeps the domain', () => {
+    expect(maskDatabaseHost('postgres://u:secret@ep-wit-cool-123456-pooler.eu-central-1.aws.neon.tech/db?sslmode=require')).toBe(
+      'ep-wit****.eu-central-1.aws.neon.tech',
+    )
+  })
+
+  it('never prints the user, the password, the path or the query', () => {
+    const masked = maskDatabaseHost('postgres://someuser:s3cr3t-pass@ep-wit-cool-123456.eu-central-1.aws.neon.tech:5432/neondb?sslmode=require')
+    for (const secret of ['someuser', 's3cr3t', 'neondb', 'sslmode', '5432', 'postgres://']) expect(masked).not.toContain(secret)
+  })
+
+  it('handles a host without a domain and a short label', () => {
+    expect(maskDatabaseHost('postgres://postgres:postgres@localhost:5432/postgres')).toBe('localh****')
+    expect(maskDatabaseHost('postgres://u:p@db.example.com/x')).toBe('db****.example.com')
+  })
+
+  it('says unknown host for anything that is not a URL, without echoing it', () => {
+    for (const value of [undefined, '', 'not a url', 'user:secret@host']) expect(maskDatabaseHost(value)).toBe('unknown host')
+  })
 })
 
 describe('assertNotProduction', () => {
@@ -64,31 +129,35 @@ describe('assertNotProduction', () => {
   })
 })
 
-describe('assertNotProduction on Vercel production (the migration build)', () => {
-  it('allows production only with the option and VERCEL_ENV=production', async () => {
+describe('assertNotProduction ignores the environment variables', () => {
+  it('refuses production when VERCEL_ENV=production', async () => {
     process.env.VERCEL_ENV = 'production'
-    const db = fakeDb([row('production')])
-    await expect(assertNotProduction(db, { allowOnVercelProduction: true })).resolves.toBeUndefined()
+    await expect(assertNotProduction(fakeDb([row('production')]))).rejects.toThrow(/this database is production/i)
   })
 
-  it('refuses production without the option, even when VERCEL_ENV=production', async () => {
+  it('refuses production when VERCEL=1 and VERCEL_ENV=production (what a local `vercel build --prod` sets)', async () => {
+    process.env.VERCEL = '1'
     process.env.VERCEL_ENV = 'production'
-    await expect(assertNotProduction(fakeDb([row('production')]))).rejects.toThrow(/production/)
-    await expect(assertNotProduction(fakeDb([row('production')]), { allowOnVercelProduction: false })).rejects.toThrow(/production/)
+    await expect(assertNotProduction(fakeDb([row('production')]))).rejects.toThrow(/this database is production/i)
   })
 
-  it('refuses production with the option when VERCEL_ENV is not production', async () => {
-    for (const value of [undefined, '', 'preview', 'development']) {
+  it('refuses production whatever VERCEL_ENV and VERCEL hold', async () => {
+    for (const value of [undefined, '', 'preview', 'development', 'production']) {
       if (value === undefined) delete process.env.VERCEL_ENV
       else process.env.VERCEL_ENV = value
-      await expect(assertNotProduction(fakeDb([row('production')]), { allowOnVercelProduction: true }), String(value)).rejects.toThrow(
-        /production/,
-      )
+      process.env.VERCEL = '1'
+      await expect(assertNotProduction(fakeDb([row('production')])), String(value)).rejects.toThrow(/production/)
     }
   })
 
-  it('still passes a non-production database with the option', async () => {
-    await expect(assertNotProduction(fakeDb([row('nonprod')]), { allowOnVercelProduction: true })).resolves.toBeUndefined()
+  it('has no option that lets production through: a second argument changes nothing', async () => {
+    process.env.VERCEL_ENV = 'production'
+    await expect(assertNotProduction(fakeDb([row('production')]), { allowOnVercelProduction: true })).rejects.toThrow(/production/)
+  })
+
+  it('still passes a non-production database when VERCEL_ENV=production', async () => {
+    process.env.VERCEL_ENV = 'production'
+    await expect(assertNotProduction(fakeDb([row('nonprod')]))).resolves.toBeUndefined()
   })
 })
 
