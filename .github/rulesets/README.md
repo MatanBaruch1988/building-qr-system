@@ -1,0 +1,31 @@
+# Branch rulesets for master
+
+`master-gates.json` protects the default branch for everybody, with no bypass: it cannot be deleted or force-pushed,
+every change arrives through a pull request that is squash-merged (no approval is needed, so you can merge your own),
+and the branch must be up to date with master with all four CI checks green: `guards`, `unit`, `e2e (android-chrome)`
+and `e2e (iphone-webkit)` (the job names in `.github/workflows/ci.yml`). Each check is bound to GitHub Actions
+(`integration_id` 15368 is the GitHub Actions app), so nothing else can report a status under the same name.
+
+`master-approval.json` adds a second person: one approving review is required, it must come from a code owner
+(`.github/CODEOWNERS`), and it does not survive a push made after it (stale reviews are dismissed). The repository admin
+role may bypass it on a pull request, and that is every repository administrator, not only the owner. GitHub cannot tell
+the owner from an agent that runs with the owner's own `gh` login or token, so a local agent could merge as an admin:
+local agents must never merge (a later pull request will enforce that with a Claude Code permission deny for
+`gh pr merge`). An agent in GitHub Actions runs as its own app, which is not an admin, so it needs the approval like
+anybody else. The two rulesets add up, so the checks and the squash rule still hold.
+
+A pull request can change its own workflow and guard scripts, and the checks that run on it are the changed ones. So a
+change under `.github/` or to `scripts/check-*` needs the owner's careful look: green checks are not proof that the
+checks themselves were not weakened.
+
+Both files are the exact request body of GitHub's "Create a repository ruleset" API; a ruleset is only enforced once it
+has been created that way (or in the repository settings). Apply each one once, from the repository root, and only after
+the four checks have run green once (a required check that has never run blocks every pull request):
+
+```
+gh api --method POST repos/MatanBaruch1988/building-qr-system/rulesets --input .github/rulesets/master-gates.json
+gh api --method POST repos/MatanBaruch1988/building-qr-system/rulesets --input .github/rulesets/master-approval.json
+```
+
+To change one later, send the edited file with `gh api --method PUT repos/MatanBaruch1988/building-qr-system/rulesets/<id> --input <file>`
+(the ids are listed by `gh api repos/MatanBaruch1988/building-qr-system/rulesets`).
