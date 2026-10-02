@@ -1,0 +1,58 @@
+name: Agent task
+description: A task written so that a coding agent can do it without further questions
+labels: ["agent-task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Writing this form does not start any agent. Only the maintainer starts one, after reading the issue.
+
+        Write the task so that somebody who has never seen the project could do it without asking you anything.
+        Do not include personal data, secrets or connection strings.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should be true when the task is done, and why does it matter?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: A checklist. Each item can be checked as true or false.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: verify
+    attributes:
+      label: How to verify
+      description: The exact commands to run, and what a pass looks like.
+      placeholder: |
+        npx vitest run tests/<file>.test.js
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What the agent must not touch or change.
+    validations:
+      required: true
+  - type: textarea
+    id: hints
+    attributes:
+      label: Hints
+      description: Files to start from, related issues, anything that saves time. Optional.
+  - type: checkboxes
+    id: risk
+    attributes:
+      label: Risk
+      description: Tick everything that applies.
+      options:
+        - label: Changes the database (needs a new migration)
+        - label: Changes the API or the offline sync payload (installed apps run old code for days)
+        - label: Changes what people see (check phone and computer)

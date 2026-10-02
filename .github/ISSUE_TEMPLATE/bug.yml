@@ -1,0 +1,73 @@
+name: Bug report
+description: Something does not work the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Hebrew or English is fine.
+
+        **Please do not include personal data**: no names, phone numbers, passwords, real attendance records,
+        connection strings or keys, not in the text and not in the screenshots.
+
+        If you think you found a security problem, do not use this form. Report it privately:
+        https://github.com/MatanBaruch1988/building-qr-system/security/advisories/new
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part is it?
+      options:
+        - Provider app (scanning)
+        - Committee app (/admin)
+        - Agent API
+        - Hosting it yourself / setup
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Say what you saw. An error message, copied as it is, helps a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you tap or type, one step at a time?
+      placeholder: |
+        1. Open ...
+        2. Tap ...
+        3. See ...
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      options:
+        - iPhone
+        - Android phone
+        - Computer
+        - Other
+  - type: input
+    id: browser
+    attributes:
+      label: Browser, and was the app installed to the Home Screen?
+      placeholder: Safari on iPhone, installed to the Home Screen
+  - type: input
+    id: where
+    attributes:
+      label: Where did it happen?
+      description: The hosted instance, or your own deployment.
+      placeholder: The hosted instance
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Drag images here. Cover names, phone numbers and any other personal data first.
