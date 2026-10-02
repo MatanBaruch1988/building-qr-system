@@ -24,7 +24,7 @@ export function loadEnv(files = ['.env.local', '.env']) {
         throw new Error(
           `${file} was pulled from Vercel production (${m[1]}=production). Local tooling, the tests and the dev seed ` +
             'must use a non-production database. Replace the file with a copy of .env.example that points at the ' +
-            'non-production Neon project (see the Testing section of CLAUDE.md).',
+            'non-production Neon project (see the Testing section of AGENTS.md).',
         )
       }
       if (!PLATFORM_KEYS.test(m[1])) entries.push([m[1], value])

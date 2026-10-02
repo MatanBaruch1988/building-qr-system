@@ -36,7 +36,7 @@ your own deployment, not to work on the code.
 
 ## The project rules
 
-The full list is in [`CLAUDE.md`](CLAUDE.md), under "Rules for every change". The ones that matter most:
+The full list is in [`AGENTS.md`](AGENTS.md), under "Rules for every change". The ones that matter most:
 
 - **No em dash** (the long dash) anywhere: code, comments, UI text, docs. Use a comma, a colon, a full stop,
   parentheses or a plain hyphen. A test fails if one appears.

@@ -24,8 +24,11 @@ ui-debug.log
 .DS_Store
 Thumbs.db
 
-# Claude Code
-.claude/
+# Claude Code: the shared project settings are committed; everything else in .claude/ is personal or generated
+.claude/*
+!.claude/settings.json
+# Agent skills installed locally by a vendor CLI (for example `npx neon@latest skills`): personal, not part of the project
+skills-lock.json
 
 .vercel
 .env*.local

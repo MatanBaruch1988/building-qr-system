@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.*.local)",
+      "Read(./.env.production)",
+      "Read(./.vercel/**)",
+      "Bash(gh pr merge *)",
+      "Bash(vercel --prod *)",
+      "Bash(vercel deploy --prod *)",
+      "Bash(vercel env pull *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/check-edit.mjs\"", "timeout": 30 }
+        ]
+      }
+    ]
+  }
+}

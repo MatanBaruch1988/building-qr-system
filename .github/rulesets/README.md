@@ -10,9 +10,10 @@ and `e2e (iphone-webkit)` (the job names in `.github/workflows/ci.yml`). Each ch
 (`.github/CODEOWNERS`), and it does not survive a push made after it (stale reviews are dismissed). The repository admin
 role may bypass it on a pull request, and that is every repository administrator, not only the owner. GitHub cannot tell
 the owner from an agent that runs with the owner's own `gh` login or token, so a local agent could merge as an admin:
-local agents must never merge (a later pull request will enforce that with a Claude Code permission deny for
-`gh pr merge`). An agent in GitHub Actions runs as its own app, which is not an admin, so it needs the approval like
-anybody else. The two rulesets add up, so the checks and the squash rule still hold.
+local agents must never merge. `.claude/settings.json` denies `gh pr merge` to Claude Code, but that is a guardrail
+against the usual command, not a security boundary (`docs/adr/0003-the-reviewer-is-from-another-vendor.md`): the habit of
+never merging matters more than the setting. An agent in GitHub Actions runs as its own app, which is not an admin, so
+it needs the approval like anybody else. The two rulesets add up, so the checks and the squash rule still hold.
 
 A pull request can change its own workflow and guard scripts, and the checks that run on it are the changed ones. So a
 change under `.github/` or to `scripts/check-*` needs the owner's careful look: green checks are not proof that the
