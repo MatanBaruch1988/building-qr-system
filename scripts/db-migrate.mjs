@@ -4,8 +4,12 @@ loadEnv()
 
 const { getPool } = await import('../server/db.js')
 const { migrate } = await import('../server/migrate.js')
+const { assertNotProduction } = await import('../server/dbGuard.js')
 
 try {
+  // Production is migrated only by the Vercel production build, where VERCEL_ENV is `production` (Vercel sets it and
+  // loadEnv never reads it from a file). From any other place a production-marked database is refused.
+  await assertNotProduction(getPool(), { allowOnVercelProduction: true })
   const applied = await migrate(getPool())
   console.log(applied.length ? `Applied: ${applied.join(', ')}` : 'Database is up to date.')
 } catch (err) {

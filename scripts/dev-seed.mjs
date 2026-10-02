@@ -14,6 +14,16 @@ const { normalizeConnectionString } = await import('../server/db.js')
 const raw = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL
 const control = new pg.Pool({ connectionString: normalizeConnectionString(raw), max: 1 })
 
+// Before any write (also the drop): the seed never runs against a database that is marked as production.
+const { assertNotProduction } = await import('../server/dbGuard.js')
+try {
+  await assertNotProduction(control)
+} catch (err) {
+  console.error(err.message)
+  await control.end()
+  process.exit(1)
+}
+
 if (drop) {
   await control.query(`drop schema if exists ${schema} cascade`)
   console.log(`Dropped schema ${schema}`)

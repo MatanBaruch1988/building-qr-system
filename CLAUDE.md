@@ -21,8 +21,9 @@ read-only agent API.
 
 ## Testing
 
-Two layers, one command each. Both talk to the real Neon database from `.env.local`, always inside a throwaway schema
-that is dropped at the end, never the real data.
+Two layers, one command each. Both use the non-production Neon project from `.env.local` (CI uses a Postgres 18
+container), always inside a throwaway schema that is dropped at the end. The tooling refuses a production database
+(`server/dbGuard.js`, `server/loadEnv.js`), so never `vercel env pull` from Production into `.env.local`.
 
 | Command | What it runs | When |
 |---|---|---|
