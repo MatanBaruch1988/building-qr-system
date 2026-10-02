@@ -21,7 +21,8 @@ an issue: follow [SECURITY.md](SECURITY.md).
 3. `npx playwright install chromium webkit` (about 350 MB, needed for the browser tests).
 4. Copy `.env.example` to `.env.local` and fill in `DATABASE_URL` (and `DATABASE_URL_UNPOOLED`). Point them at a
    Postgres database of your own that holds no real data: a free Neon project, or a local Postgres 18. **Never a
-   production database**, not even to look.
+   production database**, not even to look. The tests, the dev seed and the local scripts refuse a database that is
+   marked as production, and an env file pulled from Vercel production (`server/dbGuard.js`, `server/loadEnv.js`).
 5. Run it:
 
 ```bash
