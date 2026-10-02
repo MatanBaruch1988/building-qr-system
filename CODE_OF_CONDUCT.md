@@ -34,7 +34,7 @@ reviews.
 
 ## Reporting
 
-Report it privately to the maintainer at CONDUCT_CONTACT_TBD.
+Report it privately to the maintainer at [matan1988b+building-qr@gmail.com](mailto:matan1988b+building-qr@gmail.com).
 
 The report is kept private, and the name of the person who reported is not shared without their consent.
 
