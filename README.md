@@ -37,6 +37,8 @@ npm test                          # שתיהן
 
 משתמשי הדוגמה מוגדרים ב-`scripts/dev-seed.mjs` (סיסמאות פיתוח בלבד, קיימות רק בסכמת `dev_ui`).
 
+סוכני קוד (Claude Code, Codex) עובדים לפי [AGENTS.md](AGENTS.md), וההחלטות שמאחורי הכללים מתועדות ב-[docs/adr/](docs/adr/).
+
 ## הגדרת כניסת Google לוועד (פעם אחת)
 
 1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → **Create credentials → OAuth client ID → Web application**.

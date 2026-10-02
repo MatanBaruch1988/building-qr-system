@@ -1,6 +1,7 @@
 // Every date and time a person sees is DD/MM/YYYY and HH:MM (shared/datetime.js). This tests the writer itself, and
 // guards the code: another way of writing a date (a month name, a weekday, the browser's own date field, the device's
-// locale) fails here before it reaches a screen.
+// locale) fails here before it reaches a screen. The patterns of the guard live in scripts/text-rules.mjs, which the
+// Claude Code edit hook (scripts/hooks/check-edit.mjs) reads too.
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -9,6 +10,7 @@ import { pathToFileURL } from 'node:url'
 import {
   formatDate, formatTime, formatDateTime, formatDateTimeUtc, formatDay, isoDay, parseDay, maskDay, editDay,
 } from '../shared/datetime.js'
+import { findDateProblems } from '../scripts/text-rules.mjs'
 
 const root = decodeURIComponent(new URL('..', import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, '$1')
 
@@ -155,26 +157,18 @@ function walk(dir) {
 
 describe('no other way of writing a date in the code', () => {
   const files = ['src', 'server', 'shared'].flatMap(walk)
-  // Ways of writing a date or a time that depend on the device or show a month name or a weekday, or a date field that
-  // shows the device's own format.
-  const FORBIDDEN = [
-    [/toLocale(Date|Time)?String/, 'toLocaleDateString / toLocaleTimeString / toLocaleString'],
-    [/\bdateStyle\b|\btimeStyle\b/, 'dateStyle / timeStyle'],
-    [/toDateString|toTimeString|toUTCString/, 'toDateString / toTimeString / toUTCString'],
-    [/type=["'](date|time|datetime-local|month|week)["']/, 'a native date or time field'],
-    [/\bweekday\s*:|\bmonth\s*:\s*['"](long|short|narrow)/, 'a weekday or a month name'],
-  ]
-  // Intl.DateTimeFormat is only for shared/datetime.js; server/scans.js also has the API's own machine format
-  // ('2026-09-30 08:12:00', read by the agent), which is not for people and must not change.
-  const INTL_ALLOWED = new Set(['shared/datetime.js', 'server/scans.js'])
 
   it('the code that writes dates is the shared module, with the API machine format as the one exception', () => {
     expect(files.length).toBeGreaterThan(40)
+    // The patterns are in scripts/text-rules.mjs. Make sure the guard is not empty: it must see a bad date and let
+    // the shared module and the API's own machine format through.
+    expect(findDateProblems('src/x.js', 'new Date().toLocaleDateString()')).not.toEqual([])
+    expect(findDateProblems('shared/datetime.js', 'new Intl.DateTimeFormat()')).toEqual([])
+    expect(findDateProblems('server/scans.js', 'new Intl.DateTimeFormat()')).toEqual([])
+    expect(findDateProblems('src/x.js', 'new Intl.DateTimeFormat()')).not.toEqual([])
     const offenders = []
     for (const file of files) {
-      const text = fs.readFileSync(path.join(root, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-      for (const [pattern, what] of FORBIDDEN) if (pattern.test(text)) offenders.push(`${file}: ${what}`)
-      if (/Intl\.DateTimeFormat/.test(text) && !INTL_ALLOWED.has(file)) offenders.push(`${file}: Intl.DateTimeFormat (use shared/datetime.js)`)
+      for (const what of findDateProblems(file, fs.readFileSync(path.join(root, file), 'utf8'))) offenders.push(`${file}: ${what}`)
     }
     expect(offenders, `another way of writing a date:\n${offenders.join('\n')}`).toEqual([])
   })

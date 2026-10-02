@@ -1,19 +1,13 @@
 // The em dash (U+2014) is never used anywhere in this project: not in the screens, the code, the comments or the
-// documents. Use a comma, a colon, a full stop or parentheses instead. The character is built from its code point so
-// that this file does not contain it either.
+// documents. Use a comma, a colon, a full stop or parentheses instead. The character, the folders to skip and the kind
+// of file to read come from scripts/text-rules.mjs, which builds the character from its code point so that no file
+// here contains it either. The Claude Code edit hook (scripts/hooks/check-edit.mjs) checks the same rule.
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { EM_DASH, SKIP_DIRS, TEXT, SKIP_FILES, findEmDashLines } from '../scripts/text-rules.mjs'
 
-const EM_DASH = String.fromCharCode(0x2014)
 const root = decodeURIComponent(new URL('..', import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, '$1')
-// .claude is the assistant tooling's own workspace (notes it writes for itself), not part of the project.
-// playwright-report, test-results and blob-report are what Playwright generates (its report is a bundle of its own code).
-const SKIP_DIRS = new Set([
-  'node_modules', 'dist', '.git', '.vercel', '.claude', 'coverage', 'playwright-report', 'test-results', 'blob-report',
-])
-const TEXT = /\.(js|jsx|mjs|cjs|css|html|md|json|sql|txt|yml|yaml)$|^\.env\.example$|^\.gitignore$/
-const SKIP_FILES = new Set(['package-lock.json'])
 
 function walk(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -28,9 +22,9 @@ describe('no em dash anywhere', () => {
     expect(files.length).toBeGreaterThan(50) // the walk really covers the project
     const offenders = []
     for (const file of files) {
-      fs.readFileSync(file, 'utf8').split(/\r?\n/).forEach((line, i) => {
-        if (line.includes(EM_DASH)) offenders.push(`${path.relative(root, file)}:${i + 1}: ${line.trim().slice(0, 80)}`)
-      })
+      for (const { line, text } of findEmDashLines(fs.readFileSync(file, 'utf8'))) {
+        offenders.push(`${path.relative(root, file)}:${line}: ${text.slice(0, 80)}`)
+      }
     }
     expect(offenders, `em dash found:\n${offenders.join('\n')}`).toEqual([])
   })
