@@ -541,6 +541,9 @@ describe('agent API', () => {
     const r = await call('GET', '/api/agent/v1/schema', { token: key })
     expect(r.json.flags.location_unverified).toBeTruthy()
     expect(r.json.timezone).toBe('Asia/Jerusalem')
+    expect(r.json.flags.legacy_import).toBeTruthy()
+    expect(r.json.rules.history).toMatch(/provider can be deleted/)
+    expect(r.json.rules.history).not.toMatch(/not deleted/)
   })
   it('a revoked key stops working', async () => {
     await call('POST', `/api/admin/api-keys/${keyId}/revoke`, { cookie })
