@@ -330,9 +330,19 @@ export function rotate(dir, keep, newName, files = fs) {
  * or `role "..."` of a libpq message. Each becomes `***` (the host becomes the masked host, as in the log). Without a
  * connection string only the generic patterns apply. The result is one line of at most 400 characters.
  */
-export function makeScrubber(connectionString) {
+export function makeScrubber(connectionString, folders = []) {
   const secrets = new Set()
   const hosts = new Map()
+  // Folders whose absolute path holds a person's name (the backup folder, the temp and home folders): a file system error
+  // names them in full. Each one becomes its label, in both slash styles, the longest first.
+  const hidden = folders
+    .filter(([folder]) => typeof folder === 'string' && folder.length > 3)
+    .flatMap(([folder, label]) => [
+      [folder, label],
+      [folder.replaceAll('\\', '/'), label],
+      [folder.replaceAll('/', '\\'), label],
+    ])
+    .sort((a, b) => b[0].length - a[0].length)
   const raw = String(connectionString ?? '').trim()
   if (raw) {
     secrets.add(raw)
@@ -352,8 +362,11 @@ export function makeScrubber(connectionString) {
     let clean = String(text ?? '')
     for (const secret of ordered) clean = clean.split(secret).join('***')
     for (const [host, masked] of hosts) clean = clean.split(host).join(masked)
+    for (const [folder, label] of hidden) clean = clean.split(folder).join(label)
     clean = clean
       .replace(/postgres(?:ql)?:\/\/[^\s"'<>]+/gi, '***')
+      // Any other user folder that an error names: C:\Users\<name>, /home/<name>, /Users/<name>.
+      .replace(/(?:[A-Za-z]:[\\/]Users[\\/]|\/home\/|\/Users\/)[^\\/\s'"]+/gi, '~')
       .replace(/\b(user|role)\s+"[^"]*"/gi, '$1 "***"')
     return clean.replace(/[\r\n\t]+/g, ' ').replace(/[^\x20-\x7e]/g, '?').trim().slice(0, 400)
   }
@@ -590,7 +603,17 @@ export async function runBackup(options, deps = {}) {
   const partialName = partialFileName(finalName)
   const logPath = path.join(outDir, LOG_NAME)
   const say = (print, text) => attempt(() => print(text))
-  let scrub = makeScrubber()
+  // A file system error carries an absolute path, and on most machines that path holds the user's name.
+  let home = ''
+  attempt(() => {
+    home = os.homedir()
+  })
+  const hiddenFolders = [
+    [outDir, '<out dir>'],
+    [tmpdir, '<temp>'],
+    [home, '~'],
+  ]
+  let scrub = makeScrubber(undefined, hiddenFolders)
   let host = '-'
   let folderIsOpen = false
   let result
@@ -610,7 +633,7 @@ export async function runBackup(options, deps = {}) {
       })
     }
     const connectionString = await connectionStringFor({ options, env, platform, runner })
-    scrub = makeScrubber(connectionString)
+    scrub = makeScrubber(connectionString, hiddenFolders)
     host = maskDatabaseHost(connectionString)
     const pgEnv = connectionEnv(connectionString)
     const pgBin = resolvePgBin({ option: options.pgBin, env, platform, exists })

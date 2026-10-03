@@ -635,6 +635,22 @@ describe('cleaning a text', () => {
     expect(scrub(undefined)).toBe('')
   })
 
+  it('replaces the folders it is given, in both slash styles, and any other user folder, so no name is printed', () => {
+    const clean = makeScrubber(URL_FAKE, [
+      ['C:\\Users\\Some One\\Backups\\bqr', '<out dir>'],
+      ['C:\\Users\\Some One', '~'],
+      ['/tmp', '<temp>'],
+    ])
+    expect(clean("ENOTDIR: not a directory, mkdir 'C:\\Users\\Some One\\Backups\\bqr'")).toBe(
+      "ENOTDIR: not a directory, mkdir '<out dir>'",
+    )
+    expect(clean("open 'C:/Users/Some One/other/file'")).toBe("open '~/other/file'")
+    expect(clean("rm '/tmp/bqr-backup-issue-1/body.md'")).toBe("rm '<temp>/bqr-backup-issue-1/body.md'")
+    expect(makeScrubber()("mkdir '/home/someone/backups'")).toBe("mkdir '~/backups'")
+    expect(makeScrubber()("stat '/Users/someone/x'")).toBe("stat '~/x'")
+    expect(makeScrubber()("open 'D:\\Users\\someone\\x'")).toBe("open '~\\x'")
+  })
+
   it('works without an address, and with one that cannot be parsed', () => {
     expect(makeScrubber()('plain text')).toBe('plain text')
     expect(makeScrubber('not an address')('say not an address twice: not an address')).toBe('say *** twice: ***')
