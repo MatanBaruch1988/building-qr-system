@@ -82,6 +82,11 @@ Added after the decision was implemented (02/10/2026). The decision above is unc
   migration, never an edit of an old one.
 - **Checking a deploy.** `GET /api/health` is free of the database and shows the commit. `GET /api/health/db` runs one
   query and shows the newest migration, for a smoke test after a deploy. See `docs/runbooks/`.
+- **A setting it depends on.** The gate reads Vercel's system environment variables, which reach the build only while the
+  project setting "Automatically expose System Environment Variables" is on (it is: checked on 03/10/2026). With it off,
+  every build would look like a local one and `skip`, so production would deploy without migrating. The net for that is
+  the check after a deploy: `/api/health/db` shows the newest migration, and it must match the newest file in
+  `db/migrations/`.
 - **The residual risk.** A deliberate `vercel --prod` from a checkout of master can still pass the gate: it is a production
   deployment, and the CLI attaches the Git data of the checkout. That is why `AGENTS.md` and `.claude/settings.json`
   forbid it, and why the owner deploys only by merging. A redeploy of an old deployment from the
