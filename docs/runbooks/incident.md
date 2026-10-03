@@ -29,3 +29,6 @@ database is at ...` and `the database check failed`) to steps 3 to 5. Each line 
    uploads them later), when you will update them. Say when it is fixed too.
 9. **After it is over**, write a short note (in the repository or the issue): what happened, the times, what was done, what
    was the cause, and what to change so that it does not repeat (a test, a guard, a rule in `AGENTS.md`).
+
+**A secret leaked?** Revoke it first and clean the files after (ADR 0004). [secrets.md](secrets.md) says where each secret
+of the project lives, who can rotate it and how, and when it was last rotated.
