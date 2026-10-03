@@ -7,9 +7,9 @@ const { migrate } = await import('../server/migrate.js')
 const { assertNotProduction } = await import('../server/dbGuard.js')
 
 try {
-  // This command never touches production, whatever the environment variables say. Production will be migrated by a
-  // separate deployment-only entrypoint that comes with the Vercel production build step (a later change). That one
-  // must not be unlockable by a shell variable alone: a local `vercel build --prod` sets VERCEL_ENV=production too.
+  // This command never touches production, whatever the environment variables say. Production is migrated by the Vercel
+  // production build of a merge to master (scripts/vercel-build.mjs, ADR 0002), behind a gate that a shell variable
+  // alone cannot open: a local `vercel build --prod` sets VERCEL_ENV=production too.
   await assertNotProduction(getPool())
   const applied = await migrate(getPool())
   console.log(applied.length ? `Applied: ${applied.join(', ')}` : 'Database is up to date.')

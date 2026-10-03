@@ -1,4 +1,5 @@
 {
+  "buildCommand": "node scripts/vercel-build.mjs",
   "regions": ["iad1"],
   "functions": {
     "api/*.js": { "maxDuration": 30 }
