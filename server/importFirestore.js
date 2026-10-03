@@ -3,6 +3,8 @@
 import { createHash } from 'node:crypto'
 import { TIMEZONE } from './config.js'
 
+// The Hebrew words in these patterns are DATA, not UI text: they match what the old Firestore records contain (the
+// Hebrew words for cleaning and gardening in company names), so they must stay in Hebrew.
 const SERVICE_TYPES = [
   [/ניקיון|ניקוי|clean/i, 'cleaning'],
   [/גינון|גנן|garden/i, 'gardening'],
@@ -24,6 +26,7 @@ function ts(v) {
 }
 
 const numOrNull = (v) => (v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null)
+// Names that mark a test or demo account in the old data (again Hebrew data, so it stays in Hebrew).
 const DEMO_NAME = /בדיקות|בדיקה|\btest\b|\bdemo\b|דמו/i
 
 function tokenFromQr(qrCode) {

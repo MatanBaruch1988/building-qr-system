@@ -1,94 +1,103 @@
-# נוכחות בבניין עם QR
+# Building attendance with QR
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/MatanBaruch1988/building-qr-system/badge)](https://scorecard.dev/viewer/?uri=github.com/MatanBaruch1988/building-qr-system)
 
-כלי לוועד הבית מול נותני שירות (חברת ניקיון, גנן):
+The app's interface is available in Hebrew, English, Russian and Arabic. The repository itself (code, documents, issues
+and pull requests) is written in English.
 
-1. **הוועד** מגדיר נקודות בבניין ומדפיס לכל אחת שלט עם QR.
-2. **נותן השירות** סורק את ה-QR עם מצלמת הטלפון. אחרי כניסה חד-פעמית עם סיסמה אישית, כל סריקה היא טאפ אחד.
-3. כל סריקה נשמרת כשורה אחת במסד נתונים נקי. **האפליקציה לא מנתחת כלום**: אייג'נט קורא את הנתונים דרך API לקריאה בלבד
-   ([docs/agent-api.md](docs/agent-api.md)).
+A tool for a building committee and the service providers it hires (a cleaning company, a gardener):
 
-## איך זה בנוי
+1. **The committee** defines points in the building and prints a sign with a QR code for each one.
+2. **The service provider** scans the QR code with the phone camera. After a one-time sign-in with a personal password,
+   every scan is a single tap.
+3. Every scan is stored as one row in a clean database. **The app analyses nothing**: an AI agent reads the data through
+   a read-only API ([docs/agent-api.md](docs/agent-api.md)).
 
-| חלק | מה |
+## How it is built
+
+| Part | What |
 |---|---|
-| אפליקציית נותני השירות | `/` ו-`/scan?code=…`. עברית / אנגלית / רוסית / ערבית, עובדת גם בלי קליטה (תור מקומי שנשלח לבד). קוד ב-`src/worker`, `src/i18n`, `src/pages/WorkerApp.jsx` |
-| ממשק הוועד | `/admin`. כניסה **רק עם חשבון Google** מרשימת הוועד. נקודות, נותני שירות, היסטוריה, מפתחות אייג'נט. קוד ב-`src/admin` |
-| API | פונקציית Vercel אחת (`api/index.js`, שאליה `vercel.json` מנתב כל `/api/*`) שמריצה את `server/`. Postgres (Neon) דרך `pg` |
-| מסד נתונים | `db/migrations/*.sql`. סריקות הן append-only: רק ביטול, ומחיקה של שורה אחת רק ממסך הוועד. אפשר למחוק נקודה, נותן שירות, חבר ועד או מפתח אייג'נט, וההיסטוריה שלהם נשארת עם השם שנרשם |
+| Service provider app | `/` and `/scan?code=…`. Hebrew / English / Russian / Arabic, and it works without a signal too (a local queue on the phone that uploads by itself). Code in `src/worker`, `src/i18n`, `src/pages/WorkerApp.jsx` |
+| Committee app | `/admin`. Sign-in **only with a Google account** that is on the committee list. Points, service providers, history, agent keys. Code in `src/admin` |
+| API | One Vercel function (`api/index.js`, to which `vercel.json` routes every `/api/*`) that runs `server/`. Postgres (Neon) through `pg` |
+| Database | `db/migrations/*.sql`. Scans are append-only: they can only be voided, and a single row can be deleted only from the committee screen. A point, a service provider, a committee member or an agent key can be deleted, and their history stays with the name that was recorded |
 
-**מדיניות המיקום ("GPS רך")**: סריקה נדחית כשיש מיקום מדויק ורחוק בבירור מהנקודה. בלי קליטה או עם מיקום חלש הנוכחות
-נרשמת ומסומנת `location_unverified`, חוץ מנקודה שמוגדרת `required`: שם סריקה בלי מיקום נדחית. לכל נקודה אפשר להגדיר
-`required` / `optional` / `none` (למרתפים).
+**The location policy ("soft GPS")**: a scan is refused when there is an accurate position that is clearly far from the
+point. With no signal or with a weak position the attendance is recorded and flagged `location_unverified`, except at a
+point that is set to `required`: there a scan without a position is refused. Every point can be set to `required` /
+`optional` / `none` (for basements).
 
-## פיתוח מקומי
+## Local development
 
 ```bash
 npm install
-cp .env.example .env.local        # ולמלא DATABASE_URL (ראו למטה)
-npm run db:seed-dev               # סכמת פיתוח נפרדת (dev_ui) עם נתוני דוגמה: לא נוגעת בנתונים האמיתיים
-npm run dev:api -- --schema=dev_ui   # שרת ה-API המקומי (פורט 3001) + כניסת אדמין לפיתוח בלי Google
-npm run dev                       # הממשק (פורט 3000, מעביר /api ל-3001)
-npm run test:unit                 # vitest: לוגיקה, API, רכיבים (יוצרות סכמה זמנית ומוחקות אותה)
-npm run test:e2e                  # Playwright: דפדפן אמיתי, פיקסל (Chromium) ואייפון (WebKit)
-npm test                          # שתיהן
+cp .env.example .env.local        # and fill in DATABASE_URL (see below)
+npm run db:seed-dev               # a separate dev schema (dev_ui) with sample data: it does not touch the real data
+npm run dev:api -- --schema=dev_ui   # the local API server (port 3001) + a dev-only admin sign-in that skips Google
+npm run dev                       # the app (port 3000, it forwards /api to 3001)
+npm run test:unit                 # vitest: logic, API, components (they create a temporary schema and drop it)
+npm run test:e2e                  # Playwright: a real browser, a Pixel (Chromium) and an iPhone (WebKit)
+npm test                          # both
 ```
 
-בדיקות הדפדפן דורשות התקנה חד-פעמית של הדפדפנים: `npx playwright install chromium webkit`.
-מה אי אפשר לבדוק אוטומטית (התקנה למסך הבית באייפון ועוד) מופיע ב-[docs/manual-ios-checklist.md](docs/manual-ios-checklist.md).
+The browser tests need a one-time install of the browsers: `npx playwright install chromium webkit`.
+What cannot be tested automatically (installing to the Home Screen on an iPhone and more) is listed in
+[docs/manual-ios-checklist.md](docs/manual-ios-checklist.md).
 
-משתמשי הדוגמה מוגדרים ב-`scripts/dev-seed.mjs` (סיסמאות פיתוח בלבד, קיימות רק בסכמת `dev_ui`).
+The sample users are defined in `scripts/dev-seed.mjs` (development passwords only, they exist only in the `dev_ui`
+schema).
 
-סוכני קוד (Claude Code, Codex) עובדים לפי [AGENTS.md](AGENTS.md), וההחלטות שמאחורי הכללים מתועדות ב-[docs/adr/](docs/adr/).
+Coding agents (Claude Code, Codex) work by [AGENTS.md](AGENTS.md), and the decisions behind the rules are documented in
+[docs/adr/](docs/adr/).
 
-## הגדרת כניסת Google לוועד (פעם אחת)
+## Setting up Google sign-in for the committee (once)
 
 1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → **Create credentials → OAuth client ID → Web application**.
-2. **Authorized JavaScript origins**: הכתובת של האתר (למשל `https://building-qr-system.vercel.app`) ו-`http://localhost:3000` לפיתוח.
-3. אם מסך ההסכמה במצב Testing: הוסיפו את כתובות ה-Gmail של הוועד תחת **Test users** (או פרסמו את האפליקציה).
-4. העתיקו את ה-Client ID אל `GOOGLE_CLIENT_ID` ב-Vercel (Production) וב-`.env.local`.
-5. הוסיפו את חבר הוועד הראשון של האתר. הפקודה `npm run db:create-admin` כותבת אל מסד הנתונים שב-`DATABASE_URL`, וב-`.env.local` זה מסד הפיתוח (לא ה-Production), ולכן בלי הכנה היא תוסיף את החבר לשם ולא לאתר. כדי להוסיף את חבר הוועד הראשון של האתר מריצים אותה עם מחרוזת החיבור הישירה של מסד האתר, שנמסרת רק לפקודה הזו:
+2. **Authorized JavaScript origins**: the address of the site (for example `https://building-qr-system.vercel.app`) and `http://localhost:3000` for development.
+3. If the consent screen is in Testing mode: add the committee's Gmail addresses under **Test users** (or publish the app).
+4. Copy the Client ID into `GOOGLE_CLIENT_ID` in Vercel (Production) and in `.env.local`.
+5. Add the first committee member of the site. The command `npm run db:create-admin` writes to the database in `DATABASE_URL`, and in `.env.local` that is the development database (not Production), so without preparation it would add the member there and not to the site. To add the first committee member of the site, run it with the direct connection string of the site's database, which you give only to this command:
 
    ```powershell
-   $env:DATABASE_URL = '<connection string>'; npm run db:create-admin -- you@gmail.com "השם שלכם"; Remove-Item Env:DATABASE_URL
+   $env:DATABASE_URL = '<connection string>'; npm run db:create-admin -- you@gmail.com "Your Name"; Remove-Item Env:DATABASE_URL
    ```
 
    ```bash
-   DATABASE_URL='<connection string>' npm run db:create-admin -- you@gmail.com "השם שלכם"
+   DATABASE_URL='<connection string>' npm run db:create-admin -- you@gmail.com "Your Name"
    ```
 
-   הפקודה מדפיסה לאיזה מסד היא כותבת (הכתובת עם אמצע מוסתר, בלי סיסמה, והסימון של המסד אם יש לו): בדקו שזו הכתובת של מסד האתר, ושלא כתוב `nonprod`. מחרוזת החיבור היא סוד, ולכן היא לא נכנסת לשום קובץ במאגר. את האחרים מוסיפים ממסך "ועד".
+   The command prints which database it writes to (the address with its middle hidden and no password, and the database's marker if it has one): check that it is the address of the site's database and that it does not say `nonprod`. The connection string is a secret, so it does not go into any file in the repository. You add the others from the Committee tab ("ועד").
 
-## המעבר מהמערכת הישנה (Firebase): בוצע
+## The move from the old system (Firebase): done
 
-המעבר הושלם ב-1.10.2026. מה נשאר ממנו:
+The move was completed on 01/10/2026. What is left of it:
 
-- **הנתונים** יובאו ל-Postgres (`npm run db:import-firestore -- <תיקיית יצוא>`, ניסוי בלי כתיבה ואז עם `--apply`). קודי ה-QR המודפסים נשמרו כפי שהם. **סיסמאות לא עברו** (הישנות היו SHA-256 בלי מלח), ולכן הוגדרו סיסמאות חדשות במסך "נותני שירות".
-- **הגיבוי** של Firestore (קבצי JSON) שמור מחוץ ל-git, בתיקייה `../backups/firestore-2026-10-01`. סקריפט היצוא וההתלות שלו הוסרו.
-- **ה-QR שכבר מודפסים** מצביעים על `building-qr-system.web.app`. אתר ההפניה הקטן ב-`legacy-redirect/` מעביר אותם לכתובת החדשה (ומנקה את ה-PWA הישנה מהטלפונים). אם הכתובת הציבורית משתנה, עדכנו `NEW_ORIGIN` ב-`legacy-redirect/public/index.html` ופרסו מחדש: `cd legacy-redirect && firebase deploy --only hosting`.
-- **Firestore נעול** (`legacy-redirect/firestore.rules`: אסור הכול) והנתונים הישנים נשארים בו כגיבוי. כשמחליטים שהגיבוי מיותר אפשר למחוק את הפרויקט ב-Firebase, אחרי שה-QR המודפסים הוחלפו או שאתר ההפניה כבר לא נחוץ.
-- **משתני Vercel** של Firebase נמחקו.
+- **The data** was imported into Postgres (`npm run db:import-firestore -- <export folder>`: a dry run without writing first, then again with `--apply`). The printed QR codes were kept as they are. **Passwords were not migrated** (the old ones were unsalted SHA-256), so new passwords were set in the Service providers tab.
+- **The backup** of Firestore (JSON files) is kept outside git, in the folder `../backups/firestore-2026-10-01`. The export script and its dependencies were removed.
+- **The QR codes that are already printed** point to `building-qr-system.web.app`. The small redirect site in `legacy-redirect/` forwards them to the new address (and clears the old PWA from the phones). If the public address changes, update `NEW_ORIGIN` in `legacy-redirect/public/index.html` and deploy again: `cd legacy-redirect && firebase deploy --only hosting`.
+- **Firestore is locked** (`legacy-redirect/firestore.rules`: deny everything) and the old data stays in it as a backup. When you decide the backup is no longer needed, you can delete the project in Firebase, after the printed QR codes have been replaced or the redirect site is no longer needed.
+- **The Firebase Vercel variables** were deleted.
 
-## מבנה
+## Structure
 
 ```
-api/index.js           נקודת הכניסה של Vercel (כל /api/* מנותב אליה ב-vercel.json)
-server/                ה-API: routes/, auth, scans (הכללים), google (אימות), db, migrate
-shared/                קוד שרץ גם בדפדפן וגם בשרת: shared/datetime.js כותב כל תאריך ושעה שאדם רואה, תמיד DD/MM/YYYY ו-HH:MM
-db/migrations/         סכמת ה-DB
-scripts/               מיגרציה, יצירת אדמין, זריעת פיתוח, ייצוא/ייבוא מ-Firestore
-src/worker, src/i18n   אפליקציית נותני השירות
-src/admin              ממשק הוועד
-tests/                 vitest (לוגיקה, API מול Postgres אמיתי בסכמה זמנית, i18n, ייבוא, tests/components לרכיבים)
-e2e/                   Playwright (PWA, אפליקציית נותני השירות, ממשק הוועד) על פיקסל ואייפון
-legacy-redirect/       אתר הפניה ל-QR המודפסים הישנים
+api/index.js           the Vercel entry point (every /api/* is routed to it in vercel.json)
+server/                the API: routes/, auth, scans (the rules), google (verification), db, migrate
+shared/                code that runs in both the browser and the server: shared/datetime.js writes every date and time a person sees, always DD/MM/YYYY and HH:MM
+db/migrations/         the DB schema
+scripts/               migration, creating an admin, the development seed, import from Firestore, the CI guards
+src/worker, src/i18n   the service provider app
+src/admin              the committee app
+tests/                 vitest (logic, the API against a real Postgres in a temporary schema, i18n, import, tests/components for components)
+e2e/                   Playwright (PWA, the service provider app, the committee app) on a Pixel and an iPhone
+legacy-redirect/       a redirect site for the old printed QR codes
 ```
 
-## קוד פתוח
+## Open source
 
-הפרויקט פתוח תחת רישיון MIT ([LICENSE](LICENSE)): כל ועד בית יכול להתקין אותו ולהפעיל אותו לעצמו.
+The project is open under the MIT license ([LICENSE](LICENSE)): any building committee can install it and run it for
+itself.
 
-- **תרומה לפרויקט** (באג, רעיון או קוד): [CONTRIBUTING.md](CONTRIBUTING.md). אפשר לכתוב בעברית או באנגלית.
-- **בעיית אבטחה**: מדווחים בפרטיות, לא ב-issue ציבורי. ההסבר ב-[SECURITY.md](SECURITY.md).
-- **כללי התנהגות**: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- **Contributing** (a bug, an idea or code): [CONTRIBUTING.md](CONTRIBUTING.md). Please write in English.
+- **A security problem**: report it privately, not in a public issue. The explanation is in [SECURITY.md](SECURITY.md).
+- **Code of conduct**: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

@@ -9,7 +9,8 @@ A tool for a building committee. Service providers (a cleaning company, a garden
 building with their phone. The committee manages points, providers and history at `/admin` (Google sign-in). The
 committee's own AI agent reads the data through a read-only API. The app records facts and does not analyse anything.
 It is a Vite + React PWA in four languages (he, en, ru, ar), a Vercel serverless API and Neon Postgres. Public
-repository (`MatanBaruch1988/building-qr-system`), MIT licence. The README is in Hebrew.
+repository (`MatanBaruch1988/building-qr-system`), MIT licence. The repository is written in English; the app's own
+interface is in four languages.
 
 Soft GPS policy: a scan is refused only for an accurate position that is clearly far from the point (or for no position on
 a `required` point); a weak or missing fix elsewhere is recorded with the flag `location_unverified`.
@@ -62,7 +63,12 @@ npm run icons                        # makes the PNG icons in public/ from publi
 
 ## Rules for every change
 
-- Code comments are in English. The Hebrew in the UI comes from `src/i18n/*.js`.
+- Everything in the repository is written in English: documents, code comments, commit messages, pull request
+  descriptions, issues and templates. Another language appears only in text that a person sees in the app
+  (`src/i18n/*.js`, and for now the Hebrew of the committee app in `src/admin/` and `src/pages/AdminApp.jsx`, until it
+  moves to `src/i18n`) and in the tests that check that text. `tests/english-docs.test.js` fails `npm run test:unit` if a
+  Hebrew letter appears in a `.md`, `.yml` or `.yaml` file (the one exception is a UI label quoted in parentheses and
+  double quotes, so that a person can find a button).
 - Never use an em dash (the long dash) anywhere: code, comments, UI text, docs. Use a regular hyphen. `tests/no-em-dash.test.js` fails `npm run test:unit` if one appears.
 - The app is used on a phone and on a computer. Change both layouts together and check both.
 - Dates and times that a person sees (on a screen, in the committee's CSV) are always DD/MM/YYYY and HH:MM (24 hours,
