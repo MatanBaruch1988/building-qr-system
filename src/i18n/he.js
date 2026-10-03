@@ -2,7 +2,6 @@
 // (enforced by tests/i18n.test.js). Wording is gender-neutral (plural imperatives).
 export default {
   'app.name': 'נוכחות בבניין',
-  'brand.address': 'אהבת אדם 86, כפר יונה',
   'lang.label': 'שפה',
   'footer.admin': 'כניסת ועד',
   'common.loading': 'טוען…',

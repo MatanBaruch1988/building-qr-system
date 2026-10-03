@@ -50,7 +50,7 @@ schema).
 Coding agents (Claude Code, Codex) work by [AGENTS.md](AGENTS.md), and the decisions behind the rules are documented in
 [docs/adr/](docs/adr/).
 
-## Setting up Google sign-in for the committee (once)
+## Setting up the site (once)
 
 1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → **Create credentials → OAuth client ID → Web application**.
 2. **Authorized JavaScript origins**: the address of the site (for example `https://building-qr-system.vercel.app`) and `http://localhost:3000` for development.
@@ -67,6 +67,7 @@ Coding agents (Claude Code, Codex) work by [AGENTS.md](AGENTS.md), and the decis
    ```
 
    The command prints which database it writes to (the address with its middle hidden and no password, and the database's marker if it has one): check that it is the address of the site's database and that it does not say `nonprod`. The connection string is a secret, so it does not go into any file in the repository. You add the others from the Committee tab ("ועד").
+6. Set the building's address, which the service providers' app shows at the top, in the committee app: the Committee tab ("ועד"), building details card ("פרטי הבניין"). It is stored in the site's own database and starts empty, and while it is empty that app shows no address line.
 
 ## The move from the old system (Firebase): done
 
