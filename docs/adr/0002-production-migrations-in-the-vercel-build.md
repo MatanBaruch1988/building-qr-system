@@ -110,3 +110,10 @@ unchanged.
   part too, but they are a Pro feature and this account is on Hobby. That is why `AGENTS.md` and `.claude/settings.json`
   forbid `vercel --prod`, and why the owner deploys only by merging. A redeploy of an old deployment from the Vercel
   dashboard runs the gate again for that commit and applies nothing that is already applied.
+- **What the gate is for.** It stops mistakes, not a hostile deployer. A CLI deploy uploads the build script along with
+  everything else, so somebody who deliberately deploys with the owner's Vercel credentials can change or delete this
+  gate, the GitHub check and the repository name it trusts (`VERCEL_GIT_REPO_OWNER` and `VERCEL_GIT_REPO_SLUG`, which a
+  CLI deploy takes from the checkout's origin). No check inside the build can stop that. The protection against it
+  is outside the code: the Vercel credentials stay with the owner (an agent never deploys), and on Pro a Deployment
+  Policy that allows only Git for production. Reviewers: a finding that only a hostile CLI deployer can exploit is
+  answered by this paragraph, not by another check in the build.
