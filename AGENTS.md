@@ -27,7 +27,7 @@ Map of the repository:
 | `tests/` | Vitest: logic, the API against a real Postgres in a throwaway schema, i18n, contrast, typography, `tests/components` |
 | `e2e/` | Playwright on a Pixel 7 (Chromium) and an iPhone 14 (WebKit) |
 | `scripts/` | Migrations, `create-admin`, the dev seed, the CI guards (`check-*.mjs`), the text rules and the edit hook |
-| `docs/` | `agent-api.md` (the read-only agent API), `manual-ios-checklist.md`, `adr/` (decisions) |
+| `docs/` | `agent-api.md` (the read-only agent API), `manual-ios-checklist.md`, `adr/` (decisions), `runbooks/` (deploy and roll back, restore, incident) |
 | `legacy-redirect/` | A small Firebase site that redirects the old printed QR codes to the new address |
 
 Read `README.md` for the architecture and `docs/agent-api.md` for the agent API.
@@ -60,6 +60,9 @@ npm run db:migrate                   # applies the new migrations to the databas
 npm run db:create-admin -- <google-email> [name]   # adds a committee member to the database in DATABASE_URL, and prints which one
 npm run icons                        # makes the PNG icons in public/ from public/pwa-512x512.svg
 ```
+
+`scripts/vercel-build.mjs` is the build command of Vercel (`vercel.json`). It builds the app and, for the production build
+of a merge to master, migrates the production database (ADR 0002). It is not run by hand.
 
 ## Rules for every change
 
@@ -130,6 +133,11 @@ location flow.
 
 ## Database and API changes
 
+Production is migrated only by the Vercel production build of a merge to `master` (`scripts/vercel-build.mjs`, ADR 0002).
+`npm run db:migrate` refuses a production database, so a migration reaches production with the merge that contains it:
+there is no separate step before or after, and no way to run one by hand. A failed migration fails that deployment and the
+previous one keeps serving.
+
 When a release is deployed, the old deployment keeps serving while the new one builds and while its migration runs. And
 a phone keeps running the JavaScript it already has: an installed PWA updates only when the person next opens it (the
 update waits for the next app start, `registerType: 'prompt'`), so old code calls the API for days or weeks, and the
@@ -192,7 +200,7 @@ The same holds for the API and the offline sync payload (`POST /api/scans/sync`,
 The decisions behind these rules are in `docs/adr/` (an Architecture Decision Record is one short file per decision):
 
 - [0001 CI runs on a Postgres container](docs/adr/0001-ci-on-a-postgres-container.md)
-- [0002 Production migrations run in the Vercel build](docs/adr/0002-production-migrations-in-the-vercel-build.md) (accepted, not implemented yet)
+- [0002 Production migrations run in the Vercel build](docs/adr/0002-production-migrations-in-the-vercel-build.md) (accepted, implemented)
 - [0003 The reviewer is from another vendor](docs/adr/0003-the-reviewer-is-from-another-vendor.md)
 - [0004 Revoke a leaked key, do not rewrite history](docs/adr/0004-revoke-a-leaked-key-do-not-rewrite-history.md)
 - [0005 Local tooling never touches production](docs/adr/0005-local-tooling-never-touches-production.md)
@@ -216,6 +224,9 @@ reviewing agent should apply it too.
 - An API or offline-sync change that rejects requests from an older installed app.
 - Local tooling that could reach the production database: a bypass of `server/dbGuard.js` or `server/loadEnv.js`, or a
   marker check that trusts an environment variable.
+- A change to `scripts/vercel-build.mjs` or `server/productionMigrate.js` that loosens the gate (the production build of
+  a commit on master from the Vercel Git integration, and a refusal of any build whose environment is unknown), drops the
+  check that every pending migration is byte-identical to the file on GitHub master, or migrates a database outside it.
 - A GitHub Actions change that uses an action not pinned to a full commit SHA, widens `permissions`, adds
   `pull_request_target`, or sets `persist-credentials: true`.
 - An endpoint under `/api` without the right authorization check (committee member, service provider or agent key), or

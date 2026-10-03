@@ -11,7 +11,7 @@ or an agent that wants to change it knows what they are changing.
 2. Keep it to about 60 lines. Concrete, no filler.
 3. Write the date as DD/MM/YYYY, like everywhere else in this project.
 4. Add it to the index below and to the Decisions section of `AGENTS.md`.
-5. Statuses: `Proposed`, `Accepted`, `Accepted, not implemented yet`, `Superseded by NNNN`.
+5. Statuses: `Proposed`, `Accepted`, `Accepted, not implemented yet`, `Accepted, implemented`, `Superseded by NNNN`.
 
 Never edit an accepted decision to change what it decided. When the decision changes, write a new ADR that says it
 supersedes the old one, and change only the Status line of the old one to `Superseded by NNNN`. A typo or a broken link
@@ -22,7 +22,7 @@ can be fixed in place.
 | ADR | Decision | Status |
 |---|---|---|
 | [0001](0001-ci-on-a-postgres-container.md) | CI runs on a Postgres container, not on Neon branches | Accepted |
-| [0002](0002-production-migrations-in-the-vercel-build.md) | Production migrations run in the Vercel production build | Accepted, not implemented yet |
+| [0002](0002-production-migrations-in-the-vercel-build.md) | Production migrations run in the Vercel production build | Accepted, implemented |
 | [0003](0003-the-reviewer-is-from-another-vendor.md) | The reviewer of a pull request is from another vendor than the writer | Accepted |
 | [0004](0004-revoke-a-leaked-key-do-not-rewrite-history.md) | A leaked key is revoked, history is not rewritten | Accepted |
 | [0005](0005-local-tooling-never-touches-production.md) | Local tooling never touches the production database | Accepted |

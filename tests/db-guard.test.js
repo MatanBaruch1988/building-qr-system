@@ -179,3 +179,40 @@ describe('normalizeConnectionString', () => {
     expect(normalizeConnectionString(url)).toBe(url)
   })
 })
+
+describe('a marker table of its own (the tests and the production migration pass one)', () => {
+  const table = 't_0a1b2c.environment_marker'
+
+  it('reads the table it is given, and not the default one', async () => {
+    const db = fakeDb([row('production')])
+    await expect(readEnvironmentMarker(db, table)).resolves.toBe('production')
+    expect(db.sent).toHaveLength(2)
+    for (const text of db.sent) {
+      expect(text).toContain(table)
+      expect(text).not.toContain('public.environment_marker')
+    }
+  })
+
+  it('still refuses a production row in that table, and passes a nonprod or missing one', async () => {
+    await expect(assertNotProduction(fakeDb([row('production')]), table)).rejects.toThrow(/this database is production/i)
+    await expect(assertNotProduction(fakeDb([row('nonprod')]), table)).resolves.toBeUndefined()
+    await expect(assertNotProduction(fakeDb(null), table)).resolves.toBeUndefined()
+  })
+
+  it('refuses a table name that is not a plain schema.table, before any SQL is sent', async () => {
+    const bad = ['environment_marker', 'public.environment_marker; drop table points', "x.y') or true --", 'Public.Marker', 'a.b.c', '', null, {}]
+    for (const name of bad) {
+      const db = fakeDb([row('nonprod')])
+      await expect(readEnvironmentMarker(db, name), String(name)).rejects.toThrow(/schema\.table/)
+      await expect(assertNotProduction(db, name), String(name)).rejects.toThrow(/schema\.table/)
+      expect(db.sent).toHaveLength(0)
+    }
+  })
+
+  it('uses the default table when no name is given', async () => {
+    const db = fakeDb([row('nonprod')])
+    await readEnvironmentMarker(db)
+    await readEnvironmentMarker(db, undefined)
+    for (const text of db.sent) expect(text).toContain('public.environment_marker')
+  })
+})
