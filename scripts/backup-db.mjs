@@ -12,20 +12,26 @@
 // What one run does:
 //   1. Gets the DIRECT connection string (never the pooled one: pg_dump needs a session) from BACKUP_DATABASE_URL, or from
 //      the Neon CLI (`neon connection-string`) when --neon-project is given. It lives in memory only.
-//   2. Runs pg_dump (custom format) into a temporary file in the folder: this run's own file (the minute, the process id
-//      and a few random characters in its name), created empty and exclusively before pg_dump starts, so two runs in the
-//      same minute never share a file. The password goes to pg_dump through the environment (PGPASSWORD and friends),
-//      never on the command line, where other users of a machine can see it. The session is READ-ONLY on the server
-//      (`-c default_transaction_read_only=on` in PGOPTIONS), so the backup cannot write to the database it reads, and that
-//      is what makes it safe to point at production. It is the one sanctioned local READ of a deployment's database, next
-//      to `db:create-admin`, the one sanctioned write (AGENTS.md "Safety", ADR 0005). It does not use the production guard
-//      (server/dbGuard.js): reading production is its job.
-//   3. Checks the file twice. `pg_restore --list` prints the table of contents, which must name the data of the tables
-//      `scans` and `points`; but it does not read the data blocks, so a dump that was cut off after its table of contents
-//      would pass. A full read (`pg_restore --file=<the null device>`) writes the SQL of the whole archive to nowhere, which
-//      reads and decompresses every data block, and must exit with 0. Only then is the temporary file renamed to
-//      building-qr-<UTC time>.dump (a file of the same name from a run of the same minute is replaced by this verified
-//      one). A failure deletes the temporary file, but only a file that this run created.
+//   2. Makes this run's private WORK DIRECTORY inside the folder (`.bqr-<pid>-<random>`), created exclusively and closed
+//      to every other account before anything is written into it, and runs pg_dump (custom format) into a temporary file
+//      there (`partial.dump`, created empty and exclusively before pg_dump starts). Two runs, in the same minute or at the
+//      same time, never share a directory or a file, and another account that can write in the output folder cannot put
+//      its own file where pg_dump writes, because it cannot enter the directory (the
+//      path of a file is what pg_dump opens, so closing the file alone would not be enough). The password goes to pg_dump
+//      through the environment (PGPASSWORD and friends), never on the command line, where other users of a machine can see
+//      it. The session is READ-ONLY on the server (`-c default_transaction_read_only=on` in PGOPTIONS), so the backup cannot
+//      write to the database it reads, and that is what makes it safe to point at production. It is the one sanctioned local
+//      READ of a deployment's database, next to `db:create-admin`, the one sanctioned write (AGENTS.md "Safety", ADR 0005).
+//      It does not use the production guard (server/dbGuard.js): reading production is its job.
+//   3. Checks the file twice, in the work directory. `pg_restore --list` prints the table of contents, which must name the
+//      data of the tables `scans` and `points`; but it does not read the data blocks, so a dump that was cut off after its
+//      table of contents would pass. A full read (`pg_restore --file=<the null device>`) writes the SQL of the whole archive
+//      to nowhere, which reads and decompresses every data block, and must exit with 0. Then the mode is set and read back
+//      (macOS and Linux). Only then is the verified, owner-only file renamed (one volume, so its mode and access list stay)
+//      from the work directory to building-qr-<UTC time>.dump in the folder; a file of the same name from a run of the same
+//      minute is replaced by this verified one. The work directory is removed at the end, whatever happened, and nothing in
+//      it survives: another account can at most replace the FINAL file after the fact, and the data in it was never readable
+//      by that account.
 //   4. Keeps the newest --keep files that match that exact name and deletes the older ones. Any other file in the folder is
 //      left alone, and nothing is rotated after a failed backup.
 //   5. Appends one line to backup.log in the folder (the time, ok or failed, the masked host, the file and its size, or a
@@ -34,20 +40,25 @@
 //
 // Who can read the files: only the owner, because the dump holds attendance data. On macOS and Linux the script sets the
 // umask to 077 before it creates anything (pg_dump creates its file with the umask it inherits, which is often 022, so the
-// file would be readable by every account of the machine), makes the folder with mode 700, and sets mode 600 on every dump
-// and on backup.log. The mode of the finished dump is READ BACK (stat), and a dump that is still readable by others
-// (chmod failed, or the file system ignores modes) is deleted and the backup fails; a new backup.log is checked the same
-// way, but only as a warning. A folder that already exists is the user's choice: it is never changed, but a warning in
-// backup.log and on the screen says so when other users can read it.
+// file would be readable by every account of the machine), makes the folder with mode 700 and the work directory with mode
+// 700, and sets mode 600 on every dump and on backup.log. The mode of the finished dump is READ BACK (stat), and a dump
+// that is still readable by others (chmod failed, or the file system ignores modes) is deleted and the backup fails; a new
+// backup.log is checked the same way, but only as a warning. A folder that already exists is the user's choice and is never
+// changed, but the run REFUSES to start (exit 1, nothing is dumped, and no log is written there, because a log in such a
+// folder could be a link to another file of the owner) when group or others can WRITE in it, and warns (in backup.log and
+// on the screen) when they can only read it, because the files in it are owner-only anyway.
 //
 // On Windows a new file inherits the access list of its folder, and a shared, network or synced folder may let others
-// in. So before pg_dump runs the script creates the empty temporary file itself and sets its access list with icacls
-// to the current user alone (inheritance removed, full control for that user's SID, found with `whoami /user`). pg_dump
-// then overwrites the file in place, which keeps the access list, and so does the rename to the final name. If icacls
-// is missing or fails, the backup fails before pg_dump writes anything. backup.log gets the same treatment when it
-// is created (best effort: it holds no personal data, so a failure there is only a warning). The folder itself is the
-// user's choice and is not changed. Still choose a folder under the user profile and never a synced one: a sync client
-// copies the file somewhere else, and no access list can stop that.
+// in. So the work directory gets an owner-only access list with icacls before anything is written into it (inheritance
+// removed, full control for the SID of the current user, found with `whoami /user`, inherited by what is made inside), and
+// the empty temporary file gets one of its own. pg_dump then overwrites the file in place, which keeps the access list,
+// and so does the rename out of the work directory. If whoami and the user name both fail, or icacls is missing or fails,
+// the backup fails before pg_dump writes anything. backup.log gets the same treatment when it is created (best effort: it
+// holds no personal data, so a failure there is only a warning). Windows has no refusal for a writable folder (the
+// access list of a folder is not read here): choose a folder under the user profile and never a shared or a synced one. A
+// sync client copies the file somewhere else, and no access list can stop that. The tools of Windows cannot open a path of
+// more than about 260 characters, so on Windows the run refuses a folder whose paths would go over 245 (the names inside
+// the work directory are short, and never make a path longer than the final file's).
 //
 // On a failure, with --report-issue, it opens a GitHub issue with the gh CLI, or adds a comment to the issue with that
 // title that is already open (so a failure that lasts a week is one issue, not seven). The issue says only that the backup
@@ -77,7 +88,18 @@ export const REQUIRED_TABLES = ['scans', 'points']
 export const BACKUP_NAME = /^building-qr-\d{8}T\d{4}Z\.dump$/
 export const WINDOWS_PG_BIN = 'C:\\Program Files\\PostgreSQL\\18\\bin'
 // The line that backup.log and the screen get when the backup folder was there already and other users can read it.
-export const FOLDER_WARNING = 'the backup folder can be read by other users: tighten it (on macOS and Linux run chmod 700 on the folder)'
+export const FOLDER_WARNING =
+  'the backup folder can be read by other users (the files in it are owner-only, so they see only the names): tighten it (on macOS and Linux run chmod 700 on the folder)'
+// A folder that group or others can WRITE in is refused (see runBackup): they could swap a path for a file of their own.
+export const FOLDER_WRITABLE_ERROR =
+  'the backup folder can be written by other users (group or others), so nothing was dumped: tighten it (on macOS and Linux run chmod 700 on the folder)'
+export const FOLDER_UNKNOWN_ERROR = 'the backup folder could not be inspected, so nothing was dumped'
+// icacls and the other tools of Windows cannot open a path longer than MAX_PATH (260 characters, 248 for a working directory),
+// where Node itself can. The run refuses a folder whose paths would go over this, instead of failing later with "path not found".
+export const WINDOWS_PATH_LIMIT = 245
+export const PATH_TOO_LONG_ERROR =
+  'the path of the backup folder is too long for the tools of Windows (more than 245 characters with the names inside it): use a shorter folder'
+export const LOG_SKIPPED = 'backup: backup.log was not written, because other users can write in the backup folder'
 
 const NEON_TIMEOUT_MS = 2 * 60_000
 const DUMP_TIMEOUT_MS = 30 * 60_000
@@ -231,8 +253,9 @@ export function parseWhoamiSid(stdout) {
  * that the file got from its folder (the copies are removed, not kept), and /grant:r gives that one user full control.
  * `owner` is `*<SID>` (see parseWhoamiSid) or, when the SID cannot be found, the name of the user.
  */
-export function icaclsArgs(fileName, owner) {
-  return [fileName, '/inheritance:r', '/grant:r', `${owner}:F`]
+export function icaclsArgs(fileName, owner, { directory = false } = {}) {
+  // For a directory (OI)(CI) makes the files and folders made inside it inherit the same owner-only list.
+  return [fileName, '/inheritance:r', '/grant:r', `${owner}:${directory ? '(OI)(CI)F' : 'F'}`]
 }
 
 /**
@@ -259,14 +282,18 @@ async function windowsOwner({ runner, env, userName }) {
  * so no path (and no user name in it) is on the command line or in a message. Throws an Error with a message that is safe
  * to print when icacls is missing, does not finish or exits with an error: a file that cannot be closed must not be used.
  */
-async function restrictToOwner({ name, cwd, owner, runner, env }) {
-  const result = await runner(windowsTool('icacls.exe', env), icaclsArgs(name, owner), {
+async function restrictToOwner({ name, cwd, owner, runner, env, directory = false }) {
+  const result = await runner(windowsTool('icacls.exe', env), icaclsArgs(name, owner, { directory }), {
     env: cleanEnv(env),
     cwd,
     timeoutMs: ICACLS_TIMEOUT_MS,
   })
   if (result.problem === 'ENOENT') throw new Error('icacls was not found, so a dump cannot be made owner-only')
   if (result.problem) throw new Error(`icacls did not finish (${result.problem}), so a dump cannot be made owner-only`)
+  if (result.status === 3) {
+    // 3 is "path not found": for a file that was just made, the usual cause on Windows is a path of more than about 260 characters
+    throw new Error('icacls failed (exit code 3, path not found: a very long backup folder path is the usual cause), so a dump cannot be made owner-only')
+  }
   if (result.status !== 0) throw new Error(`icacls failed (exit code ${result.status}), so a dump cannot be made owner-only`)
 }
 
@@ -371,14 +398,21 @@ export function backupFileName(date) {
 }
 
 /**
- * The temporary file of ONE run, for a backup that is not verified yet: the minute of the final name, the process id and a
- * few random characters, so that two runs in the same minute (a retry, a second task) never write to the same file. It
- * still ends in .dump (so `*.dump` in .gitignore covers it) and it does not match BACKUP_NAME (so retention never counts
- * it). It is created with `wx`, so a file that is there already is never reused or overwritten.
+ * The private work directory of ONE run, inside the output folder: the process id and a few random characters, so that two runs
+ * (in the same minute, or at the same time) never share a directory. It starts with a dot, it never matches BACKUP_NAME, and
+ * retention ignores it (it only looks at plain files). The name is short on purpose: icacls and the other tools of Windows
+ * cannot open a path of more than about 260 characters, and a path inside the work directory must not be longer than the
+ * path of the final file (see WINDOWS_PATH_LIMIT).
  */
-export function partialFileName(finalName, pid, random) {
-  return finalName.replace(/\.dump$/, `.partial-${pid}-${random}.dump`)
+export function workDirName(pid, random) {
+  return `.bqr-${pid}-${random}`
 }
+
+/**
+ * The temporary file inside the work directory. The directory is unique to the run, so the name does not have to be; it ends in
+ * .dump, so `*.dump` in .gitignore covers it. It is created with `wx`: a file that is there already is an error.
+ */
+export const PARTIAL_NAME = 'partial.dump'
 
 /**
  * Which of `names` to delete so that `keep` backups are left: the file `newName` (the backup that was just made) is always
@@ -700,10 +734,14 @@ export async function runBackup(options, deps = {}) {
   const started = now()
   const outDir = path.resolve(options.out)
   const finalName = backupFileName(started)
-  // This run's own temporary file (see partialFileName): never the name of another run's file.
-  const partialName = partialFileName(finalName, pid, random())
-  const partialPath = path.join(outDir, partialName)
-  let partialCreated = false
+  // This run's own private work directory (see workDirName) and the temporary file in it: never the name of another run's.
+  const workName = workDirName(pid, random())
+  const partialName = PARTIAL_NAME
+  const workDir = path.join(outDir, workName)
+  const partialPath = path.join(workDir, partialName)
+  let workCreated = false
+  // null: the log may be written. A text: no log is written, and the text says why. '': no log, and nothing more to say.
+  let logSkipped = null
   const logPath = path.join(outDir, LOG_NAME)
   const say = (print, text) => attempt(() => print(text))
   // A file system error carries an absolute path, and on most machines that path holds the user's name.
@@ -729,14 +767,27 @@ export async function runBackup(options, deps = {}) {
   const previousMask = posix ? umask(PRIVATE_UMASK) : undefined
 
   try {
-    const folderExisted = files.existsSync(outDir)
+    // The longest path of the run, before anything is made: the work directory and the file in it, or the final file.
+    if (windows && Math.max(partialPath.length, path.join(outDir, finalName).length) > WINDOWS_PATH_LIMIT) {
+      logSkipped = '' // the folder is not made, so there is no place for a log, and the message of the failure says it all
+      throw new Error(PATH_TOO_LONG_ERROR)
+    }
     files.mkdirSync(outDir, { recursive: true, mode: PRIVATE_FOLDER })
-    // A folder that was there already is the user's choice, so it is not changed: when other users can read it, a warning
-    // says so. (One that was made just now has the mode above.)
-    if (posix && folderExisted) {
+    if (posix) {
+      // The folder is the user's choice and is never changed. But when GROUP OR OTHERS can write in it, another account can
+      // swap the path of a file for a file of its own between two steps of the script (the path is what pg_dump opens), so
+      // the run refuses to start. When they can only read it, the files in it are owner-only anyway: a warning is enough.
+      // The mode is read back every time (also for a folder made just now): a file system that ignores modes says 777, and a
+      // folder that cannot be inspected is not trusted.
+      let mode
       attempt(() => {
-        folderIsOpen = (files.statSync(outDir).mode & 0o077) !== 0
+        mode = files.statSync(outDir).mode
       })
+      if (mode === undefined || (mode & 0o022) !== 0) {
+        logSkipped = LOG_SKIPPED
+        throw new Error(mode === undefined ? FOLDER_UNKNOWN_ERROR : FOLDER_WRITABLE_ERROR)
+      }
+      folderIsOpen = (mode & 0o077) !== 0
     }
     const connectionString = await connectionStringFor({ options, env, platform, runner })
     scrub = makeScrubber(connectionString, hiddenFolders)
@@ -745,21 +796,37 @@ export async function runBackup(options, deps = {}) {
     const pgBin = resolvePgBin({ option: options.pgBin, env, platform, exists })
     const pgRestore = pgTool(pgBin, 'pg_restore', platform)
 
-    // The empty temporary file is made here, exclusively (`wx`: a file that exists is an error, never reused), BEFORE pg_dump
-    // writes to it. On Windows it is also closed to every other user first: a new file inherits the access list of its
-    // folder, which may be a shared one, and pg_dump opens the existing file and overwrites it in place, which keeps the
-    // list. If this fails nothing is dumped. (On macOS and Linux the umask and the mode do the same.)
+    // THE WORK DIRECTORY. Everything that holds data happens in a private directory that this run makes inside the folder:
+    // it is created exclusively (no `recursive`, so an existing one is an error and is never reused), closed to every other
+    // account BEFORE anything is written into it (mode 700 on macOS and Linux, an owner-only access list on Windows, whose
+    // folders inherit the list of their parent), and removed at the end in every case. The temporary file is made, dumped
+    // into, checked and closed there. Another account that can write in the output folder can therefore not put its own file
+    // where pg_dump writes: it cannot even enter this directory. At most it can replace the FINAL file after the rename,
+    // and the data in that file was never readable by it.
     const owner = windows ? await ownerOf() : undefined
-    files.writeFileSync(partialPath, '', { flag: 'wx', mode: PRIVATE_FILE })
-    partialCreated = true
-    if (windows) await restrictToOwner({ name: partialName, cwd: outDir, owner, runner, env })
+    files.mkdirSync(workDir, { mode: PRIVATE_FOLDER })
+    workCreated = true
+    if (windows) await restrictToOwner({ name: workName, cwd: outDir, owner, runner, env, directory: true })
+    if (posix) {
+      let workIsPrivate = false
+      attempt(() => {
+        workIsPrivate = (files.statSync(workDir).mode & 0o077) === 0
+      })
+      if (!workIsPrivate) throw new Error('the work directory could not be made owner-only (does this file system ignore modes?), so nothing was dumped')
+    }
 
-    // The file name is relative and the folder is the working directory of the tool, so a path with a name in another
+    // The empty temporary file is made in it, exclusively (`wx`), BEFORE pg_dump writes to it. On Windows it is also given an
+    // explicit owner-only list (the directory's list would reach it anyway): pg_dump opens the existing file and overwrites it
+    // in place, which keeps the list. If this fails nothing is dumped.
+    files.writeFileSync(partialPath, '', { flag: 'wx', mode: PRIVATE_FILE })
+    if (windows) await restrictToOwner({ name: partialName, cwd: workDir, owner, runner, env })
+
+    // The file name is relative and the work directory is the working directory of the tool, so a path with a name in another
     // alphabet never has to pass through the command line of a Windows program.
     const dump = await runner(
       pgTool(pgBin, 'pg_dump', platform),
       ['--format=custom', '--no-owner', '--no-privileges', '--no-password', '--file', partialName],
-      { env: { ...cleanEnv(env), ...pgEnv }, cwd: outDir, timeoutMs: DUMP_TIMEOUT_MS },
+      { env: { ...cleanEnv(env), ...pgEnv }, cwd: workDir, timeoutMs: DUMP_TIMEOUT_MS },
     )
     if (dump.problem) throw new Error(toolProblem('pg_dump', dump.problem))
     if (dump.status !== 0) throw new Error(`pg_dump failed (exit code ${dump.status})${firstLine(dump.stderr)}`)
@@ -767,7 +834,7 @@ export async function runBackup(options, deps = {}) {
     // Check 1, the table of contents: the data of the tables of this app must be in the archive.
     const listing = await runner(pgRestore, ['--list', partialName], {
       env: cleanEnv(env),
-      cwd: outDir,
+      cwd: workDir,
       timeoutMs: LIST_TIMEOUT_MS,
     })
     if (listing.problem) throw new Error(toolProblem('pg_restore', listing.problem))
@@ -782,7 +849,7 @@ export async function runBackup(options, deps = {}) {
     // decompresses all of it, and a cut or damaged block makes pg_restore exit with an error.
     const full = await runner(pgRestore, [`--file=${nullDevice(platform)}`, partialName], {
       env: cleanEnv(env),
-      cwd: outDir,
+      cwd: workDir,
       timeoutMs: READ_TIMEOUT_MS,
     })
     if (full.problem) throw new Error(toolProblem('pg_restore', full.problem))
@@ -790,24 +857,27 @@ export async function runBackup(options, deps = {}) {
       throw new Error(`the dump could not be read to the end with pg_restore (exit code ${full.status})${firstLine(full.stderr)}`)
     }
 
-    // Only now, after pg_dump has exited and both checks passed, the file gets its final name. When that name exists (a second
-    // run in the same minute) the rename replaces it with this verified dump, which is as good.
-    const finalPath = path.join(outDir, finalName)
-    files.renameSync(partialPath, finalPath)
-    const warnings = []
     if (posix) {
       // Already 600 through the umask and the mode of the empty file: this makes sure. Then the mode is READ BACK: a failed
-      // chmod, or a file system that ignores modes (some network and exFAT volumes), must not leave a readable dump.
-      attempt(() => files.chmodSync(finalPath, PRIVATE_FILE))
+      // chmod, or a file system that ignores modes (some network and exFAT volumes), must not leave a readable dump. All of
+      // it happens in the work directory, before the file is moved to where others might look.
+      attempt(() => files.chmodSync(partialPath, PRIVATE_FILE))
       let closed = false
       attempt(() => {
-        closed = (files.statSync(finalPath).mode & 0o077) === 0
+        closed = (files.statSync(partialPath).mode & 0o077) === 0
       })
       if (!closed) {
-        attempt(() => files.rmSync(finalPath, { force: true }))
         throw new Error('the dump could not be made owner-only (chmod failed, or this file system ignores file modes), so it was deleted')
       }
     }
+
+    // Only now, verified and owner-only, after pg_dump has exited and both checks passed, the file is moved to its final name
+    // in the output folder. The work directory is inside that folder, so this is a rename on one volume, which keeps the mode
+    // and the access list of the file. When the final name exists (a second run in the same minute) the rename replaces it
+    // with this verified dump, which is as good.
+    const finalPath = path.join(outDir, finalName)
+    files.renameSync(partialPath, finalPath)
+    const warnings = []
     const size = files.statSync(finalPath).size
 
     let removed = 0
@@ -820,10 +890,13 @@ export async function runBackup(options, deps = {}) {
     }
     result = { ok: true, file: finalName, size, removed, warning: warnings.join(',') || undefined }
   } catch (error) {
-    // Only this run's own file is deleted, and only when this run created it: a file that was there already is not ours. A file
-    // that cannot be deleted is not worth hiding the real error for: the message below still says what failed.
-    if (partialCreated) attempt(() => files.rmSync(partialPath, { force: true }))
     result = { ok: false, message: scrub(error instanceof Error ? error.message : 'unexpected error') }
+  }
+  // The work directory goes in every case, with everything in it (a failed run's partial dump too). Only a directory that this
+  // run created is removed: one that was there already is not ours. A cleanup never throws; when it fails the directory is
+  // owner-only, and a warning says that it is still there.
+  if (workCreated && !attempt(() => files.rmSync(workDir, { recursive: true, force: true }))) {
+    result.warning = [result.warning, 'work-directory-not-removed'].filter(Boolean).join(',')
   }
 
   let issue
@@ -855,7 +928,8 @@ export async function runBackup(options, deps = {}) {
   attempt(() => {
     logExisted = files.existsSync(logPath)
   })
-  if (windows) {
+  const logAllowed = logSkipped === null // (a log in a folder that others can write could be a link to another file of the owner)
+  if (windows && logAllowed) {
     try {
       if (!files.existsSync(logPath)) {
         const owner = await ownerOf()
@@ -866,11 +940,11 @@ export async function runBackup(options, deps = {}) {
       logIsOpen = true
     }
   }
-  const logged = attempt(() => {
+  const logged = logAllowed && attempt(() => {
     if (folderIsOpen) files.appendFileSync(logPath, `${folderWarning}\n`, { encoding: 'utf8', mode: PRIVATE_FILE })
     files.appendFileSync(logPath, `${line}\n`, { encoding: 'utf8', mode: PRIVATE_FILE })
   })
-  if (posix) {
+  if (posix && logAllowed) {
     attempt(() => files.chmodSync(logPath, PRIVATE_FILE))
     // A new log gets the same check as a dump, but only as a warning: it holds no personal data.
     if (logged && !logExisted) {
@@ -881,17 +955,24 @@ export async function runBackup(options, deps = {}) {
       if (!closed) logIsOpen = true
     }
   }
-  if (!logged) say(err, 'backup: could not write backup.log')
-  else if (logIsOpen) say(err, 'backup: warning, backup.log could not be made owner-only')
+  if (!logAllowed) {
+    if (logSkipped) say(err, logSkipped)
+  } else if (!logged) {
+    say(err, 'backup: could not write backup.log')
+  } else if (logIsOpen) {
+    say(err, 'backup: warning, backup.log could not be made owner-only')
+  }
   if (previousMask !== undefined) attempt(() => umask(previousMask))
 
   if (folderIsOpen) say(err, `backup: warning, ${FOLDER_WARNING}`)
   if (result.ok) {
     const noun = result.removed === 1 ? 'file' : 'files'
     say(out, `backup ok: ${result.file}, ${formatSize(result.size)}, removed ${result.removed} old ${noun}`)
-    if (result.warning) say(err, `backup: warning, ${result.warning}`)
   } else {
     say(err, `backup failed: ${result.message}`)
+  }
+  if (result.warning) say(err, `backup: warning, ${result.warning}`)
+  if (!result.ok) {
     if (issue === 'opened') say(err, 'backup: an issue was opened')
     if (issue?.startsWith('commented-')) say(err, `backup: a comment was added to the open issue ${issue.slice('commented-'.length)}`)
     if (issue === 'gh-missing') say(err, 'backup: no issue opened, the gh CLI was not found')
