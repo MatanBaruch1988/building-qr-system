@@ -24,13 +24,25 @@ Two workflows run `anthropics/claude-code-action`, pinned to a commit SHA like e
   30 turns, 45 minutes) works on a branch `claude/...`, runs the checks from the issue and pushes. Its comment on the issue
   ends with a pre-filled link, and the owner opens the pull request: the action does not create pull requests itself, and
   that is kept, because the click is a human look at what is about to be proposed. A comment with `@claude` written by the
-  owner on a pull request of this repository makes Claude address the review findings on the same branch.
+  owner in the conversation of a pull request makes Claude address the review findings on the same branch. There is no
+  `pull_request_review_comment` trigger: GitHub runs that event's workflow from the pull request itself, so a pull request
+  could carry a changed copy and run it with the secrets. `issues` and `issue_comment` run the default branch's file.
 - `claude-review.yml`: Claude reviews a pull request that Codex wrote (the branch starts with `codex/`) or any pull request
   with the label `review:claude`. It posts one comment under the "Code Review Rules" of `AGENTS.md` and has no tool that
   changes code. It does not run on every push or for Dependabot, because of the quota.
-- Only the owner starts an agent, never from a fork. The workflow checks the sender, the action refuses bots and actors
-  without write access, and `allowed_bots` and `allowed_non_write_users` are never set. At most 2 agent pull requests are
-  open at a time. The shell is limited to listed commands, with no network tool, no merge and no force-push.
+- Only the owner starts an agent, in both workflows, and never from a fork. The workflow checks the sender, the action
+  refuses bots and actors without write access, and `allowed_bots` and `allowed_non_write_users` are never set. A Codex pull
+  request that a bot account opened is reviewed when the owner adds the label, because the sender is then the owner.
+- The limit is 2 agent branches (`claude/...`) that are not merged or deleted, not open pull requests: the action never
+  opens one, so three tasks could all run before the owner clicked a link. An abandoned branch counts until the owner
+  deletes it. The shell is limited to listed commands, with no network tool, no merge and no force-push.
+- After every run a separate job, `check`, compares through the GitHub API what the run pushed with a list of protected
+  paths (`.github/`, the `scripts/check-*` guards, the edit hook, the text rules, `.claude/`, env files) and with the
+  migrations on `master`. A deny rule does not see a shell: Claude can change a protected file through an allowed command
+  (a package.json script run by `npm run test:unit`). On a violation `check` deletes the branch of an issue run, only
+  reports on a pull request's branch, writes a note and fails. It is a job and not a step so that the code Claude ran
+  cannot change it through `GITHUB_ENV`, `GITHUB_PATH` or the git configuration, and its inputs come from the event and
+  from a step before Claude, never from Claude's own step.
 - The agent holds no production secret. It sees this public repository and a throwaway Postgres container.
   Untrusted text (comments of strangers) is filtered out, a task written by a stranger is rewritten by the owner first,
   and nobody else can start the run: that cuts the "lethal trifecta" (untrusted text, private data, a way out).
@@ -43,7 +55,7 @@ Good:
 
 - A task can be started and read from anywhere, and every change still goes through CI, Codex and the owner's merge.
 - Both directions of ADR 0003 exist: Codex reviews Claude's pull requests, Claude reviews Codex's.
-- The cost is the owner's existing subscription, capped by turns, minutes and the number of open pull requests.
+- The cost is the owner's existing subscription, capped by turns, minutes and the number of agent branches.
 
 Bad:
 
@@ -56,9 +68,13 @@ Bad:
 - The process that runs Claude holds the Claude token and a short-lived token of the Claude GitHub App for this
   repository, and the code that Claude runs (the tests) runs in it. Audit mode does not block a leak: it shows one.
   The owner-only trigger, the tool lists and the later `block` are what hold.
-- The Claude GitHub App cannot change workflow files, so a change to CI is always a human one. Whether a push by the app
-  starts CI on an existing pull request is not stated in the action's documentation: the first run shows it. If CI does
-  not start, close and reopen the pull request.
+- The Claude GitHub App's installation lists write access to workflows (the action's FAQ says the opposite), so nothing
+  relies on the App being unable to change one. `check` sees only `claude/` branches and the head of the pull request that
+  was commented on: code that Claude runs could push a workflow change to another branch with the App's token. The
+  required CI checks, the owner's review and the P1 rules for `.github/` are the next layers. A `pull_request` event
+  (`claude-review.yml`) also runs the copy of the workflow that the pull request carries.
+- Whether a push by the app starts CI on an existing pull request is not in the action's documentation: the first run
+  shows it. If CI does not start, close and reopen the pull request.
 - It depends on a third-party action and on its token exchange, which Dependabot moves by SHA and the owner reviews.
 
 ## Alternatives considered

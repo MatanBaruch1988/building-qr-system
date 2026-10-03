@@ -199,27 +199,40 @@ How a task runs:
    issue, pushes, and ends its comment on the issue with a "Create a PR" link whose title and body are filled in (the
    action never opens the pull request itself).
 3. The owner opens the pull request from that link. CI runs, and Codex reviews it (ADR 0003).
-4. To have findings addressed, the owner comments `@claude` on the pull request. Claude checks each finding against the
-   code and pushes the fixes to the same branch.
+4. To have findings addressed, the owner comments `@claude` in the conversation of the pull request (not as an inline
+   comment on the diff: GitHub runs the workflow of an inline comment from the pull request itself, which could carry a
+   changed copy of it). Claude checks each finding against the code and pushes the fixes to the same branch.
 5. The owner merges. An agent never does.
 
-The other direction: a pull request that Codex wrote (its branch starts with `codex/`) is reviewed by Claude, and so is
-any other pull request of this repository that gets the label `review:claude`. Claude posts one comment and changes
-nothing. There is no AI review on every push.
+The other direction: a pull request that Codex wrote (its branch starts with `codex/`) is reviewed by Claude when the
+owner opens it or marks it ready, and any other pull request of this repository is when the owner adds the label
+`review:claude` (if Codex opens its pull request under a bot account, the label is how to ask for the review). Claude posts
+one comment and changes nothing. There is no AI review on every push.
 
 The limits, all of them in the two workflows:
 
-- Only the owner starts an agent: the sender of the label or of the `@claude` comment is the owner's login, on this
-  repository and never on a fork. `allowed_bots` and `allowed_non_write_users` are never set. Claude reads only the
-  comments of the owner, of `claude[bot]` and of the Codex review bot: to hand it somebody else's remark, quote it in
-  your own comment.
-- At most 2 open pull requests from `claude/` branches (checked before a run), one run at a time per issue or pull
-  request, 30 turns and 45 minutes. A review is 15 turns.
+- Only the owner starts an agent, in either workflow: the sender of the label, of the `@claude` comment or of the review
+  event is the owner's login, on this repository and never on a fork. `allowed_bots` and `allowed_non_write_users` are
+  never set. Claude reads only the comments of the owner, of `claude[bot]` and of the Codex review bot: to hand it somebody
+  else's remark, quote it in your own comment.
+- At most 2 agent branches (`claude/...`) that are not merged or deleted, counted before a run: the action never opens a
+  pull request itself, so a task counts from its first push, not from the moment you click its link. A merged branch is
+  deleted by the repository setting "Automatically delete head branches"; an abandoned one counts until you delete it, so
+  delete an abandoned `claude/` branch to free its slot. One run at a time per issue or pull request, 30 turns and 45
+  minutes. A review is 15 turns.
 - No network tools (`WebFetch`, `WebSearch`, `curl`, `wget`, `gh api`), no merge, no deploy, no force-push. The shell is
   limited to the commands that the workflow lists, and a change to those lists is a review finding (below).
-- The agent may not touch `.github/`, `scripts/check-*`, `scripts/hooks/`, `.claude/` (the workflow denies edits there),
-  an existing migration, a secret or an `.env` file, and it may not delete or skip a test. It follows this file, and `.claude/settings.json` applies to it
-  too (GitHub's Claude app has no permission to change workflow files either).
+- The agent may not touch `.github/`, `scripts/check-*`, `scripts/ci-git.mjs`, `scripts/hooks/`, `scripts/text-rules.mjs`,
+  `.claude/`, an existing migration, an `.env` file other than `.env.example` or a secret, and it may not delete or skip a
+  test. It follows this file, and `.claude/settings.json` applies to it too. Edit rules deny the file tools those paths,
+  but a deny rule does not see a shell (an allowed command such as `npm run test:unit` can run a script that Claude
+  changed). So after every run a separate job, `check`, reads through the GitHub API what the run pushed: it refuses a
+  branch that touches any of those paths or modifies, renames or deletes a migration that exists on `master`, deletes the
+  branch of an issue run, only reports on a pull request's branch (the owner decides), writes a note and fails. It is a
+  job on a fresh runner so that the code that Claude ran cannot reach it. What is left: the Claude GitHub App's token has
+  write access to workflows too, so the check only sees `claude/` branches and the head of the pull request that was
+  commented on. The required CI checks, the owner's review and the P1 rules below are the next layers: read every change
+  under `.github/` with care.
 
 Why this is safe enough, in the terms of the "lethal trifecta" (an agent is dangerous when it combines text from people
 it does not trust, private data, and a way to send data out): the text comes only from an issue that the owner has read
@@ -286,8 +299,9 @@ reviewing agent should apply it too.
 - A change that widens who can start `claude.yml` or `claude-review.yml` (another or wider sender check, a fork, a bot,
   `allowed_bots`, `allowed_non_write_users`), that loosens their tool lists (a new or broader `Bash(...)` pattern, `Edit` or
   `Write` in `--allowedTools`, `Bash(git push *)`, `Bash(gh api *)`, a network tool, a shorter `--disallowedTools`), that
-  raises the turn, time or pull request limits, that turns on `show_full_output`, or that gives the agent a production
-  secret or any secret other than the Claude token.
+  raises the turn, time or branch limits, that turns on `show_full_output`, that weakens the `check` job (a path left out
+  of its list, a branch it does not look at, a step that fails open) or adds the `pull_request_review_comment` trigger,
+  or that gives the agent a production secret or any secret other than the Claude token.
 
 **Report as P2 when you are sure:**
 

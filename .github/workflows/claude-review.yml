@@ -1,8 +1,14 @@
 # The agent loop, part 2: Claude reviews what Codex wrote. ADR 0003 says that the reviewer of a pull request is from another
 # vendor than its writer. Codex reviews the pull requests that Claude wrote (through the ChatGPT GitHub integration, which
 # is not a workflow), and this workflow lets Claude review the pull requests that Codex wrote: those whose branch starts
-# with codex/. Any other pull request of this repository gets a Claude review when someone adds the label review:claude.
+# with codex/. Any other pull request of this repository gets a Claude review when the owner adds the label review:claude.
 # The part that writes code from an issue is claude.yml. The decision is docs/adr/0006-the-agent-loop-in-github-actions.md.
+#
+# Who can start it: only the owner, like claude.yml. The job `if` checks the sender of the event: whoever opened the pull
+# request, marked it ready or added the label. The sender is written as a plain login on purpose, so that anybody who
+# reads this file sees who can start an agent; to use the file in another repository, change that one login. When Codex
+# opens a pull request under a bot account the sender is that bot, so nothing runs; the owner adds the label review:claude,
+# and the sender of that event is the owner. The action then also checks that the actor has write access and is not a bot.
 #
 # It runs only in those two cases, and not on every push, on purpose. A review costs a part of the owner's Claude
 # subscription, which the interactive work uses too, so a run per push (or per Dependabot pull request) would spend
@@ -15,10 +21,11 @@
 #
 # What it never does: it never runs for a draft, never for a pull request from a fork (a fork run has no secrets, and its
 # code must not meet the Claude token), never for a push, and it never sets allowed_bots or allowed_non_write_users (a
-# change that does is a P1 finding in AGENTS.md). The action itself refuses an actor without write access and every bot.
-# If a Codex pull request is opened by a bot account the action refuses it, and the label review:claude (added by the
-# owner) starts the review instead. The action does not run on the pull request that adds or changes this file: it
-# checks that the workflow is the one on the default branch and skips with a warning when it is not.
+# change that does is a P1 finding in AGENTS.md). The action does not run on the pull request that adds or changes this
+# file: it checks that the workflow is the one on the default branch and skips with a warning when it is not. That matters
+# because for a pull_request event GitHub runs the copy of this file that is in the pull request, so a pull request can
+# carry a changed copy; the owner reads every pull request that touches .github/ with care (AGENTS.md), and claude.yml
+# deletes an agent branch that does.
 #
 # Why harden-runner only audits for now: the endpoints that Claude Code needs are not known yet. The first runs list them in
 # StepSecurity's insights, and a later change switches to `egress-policy: block` with that list.
@@ -36,11 +43,12 @@ permissions:
 jobs:
   review:
     name: review
-    # Not a draft, and from this repository. Then one of two things:
+    # The sender is the owner. The pull request is not a draft, and it is from this repository. Then one of two things:
     #   the label review:claude was just added (any other label, for example the ones CI reads, starts nothing), or
     #   the pull request was opened or marked ready, and its branch starts with codex/ or it already has review:claude
     #   (a draft that carried the label gets its review when it is marked ready).
     if: >-
+      github.event.sender.login == 'MatanBaruch1988' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository && (
       (github.event.action == 'labeled' && github.event.label.name == 'review:claude') ||
