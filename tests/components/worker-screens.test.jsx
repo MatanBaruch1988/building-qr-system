@@ -6,6 +6,7 @@ import { I18nProvider } from '../../src/i18n/index.jsx'
 import { LoginView, ResultView } from '../../src/worker/components.jsx'
 import he from '../../src/i18n/he.js'
 import { api } from '../../src/api/client.js'
+import { SAMPLE_PROVIDER_NAMES } from '../../scripts/sample-data.mjs'
 
 vi.mock('../../src/api/client.js', () => ({ api: vi.fn() }))
 
@@ -16,19 +17,19 @@ afterEach(() => {
 })
 
 const withI18n = (ui) => render(<I18nProvider>{ui}</I18nProvider>)
-const lior = { id: 'p1', contact_name: 'ליאור', company: 'ניקיון' }
-const hamudi = { id: 'p2', contact_name: 'חמודי', company: 'גינון' }
+const ploni = { id: 'p1', contact_name: SAMPLE_PROVIDER_NAMES.cleaner, company: 'ניקיון' }
+const almoni = { id: 'p2', contact_name: SAMPLE_PROVIDER_NAMES.gardener, company: 'גינון' }
 
 describe('LoginView', () => {
   const view = (props = {}) => (
-    <LoginView providers={{ status: 'ready', providers: [lior, hamudi], reload: () => {} }} pointName="לובי" onSignedIn={() => {}} {...props} />
+    <LoginView providers={{ status: 'ready', providers: [ploni, almoni], reload: () => {} }} pointName="לובי" onSignedIn={() => {}} {...props} />
   )
 
   it('lists the people and names the scanned point', () => {
     withI18n(view())
     expect(screen.getByRole('heading', { name: he['login.title'] })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /ליאור/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /חמודי/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: new RegExp(ploni.contact_name) })).toBeTruthy()
+    expect(screen.getByRole('button', { name: new RegExp(almoni.contact_name) })).toBeTruthy()
     expect(screen.getByText(/נקודת סריקה/).textContent).toContain('לובי')
   })
 
@@ -47,23 +48,23 @@ describe('LoginView', () => {
 
   it('asks for the password of the person chosen, and keeps them signed in by default', async () => {
     const onSignedIn = vi.fn()
-    api.mockResolvedValue({ token: 'qrp_token', provider: lior })
+    api.mockResolvedValue({ token: 'qrp_token', provider: ploni })
     withI18n(view({ onSignedIn }))
 
-    fireEvent.click(screen.getByRole('button', { name: /ליאור/ }))
-    expect(screen.getByRole('heading', { name: /שלום/ }).textContent).toContain('ליאור')
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(ploni.contact_name) }))
+    expect(screen.getByRole('heading', { name: /שלום/ }).textContent).toContain(ploni.contact_name)
     fireEvent.change(screen.getByLabelText(he['login.passwordLabel'], { selector: 'input' }), { target: { value: 'secret-1' } })
     fireEvent.click(screen.getByRole('button', { name: he['login.submit'] }))
 
     await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
-    expect(onSignedIn).toHaveBeenCalledWith({ token: 'qrp_token', provider: lior }, true)
+    expect(onSignedIn).toHaveBeenCalledWith({ token: 'qrp_token', provider: ploni }, true)
     expect(api).toHaveBeenCalledWith('/session', expect.objectContaining({ method: 'POST', body: expect.objectContaining({ provider_id: 'p1', password: 'secret-1' }) }))
   })
 
   it('says the password is wrong and clears the field', async () => {
     api.mockRejectedValue(Object.assign(new Error('nope'), { code: 'invalid_credentials', status: 401 }))
     withI18n(view())
-    fireEvent.click(screen.getByRole('button', { name: /ליאור/ }))
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(ploni.contact_name) }))
     const field = screen.getByLabelText(he['login.passwordLabel'], { selector: 'input' })
     fireEvent.change(field, { target: { value: 'wrong-pass' } })
     fireEvent.click(screen.getByRole('button', { name: he['login.submit'] }))
@@ -76,7 +77,7 @@ describe('LoginView', () => {
 
   it('can go back to choose someone else', () => {
     withI18n(view())
-    fireEvent.click(screen.getByRole('button', { name: /ליאור/ }))
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(ploni.contact_name) }))
     fireEvent.click(screen.getByRole('button', { name: he['login.changeName'] }))
     expect(screen.getByRole('heading', { name: he['login.title'] })).toBeTruthy()
   })
@@ -85,18 +86,18 @@ describe('LoginView', () => {
 describe('ResultView', () => {
   const success = { kind: 'success', scan: { checked_in_at: '2026-10-01T10:00:00Z', point_name: 'לובי' } }
   const show = (result, props = {}) =>
-    withI18n(<ResultView result={result} pointName="לובי" provider={lior} onDone={() => {}} onRetry={() => {}} {...props} />)
+    withI18n(<ResultView result={result} pointName="לובי" provider={ploni} onDone={() => {}} onRetry={() => {}} {...props} />)
 
   it('confirms a check-in and says who is signed in', () => {
     show(success)
     expect(screen.getByRole('heading', { name: he['checkin.success.title'] })).toBeTruthy()
-    expect(screen.getByText(/משתמש:/).textContent).toContain('ליאור · ניקיון')
+    expect(screen.getByText(/משתמש:/).textContent).toContain(`${ploni.contact_name} · ניקיון`)
     expect(screen.getByRole('button', { name: he['checkin.done'] })).toBeTruthy()
   })
 
   it('says who is signed in on a refusal too, which is when it matters most', () => {
     show({ kind: 'error', code: 'not_assigned' })
-    expect(screen.getByText(/משתמש:/).textContent).toContain('ליאור · ניקיון')
+    expect(screen.getByText(/משתמש:/).textContent).toContain(`${ploni.contact_name} · ניקיון`)
   })
 
   it('gives each known refusal its own message and no retry button (trying again cannot help)', () => {
