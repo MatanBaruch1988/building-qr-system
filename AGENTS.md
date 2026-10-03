@@ -191,7 +191,12 @@ The same holds for the API and the offline sync payload (`POST /api/scans/sync`,
   repository, an issue, a pull request or a log. `.env.example` has no values and is fine to read.
 - Local tooling never touches the production database. `server/loadEnv.js` refuses an env file that was pulled from
   Vercel production, and `server/dbGuard.js` refuses a database that is marked `production`. Do not bypass either, and
-  do not make a guard trust an environment variable (any shell can set one).
+  do not make a guard trust an environment variable (any shell can set one). The one exception is narrow and written down
+  in ADR 0005 (Addendum): `npm run db:backup` is, with `db:create-admin`, one of the two sanctioned local accesses to a
+  deployment's database. It reads production on purpose (the owner decided on a daily dump) and is read-only by
+  construction, `pg_dump` in a session that the server itself holds read-only (`-c default_transaction_read_only=on` in
+  `PGOPTIONS`), so it cannot write. The dump never leaves the owner's machine (next point). Nothing else may read
+  production.
 - Never run `vercel env pull` from Production and never run `vercel --prod` or `vercel deploy --prod`. Deploying is the
   owner's step. Adding the first committee member to a deployment (`db:create-admin` with that deployment's connection
   string) is the owner's step too.
@@ -231,6 +236,9 @@ reviewing agent should apply it too.
 - An API or offline-sync change that rejects requests from an older installed app.
 - Local tooling that could reach the production database: a bypass of `server/dbGuard.js` or `server/loadEnv.js`, or a
   marker check that trusts an environment variable.
+- A change that lets the backup (`scripts/backup-db.mjs`) write to the database, or run `pg_dump` without the read-only
+  session (`default_transaction_read_only=on` in `PGOPTIONS`), or that sends a dump or the connection string anywhere but
+  the owner's backup folder. It is the one local tool that may read production, and only because it cannot write.
 - A change to `scripts/vercel-build.mjs` or `server/productionMigrate.js` that loosens the gate (the production build of
   a commit on master from the Vercel Git integration, and a refusal of any build whose environment is unknown), drops the
   check that every pending migration is byte-identical to the file on GitHub master, or migrates a database outside it.

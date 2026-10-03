@@ -28,6 +28,7 @@ import {
   parseWhoamiSid,
   partialFileName,
   pgTool,
+  READ_ONLY_OPTION,
   resolvePgBin,
   runBackup,
   runProcess,
@@ -45,7 +46,10 @@ const POOLED = `postgresql://${USER}:${ENCODED}@ep-test-cool-123456-pooler.eu-ce
 const SID = 'S-1-5-21-111-222-333-1001' // a fake SID
 const NOW = new Date('2026-10-03T07:15:42Z')
 const FINAL = 'building-qr-20261003T0715Z.dump'
-const PARTIAL = 'building-qr-20261003T0715Z.partial.dump'
+// this run's own temporary file: the final name, then the process id and the random characters that go() injects
+const PID = 4242
+const RANDOM = 'a1b2c3'
+const PARTIAL = `building-qr-20261003T0715Z.partial-${PID}-${RANDOM}.dump`
 const LISTING = [
   ';',
   '; Archive created at 2026-10-03 10:15:40',
@@ -110,7 +114,16 @@ afterEach(() => {
  */
 function privateStat(...args) {
   const [target, ...rest] = args
-  return path.resolve(String(target)) === path.resolve(dir) ? { mode: 0o040700 } : fs.statSync(target, ...rest)
+  return path.resolve(String(target)) === path.resolve(dir) ? { mode: 0o040700 } : fileStat(target, ...rest)
+}
+
+/**
+ * The stat of a file as the script sees it on macOS or Linux: its real size, and a mode of 600. (A real file on Windows
+ * says 666, and on a machine with another umask something else: the script reads the mode back, and these tests are about
+ * everything else. The tests of that check pass their own `fs`.) It throws for a file that is not there, like the real one.
+ */
+function fileStat(target, ...rest) {
+  return { size: fs.statSync(target, ...rest).size, mode: 0o100600 }
 }
 
 /** Runs one backup into `dir` with the stub, and collects the two kinds of output line. */
@@ -128,6 +141,8 @@ async function go({ options = {}, deps = {}, runner = makeRunner() } = {}) {
       now: () => NOW,
       tmpdir: tmp,
       fs: { ...fs, statSync: privateStat },
+      pid: PID,
+      random: () => RANDOM,
       umask: (mask) => {
         masks.push(mask)
         return 0o022
@@ -290,6 +305,7 @@ describe('the connection string as environment variables', () => {
       PGPASSWORD: PASSWORD,
       PGDATABASE: 'appdb',
       PGSSLMODE: 'require',
+      PGOPTIONS: READ_ONLY_OPTION,
     })
   })
 
@@ -308,10 +324,9 @@ describe('the connection string as environment variables', () => {
 
   it('passes options and channel_binding when the address has them, a port when it has one', () => {
     const env = connectionEnv('postgres://u:p@h.example:6543/db?options=endpoint%3Dep-abc&channel_binding=require')
-    expect(env.PGOPTIONS).toBe('endpoint=ep-abc')
+    expect(env.PGOPTIONS).toBe(`endpoint=ep-abc ${READ_ONLY_OPTION}`)
     expect(env.PGCHANNELBINDING).toBe('require')
     expect(env.PGPORT).toBe('6543')
-    expect('PGOPTIONS' in connectionEnv('postgres://u:p@h.example/db')).toBe(false)
     expect(() => connectionEnv('postgres://u:p@h.example/db?channel_binding=bogus')).toThrow(/channel_binding/)
   })
 
@@ -408,7 +423,7 @@ describe('the name of a backup', () => {
   })
 
   it('has a temporary name that ends in .dump (ignored by git) and is not counted by retention', () => {
-    expect(partialFileName(FINAL)).toBe(PARTIAL)
+    expect(partialFileName(FINAL, PID, RANDOM)).toBe(PARTIAL)
     expect(PARTIAL.endsWith('.dump')).toBe(true)
     expect(BACKUP_NAME.test(PARTIAL)).toBe(false)
   })
@@ -1212,6 +1227,37 @@ describe('the issue after a failure', () => {
   })
 })
 
+/** An fs that records mkdir, chmod and appendFile calls, and says what the stat of the backup folder says. */
+function recordingFs({ folderMode = 0o040700, fileMode = 0o100600, failChmod = false, events = [] } = {}) {
+  const same = (p) => path.resolve(String(p)) === path.resolve(dir)
+  return {
+    events,
+    chmods: [],
+    appends: [],
+    mkdirs: [],
+    get fs() {
+      const self = this
+      return {
+        ...fs,
+        mkdirSync: (p, o) => {
+          events.push('mkdir')
+          self.mkdirs.push({ folder: same(p), options: o })
+          return fs.mkdirSync(p, o)
+        },
+        statSync: (p, ...rest) => (same(p) ? { mode: folderMode } : { ...fileStat(p, ...rest), mode: fileMode }),
+        chmodSync: (p, mode) => {
+          self.chmods.push({ name: path.basename(String(p)), folder: same(p), mode })
+          if (failChmod) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
+        },
+        appendFileSync: (p, data, o) => {
+          self.appends.push({ name: path.basename(String(p)), options: o })
+          return fs.appendFileSync(p, data, o)
+        },
+      }
+    },
+  }
+}
+
 // ---- reading every data block ------------------------------------------------------------------------------------------------------
 
 describe('the full read of the dump', () => {
@@ -1313,37 +1359,6 @@ describe('the full read of the dump', () => {
 // ---- who can read the files ------------------------------------------------------------------------------------------------------------
 
 describe('files for the owner only', () => {
-  /** An fs that records mkdir, chmod and appendFile calls, and says what the stat of the backup folder says. */
-  function recordingFs({ folderMode = 0o040700, failChmod = false, events = [] } = {}) {
-    const same = (p) => path.resolve(String(p)) === path.resolve(dir)
-    return {
-      events,
-      chmods: [],
-      appends: [],
-      mkdirs: [],
-      get fs() {
-        const self = this
-        return {
-          ...fs,
-          mkdirSync: (p, o) => {
-            events.push('mkdir')
-            self.mkdirs.push({ folder: same(p), options: o })
-            return fs.mkdirSync(p, o)
-          },
-          statSync: (p, ...rest) => (same(p) ? { mode: folderMode } : fs.statSync(p, ...rest)),
-          chmodSync: (p, mode) => {
-            self.chmods.push({ name: path.basename(String(p)), folder: same(p), mode })
-            if (failChmod) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
-          },
-          appendFileSync: (p, data, o) => {
-            self.appends.push({ name: path.basename(String(p)), options: o })
-            return fs.appendFileSync(p, data, o)
-          },
-        }
-      },
-    }
-  }
-
   it('on macOS and Linux sets the umask to 077 before anything is created, and puts the old one back at the end', async () => {
     const events = []
     const rec = recordingFs({ events })
@@ -1435,12 +1450,12 @@ describe('files for the owner only', () => {
     const spy = { ...open, statSync: (p, ...rest) => (asked.push(path.basename(String(p))), open.statSync(p, ...rest)) }
     const fresh = await go({ deps: { fs: spy } })
     expect(fresh.log).not.toContain('warning')
-    expect(asked).toEqual([FINAL]) // only the size of the dump, not the folder
+    expect(asked).not.toContain(path.basename(dir)) // the dump and the log were looked at, the folder was not
     fs.rmSync(dir, { recursive: true, force: true })
     seed([])
     const dirStatFails = (p, ...rest) => {
       if (path.resolve(String(p)) === path.resolve(dir)) throw new Error('EACCES')
-      return fs.statSync(p, ...rest)
+      return fileStat(p, ...rest)
     }
     const unreadable = await go({ deps: { fs: { ...fs, statSync: dirStatFails } } })
     expect(unreadable.exitCode).toBe(0)
@@ -1449,16 +1464,6 @@ describe('files for the owner only', () => {
     seed([])
     const windows = await go({ deps: { fs: recordingFs({ folderMode: 0o040777 }).fs, platform: 'win32', exists: () => false } })
     expect(windows.log).not.toContain('warning')
-  })
-
-  it('a chmod that fails does not fail the backup: the dump is kept, and a warning says that its mode was not set', async () => {
-    const rec = recordingFs({ failChmod: true })
-    const r = await go({ deps: { fs: rec.fs } })
-    expect(r.exitCode).toBe(0)
-    expect(r.files).toEqual(['backup.log', FINAL])
-    expect(r.warning).toBe('dump-permissions-not-set')
-    expect(r.log).toContain(' warning=dump-permissions-not-set')
-    expect(r.errs).toEqual(['backup: warning, dump-permissions-not-set'])
   })
 
   it('creates the real files for the owner only (checked with the real modes on macOS and Linux, where they exist)', async () => {
@@ -1821,6 +1826,235 @@ describe('owner-only files on Windows', () => {
     expect(r.runner.of('whoami')).toEqual([])
     expect(r.runner.of('icacls')).toEqual([])
     expect(r.runner.calls.map((c) => c.tool)).toEqual(['pg_dump', 'pg_restore', 'pg_restore'])
+  })
+})
+
+// ---- a read-only session ---------------------------------------------------------------------------------------------------------------
+
+describe('the session of pg_dump is read-only', () => {
+  it('has the option that makes every transaction of the session read-only', () => {
+    expect(READ_ONLY_OPTION).toBe('-c default_transaction_read_only=on')
+  })
+
+  it('puts it in PGOPTIONS for an address without options, and after the options that the address has', () => {
+    expect(connectionEnv('postgres://u:p@h.example/db').PGOPTIONS).toBe(READ_ONLY_OPTION)
+    expect(connectionEnv('postgres://u:p@h.example/db?options=endpoint%3Dep-abc').PGOPTIONS).toBe(`endpoint=ep-abc ${READ_ONLY_OPTION}`)
+    expect(connectionEnv('postgres://u:p@h.example/db?options=-c%20search_path%3Dx').PGOPTIONS).toBe(`-c search_path=x ${READ_ONLY_OPTION}`)
+  })
+
+  it('comes last, so that an option of the address that turns it off cannot win', () => {
+    const env = connectionEnv('postgres://u:p@h.example/db?options=-c%20default_transaction_read_only%3Doff')
+    expect(env.PGOPTIONS).toBe(`-c default_transaction_read_only=off ${READ_ONLY_OPTION}`)
+    expect(env.PGOPTIONS.endsWith('default_transaction_read_only=on')).toBe(true)
+  })
+
+  it('is in the environment of every pg_dump that a run starts, whatever the environment of the machine says', async () => {
+    const r = await go({ deps: { env: { PGOPTIONS: '-c default_transaction_read_only=off' } } })
+    const [dump] = r.runner.of('pg_dump')
+    expect(dump.options.env.PGOPTIONS).toBe(READ_ONLY_OPTION)
+    expect(r.runner.of('pg_dump')).toHaveLength(1)
+  })
+
+  it('goes with the address of BACKUP_DATABASE_URL and with the one from the Neon CLI alike', async () => {
+    const fromEnv = await go()
+    fs.rmSync(dir, { recursive: true, force: true })
+    const fromNeon = await go({ options: { neonProject: 'square-term-1' }, deps: { env: { BACKUP_DATABASE_URL: '' } } })
+    for (const r of [fromEnv, fromNeon]) expect(r.runner.of('pg_dump')[0].options.env.PGOPTIONS).toBe(READ_ONLY_OPTION)
+  })
+})
+
+// ---- one temporary file per run -----------------------------------------------------------------------------------------------------------
+
+describe('one temporary file per run', () => {
+  const partialOf = (r) => r.runner.of('pg_dump')[0].args.at(-1)
+
+  it('is named with the minute, the process id and random characters, ends in .dump, and is not a backup name', () => {
+    expect(partialFileName(FINAL, PID, RANDOM)).toBe(PARTIAL)
+    expect(partialFileName(FINAL, 7, 'ffffff')).toBe('building-qr-20261003T0715Z.partial-7-ffffff.dump')
+    expect(PARTIAL.endsWith('.dump')).toBe(true)
+    expect(BACKUP_NAME.test(PARTIAL)).toBe(false)
+  })
+
+  it('differs between two runs with the same clock, with the real process id and random characters too', async () => {
+    const first = await go({ deps: { pid: undefined, random: undefined } })
+    fs.rmSync(dir, { recursive: true, force: true })
+    const second = await go({ deps: { pid: undefined, random: undefined } })
+    const pattern = new RegExp(`^building-qr-20261003T0715Z\\.partial-${process.pid}-[0-9a-f]{6}\\.dump$`)
+    expect(partialOf(first)).toMatch(pattern)
+    expect(partialOf(second)).toMatch(pattern)
+    expect(partialOf(first)).not.toBe(partialOf(second))
+    expect(BACKUP_NAME.test(partialOf(first))).toBe(false)
+  })
+
+  it('is made empty and exclusively (wx) before pg_dump starts, with mode 600', async () => {
+    const made = []
+    const files = {
+      ...fs,
+      statSync: privateStat,
+      writeFileSync: (p, data, o) => {
+        made.push({ name: path.basename(String(p)), data, options: o })
+        return fs.writeFileSync(p, data, o)
+      },
+    }
+    const r = await go({ deps: { fs: files } })
+    expect(r.exitCode).toBe(0)
+    expect(made).toEqual([{ name: PARTIAL, data: '', options: { flag: 'wx', mode: 0o600 } }])
+  })
+
+  it('never reuses a file that is there already: the run fails before pg_dump, and the file is left as it was', async () => {
+    seed([PARTIAL])
+    fs.writeFileSync(path.join(dir, PARTIAL), 'the data of another run')
+    const r = await go()
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toMatch(/EEXIST/)
+    expect(r.runner.of('pg_dump')).toEqual([])
+    expect(fs.readFileSync(path.join(dir, PARTIAL), 'utf8')).toBe('the data of another run')
+    expect(r.files).toEqual(['backup.log', PARTIAL])
+    expect(visible(r)).not.toContain(tmp)
+  })
+
+  it('leaves a stale temporary file of another run alone, on success too', async () => {
+    seed(['building-qr-20261003T0715Z.partial-1-000000.dump', 'building-qr-20260101T0000Z.partial-9-ffffff.dump'])
+    const r = await go({ options: { keep: 1 } })
+    expect(r.exitCode).toBe(0)
+    expect(r.files).toEqual([
+      'backup.log',
+      'building-qr-20260101T0000Z.partial-9-ffffff.dump',
+      FINAL,
+      'building-qr-20261003T0715Z.partial-1-000000.dump',
+    ])
+  })
+
+  it('lets two runs of the same minute work at the same time: each has its own file, and the later rename replaces the final one', async () => {
+    const names = []
+    let which = 0
+    const slowDump = async (call) => {
+      names.push(call.args.at(-1))
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      return defaults.pg_dump(call)
+    }
+    const randoms = ['aaaaaa', 'bbbbbb']
+    const two = await Promise.all([
+      go({ runner: makeRunner({ pg_dump: slowDump }), deps: { random: () => randoms[which++] } }),
+      go({ runner: makeRunner({ pg_dump: slowDump }), deps: { random: () => randoms[which++] } }),
+    ])
+    expect(two.map((r) => r.exitCode)).toEqual([0, 0])
+    expect(new Set(names).size).toBe(2)
+    expect(names.sort()).toEqual([
+      'building-qr-20261003T0715Z.partial-4242-aaaaaa.dump',
+      'building-qr-20261003T0715Z.partial-4242-bbbbbb.dump',
+    ])
+    const left = fs.readdirSync(dir).sort()
+    expect(left).toEqual(['backup.log', FINAL]) // both temporary files are gone, one final file is left
+    expect(fs.readFileSync(path.join(dir, FINAL), 'utf8')).toBe('PGDMP fake dump')
+  })
+
+  it('deletes only the file that this run made when it fails', async () => {
+    seed(['building-qr-20261003T0715Z.partial-1-000000.dump'])
+    const r = await go({ runner: makeRunner({ pg_dump: () => ({ status: 1, stdout: '', stderr: 'nope' }) }) })
+    expect(r.exitCode).toBe(1)
+    expect(r.files).toEqual(['backup.log', 'building-qr-20261003T0715Z.partial-1-000000.dump'])
+  })
+})
+
+// ---- the mode of the finished dump is read back --------------------------------------------------------------------------------------
+
+describe('a dump that is still readable by others', () => {
+  const MODE_MESSAGE = 'the dump could not be made owner-only (chmod failed, or this file system ignores file modes), so it was deleted'
+
+  it('a failed chmod is harmless when the file is closed anyway (the umask did it): the dump is kept, with no warning', async () => {
+    const rec = recordingFs({ failChmod: true, fileMode: 0o100600 })
+    const r = await go({ deps: { fs: rec.fs } })
+    expect(r.exitCode).toBe(0)
+    expect(r.files).toEqual(['backup.log', FINAL])
+    expect(r.warning).toBeUndefined()
+  })
+
+  it('a failed chmod on a file that others can read: the dump is deleted, nothing is rotated, the backup fails', async () => {
+    seed(oldBackups)
+    const rec = recordingFs({ failChmod: true, fileMode: 0o100644 })
+    const r = await go({ options: { keep: 1 }, deps: { fs: rec.fs } })
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe(MODE_MESSAGE)
+    expect(r.files).toEqual(['backup.log', ...oldBackups])
+    expect(r.out).toEqual([])
+    // the new log says 644 too in this stub, which is its own warning, printed before the failure
+    expect(r.errs).toEqual(['backup: warning, backup.log could not be made owner-only', `backup failed: ${MODE_MESSAGE}`])
+    expect(r.log).toBe(`03/10/2026 10:15 failed host=${MASKED_HOST} error=${MODE_MESSAGE}\n`)
+  })
+
+  it('a chmod that works on a file system that ignores modes (the stat still says 664) fails the same way', async () => {
+    const rec = recordingFs({ fileMode: 0o100664 })
+    const r = await go({ deps: { fs: rec.fs } })
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe(MODE_MESSAGE)
+    expect(r.files).toEqual(['backup.log'])
+    expect(rec.chmods[0]).toEqual({ name: FINAL, folder: false, mode: 0o600 })
+  })
+
+  it('refuses every mode where a group or others have any right', async () => {
+    for (const mode of [0o100640, 0o100604, 0o100660, 0o100606, 0o100666, 0o100644, 0o100601, 0o100610]) {
+      fs.rmSync(dir, { recursive: true, force: true })
+      const r = await go({ deps: { fs: recordingFs({ fileMode: mode }).fs } })
+      expect(r.exitCode, mode.toString(8)).toBe(1)
+      expect(r.files, mode.toString(8)).toEqual(['backup.log'])
+    }
+    for (const mode of [0o100600, 0o100400, 0o100700, 0o100500]) {
+      fs.rmSync(dir, { recursive: true, force: true })
+      const r = await go({ deps: { fs: recordingFs({ fileMode: mode }).fs } })
+      expect(r.exitCode, mode.toString(8)).toBe(0)
+    }
+  })
+
+  it('fails closed when the mode cannot be read at all: the dump is deleted', async () => {
+    const files = {
+      ...fs,
+      statSync: (p, ...rest) => {
+        if (path.basename(String(p)) === FINAL) throw new Error('EIO')
+        return privateStat(p, ...rest)
+      },
+    }
+    const r = await go({ deps: { fs: files } })
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe(MODE_MESSAGE)
+    expect(r.files).toEqual(['backup.log'])
+  })
+
+  it('is not checked on Windows, where icacls does this work', async () => {
+    const rec = recordingFs({ fileMode: 0o100666 })
+    const r = await go({ deps: { fs: rec.fs, platform: 'win32', exists: () => false } })
+    expect(r.exitCode).toBe(0)
+    expect(r.files).toEqual(['backup.log', FINAL])
+  })
+
+  it('a new backup.log that others can read is only a warning: the line is written and the run goes on', async () => {
+    const rec = recordingFs({ fileMode: 0o100644, failChmod: true })
+    // the dump must pass its own check, so only the log says 644
+    const files = {
+      ...rec.fs,
+      statSync: (p, ...rest) => (path.basename(String(p)) === 'backup.log' ? { size: 0, mode: 0o100644 } : privateStat(p, ...rest)),
+    }
+    const r = await go({ deps: { fs: files } })
+    expect(r.exitCode).toBe(0)
+    expect(r.log).toContain(' ok host=')
+    expect(r.errs).toEqual(['backup: warning, backup.log could not be made owner-only'])
+  })
+
+  it('does not check a log that was there before (it is the user\'s file, and may have a mode that was chosen)', async () => {
+    seed([])
+    fs.writeFileSync(path.join(dir, 'backup.log'), '')
+    const asked = []
+    const files = {
+      ...fs,
+      statSync: (p, ...rest) => {
+        asked.push(path.basename(String(p)))
+        return path.basename(String(p)) === 'backup.log' ? { size: 0, mode: 0o100644 } : privateStat(p, ...rest)
+      },
+    }
+    const r = await go({ deps: { fs: files } })
+    expect(r.exitCode).toBe(0)
+    expect(r.errs).toEqual([])
+    expect(asked).not.toContain('backup.log')
   })
 })
 

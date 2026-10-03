@@ -12,13 +12,20 @@
 // What one run does:
 //   1. Gets the DIRECT connection string (never the pooled one: pg_dump needs a session) from BACKUP_DATABASE_URL, or from
 //      the Neon CLI (`neon connection-string`) when --neon-project is given. It lives in memory only.
-//   2. Runs pg_dump (custom format) into a temporary file in the folder. The password goes to pg_dump through the
-//      environment (PGPASSWORD and friends), never on the command line, where other users of a machine can see it.
+//   2. Runs pg_dump (custom format) into a temporary file in the folder: this run's own file (the minute, the process id
+//      and a few random characters in its name), created empty and exclusively before pg_dump starts, so two runs in the
+//      same minute never share a file. The password goes to pg_dump through the environment (PGPASSWORD and friends),
+//      never on the command line, where other users of a machine can see it. The session is READ-ONLY on the server
+//      (`-c default_transaction_read_only=on` in PGOPTIONS), so the backup cannot write to the database it reads, and that
+//      is what makes it safe to point at production. It is the one sanctioned local READ of a deployment's database, next
+//      to `db:create-admin`, the one sanctioned write (AGENTS.md "Safety", ADR 0005). It does not use the production guard
+//      (server/dbGuard.js): reading production is its job.
 //   3. Checks the file twice. `pg_restore --list` prints the table of contents, which must name the data of the tables
 //      `scans` and `points`; but it does not read the data blocks, so a dump that was cut off after its table of contents
 //      would pass. A full read (`pg_restore --file=<the null device>`) writes the SQL of the whole archive to nowhere, which
 //      reads and decompresses every data block, and must exit with 0. Only then is the temporary file renamed to
-//      building-qr-<UTC time>.dump. A failure deletes the temporary file.
+//      building-qr-<UTC time>.dump (a file of the same name from a run of the same minute is replaced by this verified
+//      one). A failure deletes the temporary file, but only a file that this run created.
 //   4. Keeps the newest --keep files that match that exact name and deletes the older ones. Any other file in the folder is
 //      left alone, and nothing is rotated after a failed backup.
 //   5. Appends one line to backup.log in the folder (the time, ok or failed, the masked host, the file and its size, or a
@@ -28,8 +35,10 @@
 // Who can read the files: only the owner, because the dump holds attendance data. On macOS and Linux the script sets the
 // umask to 077 before it creates anything (pg_dump creates its file with the umask it inherits, which is often 022, so the
 // file would be readable by every account of the machine), makes the folder with mode 700, and sets mode 600 on every dump
-// and on backup.log. A folder that already exists is the user's choice: it is never changed, but a warning in backup.log
-// and on the screen says so when other users can read it.
+// and on backup.log. The mode of the finished dump is READ BACK (stat), and a dump that is still readable by others
+// (chmod failed, or the file system ignores modes) is deleted and the backup fails; a new backup.log is checked the same
+// way, but only as a warning. A folder that already exists is the user's choice: it is never changed, but a warning in
+// backup.log and on the screen says so when other users can read it.
 //
 // On Windows a new file inherits the access list of its folder, and a shared, network or synced folder may let others
 // in. So before pg_dump runs the script creates the empty temporary file itself and sets its access list with icacls
@@ -48,6 +57,7 @@
 // pg_dump must not be older than the server (Neon runs Postgres 18). --pg-bin, then PG_BIN, then on Windows the usual
 // install folder of Postgres 18, then PATH, in that order.
 import fs from 'node:fs'
+import crypto from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
@@ -83,6 +93,9 @@ const PRIVATE_UMASK = 0o077
 const MAX_CAPTURE = 32 * 1024 * 1024
 const SSL_MODES = new Set(['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full'])
 const CHANNEL_BINDINGS = new Set(['disable', 'prefer', 'require'])
+// The option that makes a session read-only on the server: every transaction starts READ ONLY, and a write is refused
+// ("cannot execute CREATE TABLE in a read-only transaction"). It goes into PGOPTIONS of pg_dump.
+export const READ_ONLY_OPTION = '-c default_transaction_read_only=on'
 
 export const USAGE = [
   'Usage: node scripts/backup-db.mjs --out <dir> [--neon-project <id>] [options]',
@@ -269,8 +282,9 @@ function decode(text) {
 
 /**
  * The environment variables that pg_dump reads, made from a connection string: PGHOST, PGPORT, PGUSER, PGPASSWORD,
- * PGDATABASE, PGSSLMODE (from the URL's sslmode, else `require`), and PGOPTIONS and PGCHANNELBINDING when the URL has
- * `options` and `channel_binding`. The password is only ever in PGPASSWORD. Throws an Error whose message is safe to print
+ * PGDATABASE, PGSSLMODE (from the URL's sslmode, else `require`), PGOPTIONS (always: the read-only session, after the
+ * `options` of the URL when it has some) and PGCHANNELBINDING when the URL has `channel_binding`. The password is only ever
+ * in PGPASSWORD. Throws an Error whose message is safe to print
  * for a string that is not a postgres address, has no user or database, or is the pooled one (a host with -pooler, which
  * hands each statement to another server connection, so it cannot give pg_dump the one session that it needs).
  */
@@ -301,8 +315,11 @@ export function connectionEnv(connectionString) {
   const env = { PGHOST: host, PGPORT: url.port || '5432', PGUSER: user, PGDATABASE: database, PGSSLMODE: sslmode }
   const password = decode(url.password)
   if (password) env.PGPASSWORD = password
-  const options = url.searchParams.get('options')
-  if (options) env.PGOPTIONS = options
+  // Every session of pg_dump is read-only on the SERVER side, whatever the program does: the backup reads the database (the
+  // production one too, on purpose, see AGENTS.md "Safety" and ADR 0005), and this makes a write impossible by construction.
+  // It comes last, so that it wins over an option of the address that says the opposite.
+  const options = String(url.searchParams.get('options') ?? '').trim()
+  env.PGOPTIONS = options ? `${options} ${READ_ONLY_OPTION}` : READ_ONLY_OPTION
   const binding = url.searchParams.get('channel_binding')
   if (binding) {
     if (!CHANNEL_BINDINGS.has(binding)) throw new Error('the channel_binding of the connection string is not valid')
@@ -354,11 +371,13 @@ export function backupFileName(date) {
 }
 
 /**
- * The temporary file of a backup that is not verified yet. It still ends in .dump (so `*.dump` in .gitignore covers it)
- * and it does not match BACKUP_NAME (so retention never counts it).
+ * The temporary file of ONE run, for a backup that is not verified yet: the minute of the final name, the process id and a
+ * few random characters, so that two runs in the same minute (a retry, a second task) never write to the same file. It
+ * still ends in .dump (so `*.dump` in .gitignore covers it) and it does not match BACKUP_NAME (so retention never counts
+ * it). It is created with `wx`, so a file that is there already is never reused or overwritten.
  */
-export function partialFileName(finalName) {
-  return finalName.replace(/\.dump$/, '.partial.dump')
+export function partialFileName(finalName, pid, random) {
+  return finalName.replace(/\.dump$/, `.partial-${pid}-${random}.dump`)
 }
 
 /**
@@ -671,6 +690,8 @@ export async function runBackup(options, deps = {}) {
     fs: files = fs,
     umask = setProcessUmask,
     userName = () => os.userInfo().username,
+    pid = process.pid,
+    random = () => crypto.randomBytes(3).toString('hex'),
     out = console.log,
     err = console.error,
   } = deps
@@ -679,7 +700,10 @@ export async function runBackup(options, deps = {}) {
   const started = now()
   const outDir = path.resolve(options.out)
   const finalName = backupFileName(started)
-  const partialName = partialFileName(finalName)
+  // This run's own temporary file (see partialFileName): never the name of another run's file.
+  const partialName = partialFileName(finalName, pid, random())
+  const partialPath = path.join(outDir, partialName)
+  let partialCreated = false
   const logPath = path.join(outDir, LOG_NAME)
   const say = (print, text) => attempt(() => print(text))
   // A file system error carries an absolute path, and on most machines that path holds the user's name.
@@ -721,14 +745,14 @@ export async function runBackup(options, deps = {}) {
     const pgBin = resolvePgBin({ option: options.pgBin, env, platform, exists })
     const pgRestore = pgTool(pgBin, 'pg_restore', platform)
 
-    // On Windows the empty temporary file is made here and closed to every other user BEFORE pg_dump writes to it: a new file
-    // inherits the access list of its folder, which may be a shared one. pg_dump opens the existing file and overwrites it
-    // in place, which keeps the list. If this fails nothing is dumped. (On macOS and Linux the umask does the same.)
-    if (windows) {
-      const owner = await ownerOf()
-      files.writeFileSync(path.join(outDir, partialName), '')
-      await restrictToOwner({ name: partialName, cwd: outDir, owner, runner, env })
-    }
+    // The empty temporary file is made here, exclusively (`wx`: a file that exists is an error, never reused), BEFORE pg_dump
+    // writes to it. On Windows it is also closed to every other user first: a new file inherits the access list of its
+    // folder, which may be a shared one, and pg_dump opens the existing file and overwrites it in place, which keeps the
+    // list. If this fails nothing is dumped. (On macOS and Linux the umask and the mode do the same.)
+    const owner = windows ? await ownerOf() : undefined
+    files.writeFileSync(partialPath, '', { flag: 'wx', mode: PRIVATE_FILE })
+    partialCreated = true
+    if (windows) await restrictToOwner({ name: partialName, cwd: outDir, owner, runner, env })
 
     // The file name is relative and the folder is the working directory of the tool, so a path with a name in another
     // alphabet never has to pass through the command line of a Windows program.
@@ -766,13 +790,25 @@ export async function runBackup(options, deps = {}) {
       throw new Error(`the dump could not be read to the end with pg_restore (exit code ${full.status})${firstLine(full.stderr)}`)
     }
 
-    files.renameSync(path.join(outDir, partialName), path.join(outDir, finalName))
+    // Only now, after pg_dump has exited and both checks passed, the file gets its final name. When that name exists (a second
+    // run in the same minute) the rename replaces it with this verified dump, which is as good.
+    const finalPath = path.join(outDir, finalName)
+    files.renameSync(partialPath, finalPath)
     const warnings = []
-    // Already 600 through the umask: this makes sure, and says so when it cannot (a file system that has no modes).
-    if (posix && !attempt(() => files.chmodSync(path.join(outDir, finalName), PRIVATE_FILE))) {
-      warnings.push('dump-permissions-not-set')
+    if (posix) {
+      // Already 600 through the umask and the mode of the empty file: this makes sure. Then the mode is READ BACK: a failed
+      // chmod, or a file system that ignores modes (some network and exFAT volumes), must not leave a readable dump.
+      attempt(() => files.chmodSync(finalPath, PRIVATE_FILE))
+      let closed = false
+      attempt(() => {
+        closed = (files.statSync(finalPath).mode & 0o077) === 0
+      })
+      if (!closed) {
+        attempt(() => files.rmSync(finalPath, { force: true }))
+        throw new Error('the dump could not be made owner-only (chmod failed, or this file system ignores file modes), so it was deleted')
+      }
     }
-    const size = files.statSync(path.join(outDir, finalName)).size
+    const size = files.statSync(finalPath).size
 
     let removed = 0
     try {
@@ -784,8 +820,9 @@ export async function runBackup(options, deps = {}) {
     }
     result = { ok: true, file: finalName, size, removed, warning: warnings.join(',') || undefined }
   } catch (error) {
-    // A file that cannot be deleted is not worth hiding the real error for: the message below still says what failed.
-    attempt(() => files.rmSync(path.join(outDir, partialName), { force: true }))
+    // Only this run's own file is deleted, and only when this run created it: a file that was there already is not ours. A file
+    // that cannot be deleted is not worth hiding the real error for: the message below still says what failed.
+    if (partialCreated) attempt(() => files.rmSync(partialPath, { force: true }))
     result = { ok: false, message: scrub(error instanceof Error ? error.message : 'unexpected error') }
   }
 
@@ -814,6 +851,10 @@ export async function runBackup(options, deps = {}) {
   // On Windows a new backup.log is closed to other users as soon as it exists. It holds no personal data, so when that fails
   // the line is written anyway and a warning says so.
   let logIsOpen = false
+  let logExisted = true
+  attempt(() => {
+    logExisted = files.existsSync(logPath)
+  })
   if (windows) {
     try {
       if (!files.existsSync(logPath)) {
@@ -829,7 +870,17 @@ export async function runBackup(options, deps = {}) {
     if (folderIsOpen) files.appendFileSync(logPath, `${folderWarning}\n`, { encoding: 'utf8', mode: PRIVATE_FILE })
     files.appendFileSync(logPath, `${line}\n`, { encoding: 'utf8', mode: PRIVATE_FILE })
   })
-  if (posix) attempt(() => files.chmodSync(logPath, PRIVATE_FILE))
+  if (posix) {
+    attempt(() => files.chmodSync(logPath, PRIVATE_FILE))
+    // A new log gets the same check as a dump, but only as a warning: it holds no personal data.
+    if (logged && !logExisted) {
+      let closed = false
+      attempt(() => {
+        closed = (files.statSync(logPath).mode & 0o077) === 0
+      })
+      if (!closed) logIsOpen = true
+    }
+  }
   if (!logged) say(err, 'backup: could not write backup.log')
   else if (logIsOpen) say(err, 'backup: warning, backup.log could not be made owner-only')
   if (previousMask !== undefined) attempt(() => umask(previousMask))

@@ -66,15 +66,17 @@ check-ins, the e-mail addresses of the committee), so they never go to GitHub, i
 `*.dump` is in `.gitignore` as a second net.
 
 **What runs.** `scripts/backup-db.mjs` (`npm run db:backup`), once a day. It asks the Neon CLI for the direct connection
-string of the production branch (kept in memory, never written down), runs `pg_dump`, and checks the file twice: the
-table of contents (`pg_restore --list`) must name the data of `scans` and `points`, and then a full read
-(`pg_restore --file=` to the null device, `NUL` on Windows and `/dev/null` elsewhere) must get through every data block
-and exit with 0. The first check alone is not enough, because the table of contents is at the start of the file and a dump
-that was cut off after it would pass. Only then is the file named `building-qr-<UTC date and time>.dump`. A failed dump
-leaves no file behind. It keeps the newest 30 dumps (`--keep`) and
-deletes older ones, and it never touches another file in the folder. One line per run is added to `backup.log` in the same
-folder: the time (UTC), ok or failed, the masked host, the file and its size, or a short error. It never holds the
-connection string, the user or the password.
+string of the production branch (kept in memory, never written down) and runs `pg_dump` in a read-only session: the server
+refuses any write in it, so the backup cannot change production. This is the one sanctioned local read of production (see
+ADR 0005). The dump goes into a temporary file that belongs to this run alone, so two runs in the same minute never share a
+file. Then the file is checked twice: the table of contents (`pg_restore --list`) must name the data of `scans` and
+`points`, and then a full read (`pg_restore --file=` to the null device, `NUL` on Windows and `/dev/null` elsewhere) must get
+through every data block and exit with 0. The first check alone is not enough, because the table of contents is at the
+start of the file and a dump that was cut off after it would pass. Only then is the file named
+`building-qr-<UTC date and time>.dump` (a file of the same minute is replaced by it). A failed dump leaves no file behind.
+It keeps the newest 30 dumps (`--keep`) and deletes older ones, and it never touches another file in the folder. One line
+per run is added to `backup.log` in the same folder: the time (DD/MM/YYYY HH:MM), ok or failed, the masked host, the file
+and its size, or a short error. It never holds the connection string, the user or the password.
 
 **Where the files are.** A folder on the owner's computer, outside the repository, set with `--out` in the scheduled task.
 

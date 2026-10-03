@@ -50,3 +50,23 @@ Bad:
 - **Trusting `VERCEL_ENV`.** Rejected after the Codex review of this change: any shell can set it, and a local
   `vercel build --prod` sets it too, so it proves nothing about where the code runs.
 - **Checking the host name.** It breaks for a self-hosted copy of the project, whose host is not known in advance.
+
+## Addendum (03/10/2026): the daily backup is a sanctioned read
+
+The free Neon plan restores production only to a point in the last 6 hours, so the owner decided on a daily dump of the
+database on the owner's own computer (`npm run db:backup`, `scripts/backup-db.mjs`, described in
+`docs/runbooks/restore.md`). That reads the production database on purpose, so it is an exception to the rule of this
+decision. It is written down here so that it stays narrow:
+
+- With `db:create-admin`, it is one of the two sanctioned local accesses to a deployment's database. `db:create-admin`
+  writes (one row); the backup only reads.
+- It is read-only by construction. It runs `pg_dump`, and every session of `pg_dump` is made read-only by the server:
+  `-c default_transaction_read_only=on` goes into `PGOPTIONS`, after any options of the connection string, so nothing in
+  that string can turn it off. A write in such a session fails with "cannot execute ... in a read-only transaction".
+- It does not use the production guard (`server/dbGuard.js`), because refusing production would defeat its purpose. The
+  read-only session is the protection instead.
+- The dump never leaves the owner's machine: a folder outside the repository, files that only the owner can read (the
+  umask and the modes on macOS and Linux, an owner-only access list on Windows), `*.dump` in `.gitignore`, and no
+  connection string or personal data in a log, an issue or a pull request.
+- A change that lets the backup write, or run without the read-only session, is P1 in the code review rules of
+  `AGENTS.md`.
