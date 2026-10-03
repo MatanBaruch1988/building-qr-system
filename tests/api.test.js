@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
+import { SAMPLE_POINT, SAMPLE_PROVIDER_NAMES } from '../scripts/sample-data.mjs'
 
 let db, cookie
 const ids = {} // created ids shared across tests
 let lobbyCode, basementCode, gymCode, inactiveCode
 
 // ~111 m per 0.001° of latitude
-const HOME = { lat: 32.3132, lng: 34.9442 }
+const HOME = SAMPLE_POINT
 const near = { ...HOME, accuracy: 12 }
 const far = { lat: HOME.lat + 0.05, lng: HOME.lng, accuracy: 12 }
 
@@ -27,19 +28,19 @@ beforeAll(async () => {
   cookie = await adminCookie()
 
   const mk = async (body) => (await call('POST', '/api/admin/points', { cookie, body })).json.point
-  const lior = (await call('POST', '/api/admin/providers', {
-    cookie, body: { company: 'ניקיון', contact_name: 'ליאור', service_type: 'cleaning', password: 'lior-1234' },
+  const ploni = (await call('POST', '/api/admin/providers', {
+    cookie, body: { company: 'ניקיון', contact_name: SAMPLE_PROVIDER_NAMES.cleaner, service_type: 'cleaning', password: 'ploni-1234' },
   })).json.provider
   const gardener = (await call('POST', '/api/admin/providers', {
-    cookie, body: { company: 'גינון', contact_name: 'חמודי', service_type: 'gardening', password: 'gard-1234' },
+    cookie, body: { company: 'גינון', contact_name: SAMPLE_PROVIDER_NAMES.gardener, service_type: 'gardening', password: 'gard-1234' },
   })).json.provider
-  ids.lior = lior.id
+  ids.ploni = ploni.id
   ids.gardener = gardener.id
   ids.gardenerToken = (await login(gardener.id, 'gard-1234')).json.token
 
   const lobby = await mk({ name: 'לובי', lat: HOME.lat, lng: HOME.lng, gps_mode: 'optional' })
   const basement = await mk({ name: 'מינוס 1', lat: HOME.lat, lng: HOME.lng, gps_mode: 'none' })
-  const gym = await mk({ name: 'גימבורי', lat: HOME.lat, lng: HOME.lng, gps_mode: 'required', provider_ids: [lior.id] })
+  const gym = await mk({ name: 'גימבורי', lat: HOME.lat, lng: HOME.lng, gps_mode: 'required', provider_ids: [ploni.id] })
   const inactive = await mk({ name: 'ישן', lat: HOME.lat, lng: HOME.lng })
   await call('PATCH', `/api/admin/points/${inactive.id}`, { cookie, body: { is_active: false } })
   Object.assign(ids, { lobby: lobby.id, basement: basement.id, gym: gym.id, inactive: inactive.id })
@@ -170,7 +171,7 @@ describe('public endpoints', () => {
   it('lists only providers who can sign in, without secrets', async () => {
     const r = await call('GET', '/api/public/providers')
     expect(r.status).toBe(200)
-    expect(r.json.providers.map((p) => p.contact_name).sort()).toEqual(['חמודי', 'ליאור'])
+    expect(r.json.providers.map((p) => p.contact_name).sort()).toEqual([SAMPLE_PROVIDER_NAMES.gardener, SAMPLE_PROVIDER_NAMES.cleaner])
     expect(JSON.stringify(r.json)).not.toMatch(/hash|password/)
   })
   it('resolves a QR to a point name without coordinates or token', async () => {
@@ -233,17 +234,17 @@ describe('provider sign-in', () => {
     await db.pool.query('delete from auth_attempts')
   })
   it('signs in, returns a device token, and the session endpoint recognises it', async () => {
-    const r = await login(ids.lior, 'lior-1234')
+    const r = await login(ids.ploni, 'ploni-1234')
     expect(r.status).toBe(200)
     expect(r.json.token).toMatch(/^qrp_/)
-    expect(r.json.provider).toMatchObject({ contact_name: 'ליאור' })
+    expect(r.json.provider).toMatchObject({ contact_name: SAMPLE_PROVIDER_NAMES.cleaner })
     const me = await call('GET', '/api/session', { token: r.json.token })
     expect(me.json.provider.company).toBe('ניקיון')
-    ids.liorToken = r.json.token
+    ids.ploniToken = r.json.token
   })
   it('signing out revokes only that device', async () => {
-    const a = (await login(ids.lior, 'lior-1234')).json.token
-    const b = (await login(ids.lior, 'lior-1234')).json.token
+    const a = (await login(ids.ploni, 'ploni-1234')).json.token
+    const b = (await login(ids.ploni, 'ploni-1234')).json.token
     await call('DELETE', '/api/session', { token: a })
     expect((await call('GET', '/api/session', { token: a })).status).toBe(401)
     expect((await call('GET', '/api/session', { token: b })).status).toBe(200)
@@ -255,7 +256,7 @@ describe('provider sign-in', () => {
 
 describe('recording scans', () => {
   it('accepts a normal scan and stores signals, not raw coordinates', async () => {
-    const r = await scan(ids.liorToken, { code: lobbyCode, gps: near, client_time: new Date().toISOString() })
+    const r = await scan(ids.ploniToken, { code: lobbyCode, gps: near, client_time: new Date().toISOString() })
     expect(r.status).toBe(200)
     expect(r.json.duplicate).toBe(false)
     expect(r.json.scan).toMatchObject({
@@ -268,22 +269,22 @@ describe('recording scans', () => {
   })
   it('a retry with the same id returns the stored scan (idempotent)', async () => {
     const id = randomUUID()
-    const first = await call('POST', '/api/scan', { token: ids.liorToken, body: { id, code: basementCode } })
-    const again = await call('POST', '/api/scan', { token: ids.liorToken, body: { id, code: basementCode } })
+    const first = await call('POST', '/api/scan', { token: ids.ploniToken, body: { id, code: basementCode } })
+    const again = await call('POST', '/api/scan', { token: ids.ploniToken, body: { id, code: basementCode } })
     expect(again.json.scan.id).toBe(first.json.scan.id)
     const n = await db.pool.query('select count(*)::int n from scans where id = $1', [id])
     expect(n.rows[0].n).toBe(1)
   })
   it('the same provider at the same point within 10 minutes is one visit', async () => {
-    const first = await scan(ids.liorToken, { code: basementCode })
-    const second = await scan(ids.liorToken, { code: basementCode })
+    const first = await scan(ids.ploniToken, { code: basementCode })
+    const second = await scan(ids.ploniToken, { code: basementCode })
     expect(second.json.duplicate).toBe(true)
     expect(second.json.scan.id).toBe(first.json.scan.id)
   })
   it('a scan id cannot be replayed by another provider', async () => {
     const p = await freshPoint()
     const id = randomUUID()
-    const first = await call('POST', '/api/scan', { token: ids.liorToken, body: { id, code: p.qr_token } })
+    const first = await call('POST', '/api/scan', { token: ids.ploniToken, body: { id, code: p.qr_token } })
     expect(first.status).toBe(200)
     const r = await call('POST', '/api/scan', { token: ids.gardenerToken, body: { id, code: p.qr_token } })
     expect(r.status).toBe(409)
@@ -313,19 +314,19 @@ describe('recording scans', () => {
     expect(r.json.scan.flags).toEqual([])
   })
   it("'required' points refuse a scan with no fix, and enforce assignment", async () => {
-    const r = await scan(ids.liorToken, { code: gymCode })
+    const r = await scan(ids.ploniToken, { code: gymCode })
     expect(r.json.scan.outcome).toBe('rejected_no_location')
-    const ok = await scan(ids.liorToken, { code: gymCode, gps: near })
+    const ok = await scan(ids.ploniToken, { code: gymCode, gps: near })
     expect(ok.json.scan.outcome).toBe('accepted')
     const denied = await scan(ids.gardenerToken, { code: gymCode, gps: near })
     expect(denied.status).toBe(403)
     expect(denied.json.error.code).toBe('not_assigned')
   })
   it('refuses inactive points and unknown or malformed codes', async () => {
-    expect((await scan(ids.liorToken, { code: inactiveCode })).json.error.code).toBe('point_inactive')
-    expect((await scan(ids.liorToken, { code: 'BQR-unknown0000000' })).json.error.code).toBe('unknown_code')
-    expect((await scan(ids.liorToken, { code: 'nonsense' })).json.error.code).toBe('invalid_code')
-    expect((await call('POST', '/api/scan', { token: ids.liorToken, body: { id: 'x', code: lobbyCode } })).json.error.code).toBe('invalid_scan_id')
+    expect((await scan(ids.ploniToken, { code: inactiveCode })).json.error.code).toBe('point_inactive')
+    expect((await scan(ids.ploniToken, { code: 'BQR-unknown0000000' })).json.error.code).toBe('unknown_code')
+    expect((await scan(ids.ploniToken, { code: 'nonsense' })).json.error.code).toBe('invalid_code')
+    expect((await call('POST', '/api/scan', { token: ids.ploniToken, body: { id: 'x', code: lobbyCode } })).json.error.code).toBe('invalid_scan_id')
   })
   it('accepts a legacy printed URL as the code', async () => {
     const p = await freshPoint()
@@ -360,9 +361,9 @@ describe('offline sync', () => {
     expect(n.rows[0].n).toBe(1)
   })
   it('validates the batch', async () => {
-    expect((await call('POST', '/api/scans/sync', { token: ids.liorToken, body: { scans: 'x' } })).status).toBe(400)
+    expect((await call('POST', '/api/scans/sync', { token: ids.ploniToken, body: { scans: 'x' } })).status).toBe(400)
     const many = Array.from({ length: 51 }, () => ({ id: randomUUID(), code: lobbyCode }))
-    expect((await call('POST', '/api/scans/sync', { token: ids.liorToken, body: { scans: many } })).json.error.code).toBe('batch_too_large')
+    expect((await call('POST', '/api/scans/sync', { token: ids.ploniToken, body: { scans: many } })).json.error.code).toBe('batch_too_large')
   })
 })
 
@@ -381,22 +382,22 @@ describe('committee controls', () => {
     expect(all.find((x) => x.id === p.id).is_active).toBe(false)
   })
   it('resetting a password signs out old devices; short passwords are refused', async () => {
-    const t = (await login(ids.lior, 'lior-1234')).json.token
-    const short = await call('PATCH', `/api/admin/providers/${ids.lior}`, { cookie, body: { password: '123' } })
+    const t = (await login(ids.ploni, 'ploni-1234')).json.token
+    const short = await call('PATCH', `/api/admin/providers/${ids.ploni}`, { cookie, body: { password: '123' } })
     expect(short.json.error.code).toBe('password_too_short')
-    await call('PATCH', `/api/admin/providers/${ids.lior}`, { cookie, body: { password: 'lior-5678' } })
+    await call('PATCH', `/api/admin/providers/${ids.ploni}`, { cookie, body: { password: 'ploni-5678' } })
     expect((await call('GET', '/api/session', { token: t })).status).toBe(401)
-    const fresh = await login(ids.lior, 'lior-5678')
+    const fresh = await login(ids.ploni, 'ploni-5678')
     expect(fresh.status).toBe(200)
-    ids.liorToken = fresh.json.token
+    ids.ploniToken = fresh.json.token
   })
   it('regenerating a QR kills the old code', async () => {
     const p = (await call('POST', '/api/admin/points', { cookie, body: { name: 'זמני' } })).json.point
     const before = p.qr_token
     const after = (await call('POST', `/api/admin/points/${p.id}/regenerate-qr`, { cookie })).json.point.qr_token
     expect(after).not.toBe(before)
-    expect((await scan(ids.liorToken, { code: before })).json.error.code).toBe('unknown_code')
-    expect((await scan(ids.liorToken, { code: after })).status).toBe(200)
+    expect((await scan(ids.ploniToken, { code: before })).json.error.code).toBe('unknown_code')
+    expect((await scan(ids.ploniToken, { code: after })).status).toBe(200)
   })
   it('point QR urls use APP_BASE_URL when set', async () => {
     process.env.APP_BASE_URL = 'https://qr.example.com/'
@@ -456,7 +457,7 @@ describe('agent API', () => {
     expect((await call('GET', '/api/agent/v1/scans', { token: 'not-a-key' })).json.error.code).toBe('api_key_required')
     expect((await call('GET', '/api/agent/v1/scans', { token: 'qrk_nope' })).json.error.code).toBe('api_key_invalid')
     // a provider token is not an agent key
-    expect((await call('GET', '/api/agent/v1/scans', { token: ids.liorToken })).status).toBe(401)
+    expect((await call('GET', '/api/agent/v1/scans', { token: ids.ploniToken })).status).toBe(401)
   })
   it('committee creates a key (shown once) and it works', async () => {
     const r = await call('POST', '/api/admin/api-keys', { cookie, body: { name: 'agent' } })

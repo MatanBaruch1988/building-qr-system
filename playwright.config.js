@@ -2,12 +2,13 @@
 // Two projects drive the same specs: Chromium as a Pixel (Android) and WebKit as an iPhone (the WebKit engine is not
 // Safari: see docs/manual-ios-checklist.md for what only a real iPhone can show).
 import { defineConfig, devices } from '@playwright/test'
+import { SAMPLE_POINT } from './scripts/sample-data.mjs'
 
 // Ports chosen away from the development servers (3000 and 3001) so both can run at the same time.
 const APP_PORT = 3100
 const API_PORT = 3101
 // Where the sample point is: every project starts as a person standing at the point.
-export const NEAR = { latitude: 32.3132, longitude: 34.9442, accuracy: 10 }
+export const NEAR = { latitude: SAMPLE_POINT.lat, longitude: SAMPLE_POINT.lng, accuracy: 10 }
 
 export default defineConfig({
   testDir: './e2e',

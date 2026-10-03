@@ -3,9 +3,10 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
+import { SAMPLE_POINT, SAMPLE_PROVIDER_NAMES } from '../scripts/sample-data.mjs'
 
 let db, cookie, token, provider
-const HOME = { lat: 32.3132, lng: 34.9442 }
+const HOME = SAMPLE_POINT
 const far = { lat: HOME.lat + 0.05, lng: HOME.lng, accuracy: 12 }
 
 const point = async (extra = {}) =>
@@ -16,8 +17,8 @@ beforeAll(async () => {
   db = await setupDb()
   await seedAdmin(db.pool)
   cookie = await adminCookie()
-  provider = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'ניקיון', contact_name: 'ליאור', password: 'lior-1234' } })).json.provider
-  token = (await call('POST', '/api/session', { body: { provider_id: provider.id, password: 'lior-1234' } })).json.token
+  provider = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'ניקיון', contact_name: SAMPLE_PROVIDER_NAMES.cleaner, password: 'ploni-1234' } })).json.provider
+  token = (await call('POST', '/api/session', { body: { provider_id: provider.id, password: 'ploni-1234' } })).json.token
 })
 afterAll(async () => db?.teardown())
 
@@ -118,7 +119,7 @@ describe('retries and races on the same scan id', () => {
   })
 
   it('another provider racing for the same id gets a clean 409, never a 500', async () => {
-    const other = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'גינון', contact_name: 'חמודי', password: 'gard-1234' } })).json.provider
+    const other = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'גינון', contact_name: SAMPLE_PROVIDER_NAMES.gardener, password: 'gard-1234' } })).json.provider
     const otherToken = (await call('POST', '/api/session', { body: { provider_id: other.id, password: 'gard-1234' } })).json.token
     const p = await point()
     const id = randomUUID()
@@ -302,7 +303,7 @@ describe('demo account', () => {
   it('may scan every point, including ones assigned to somebody else (a tester must reach all QR codes)', async () => {
     const demo = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'דמו2', contact_name: 'בודק', password: 'demo-5678', is_demo: true } })).json.provider
     const demoToken = (await call('POST', '/api/session', { body: { provider_id: demo.id, password: 'demo-5678' } })).json.token
-    const restricted = await point({ name: 'only-lior', provider_ids: [provider.id] })
+    const restricted = await point({ name: 'only-ploni', provider_ids: [provider.id] })
 
     const asDemo = await scan({ code: restricted.qr_token, gps: { ...HOME, accuracy: 5 } }, demoToken)
     expect(asDemo.status).toBe(200)
