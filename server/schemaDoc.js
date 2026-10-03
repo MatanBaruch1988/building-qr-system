@@ -52,6 +52,7 @@ export const schemaDoc = {
     offline_sync: 'Scanned without signal and uploaded later; checked_in_at is the phone time.',
     clock_skew: 'The phone clock differed from the server by more than 5 minutes (or was implausible).',
     demo: 'Scanned with the demo account (test data). Hidden by default; use include_demo=true to see it.',
+    legacy_import: 'Imported from the old Firebase system on 01/10/2026; its location and device details are not known.',
   },
   rules: {
     duplicate_window_minutes: SCAN_COOLDOWN_MINUTES,
@@ -63,6 +64,6 @@ export const schemaDoc = {
       distance_rule: `A usable fix is judged the same way on 'required' and 'optional' points: the phone must be inside the point radius plus pin_tolerance_m, after crediting its own reported accuracy (up to max_accuracy_credit_m). Farther than that is rejected_far.`,
       note: "Points can be 'required', 'optional' or 'none' (no reception). 'required' and 'optional' differ only when there is no usable fix: 'required' refuses it (rejected_no_location), 'optional' accepts it with location_unverified. 'none' points are never judged by GPS.",
     },
-    history: 'Scans are kept: deleting a point does not delete its scans, and a scan is normally cancelled (voided), not removed. A committee member can still delete a single scan row on purpose (test data); it is then gone from this API. Providers are deactivated, not deleted.',
+    history: 'Scans are kept: deleting a point does not delete its scans, and a scan is normally cancelled (voided), not removed. A committee member can still delete a single scan row on purpose (test data); it is then gone from this API. A provider can be deleted by the committee: its scans stay and keep the recorded name, so an old scan can carry a provider_id that /providers no longer lists. provider_name then still says who it was.',
   },
 }
