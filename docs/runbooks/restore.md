@@ -85,9 +85,17 @@ connection string, the user or the password.
   mode 600 on every dump and on `backup.log`. A folder that already exists is your choice, so the script does not change
   it: if other users can read it, `backup.log` and the screen get a warning line that says to tighten it
   (`chmod 700 <folder>`).
-- On Windows nothing is set, because a folder under your user profile (`C:\Users\<your name>`) already has an access list
-  that names only you, the administrators and the system. So choose a folder under the profile, and never a shared folder, a
-  network drive or a folder that a service synchronises to the internet (for example OneDrive or Dropbox).
+- On Windows a new file inherits the access list of its folder, and a shared, network or synced folder may let other people
+  in. So the script closes each file itself, with `icacls`: before `pg_dump` runs it creates the empty temporary file and
+  removes everything it inherited, leaving full control to your own account alone (found by its SID with
+  `whoami /user`, so a name with a space or in another alphabet does not matter). `pg_dump` then overwrites that file in
+  place and the rename keeps the list (both checked on Windows 11). `backup.log` gets the same list when it is created.
+  If `icacls` is missing or fails, the backup stops before anything is dumped, `backup.log` says why, and nothing is
+  rotated. You can look at the result with `icacls <file>`: it must list only your own account. The administrators and
+  the system are not on the list either, on purpose.
+- Still choose a folder under your user profile (`C:\Users\<your name>`), and never a shared folder, a network drive or a
+  folder that a service synchronises to the internet (for example OneDrive or Dropbox): a synchronisation client copies
+  the file somewhere else, and no access list can stop that copy.
 
 **What it needs on that computer.**
 

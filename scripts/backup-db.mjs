@@ -29,9 +29,16 @@
 // umask to 077 before it creates anything (pg_dump creates its file with the umask it inherits, which is often 022, so the
 // file would be readable by every account of the machine), makes the folder with mode 700, and sets mode 600 on every dump
 // and on backup.log. A folder that already exists is the user's choice: it is never changed, but a warning in backup.log
-// and on the screen says so when other users can read it. On Windows nothing is set, because a folder under the user's
-// profile (C:\Users\<name>) inherits an access list that names only that user, the administrators and the system: choose
-// such a folder, never a shared, network or synced one (for example a folder that OneDrive or Dropbox uploads).
+// and on the screen says so when other users can read it.
+//
+// On Windows a new file inherits the access list of its folder, and a shared, network or synced folder may let others
+// in. So before pg_dump runs the script creates the empty temporary file itself and sets its access list with icacls
+// to the current user alone (inheritance removed, full control for that user's SID, found with `whoami /user`). pg_dump
+// then overwrites the file in place, which keeps the access list, and so does the rename to the final name. If icacls
+// is missing or fails, the backup fails before pg_dump writes anything. backup.log gets the same treatment when it
+// is created (best effort: it holds no personal data, so a failure there is only a warning). The folder itself is the
+// user's choice and is not changed. Still choose a folder under the user profile and never a synced one: a sync client
+// copies the file somewhere else, and no access list can stop that.
 //
 // On a failure, with --report-issue, it opens a GitHub issue with the gh CLI, or adds a comment to the issue with that
 // title that is already open (so a failure that lasts a week is one issue, not seven). The issue says only that the backup
@@ -68,6 +75,7 @@ const LIST_TIMEOUT_MS = 5 * 60_000
 // Reading a dump to the end takes about as long as it takes to decompress it, so it gets as long as the dump itself.
 const READ_TIMEOUT_MS = 30 * 60_000
 const GH_TIMEOUT_MS = 60_000
+const ICACLS_TIMEOUT_MS = 60_000
 // Owner only: read and write for the owner on a file, and all rights for the owner on a folder.
 const PRIVATE_FILE = 0o600
 const PRIVATE_FOLDER = 0o700
@@ -181,6 +189,72 @@ export function pgTool(dir, name, platform = process.platform) {
 /** Where output goes to nowhere: NUL on Windows, /dev/null everywhere else. */
 export function nullDevice(platform = process.platform) {
   return platform === 'win32' ? 'NUL' : '/dev/null'
+}
+
+// ---- owner-only access lists on Windows -------------------------------------------------------------------------------
+
+/**
+ * A tool of Windows by its full path in System32. The bare name is not enough: under Git Bash, for example, `whoami` finds
+ * a different program (from the Unix tools) before it finds the one of Windows, and a scheduled task has another PATH than
+ * a terminal. `env` gives SystemRoot.
+ */
+export function windowsTool(name, env = {}) {
+  const root = String(env.SystemRoot ?? env.SYSTEMROOT ?? env.windir ?? '').trim() || 'C:\\Windows'
+  return path.win32.join(root, 'System32', name)
+}
+
+/**
+ * The SID of the current user from the output of `whoami /user /fo csv /nh` (a line such as `"PC\name","S-1-5-21-..."`),
+ * written as icacls takes it (`*S-1-5-21-...`, the star means "this is a SID, not a name"), or null. A SID is the same
+ * whatever the language of Windows is, and whatever characters (a space, another alphabet) the name of the user has.
+ */
+export function parseWhoamiSid(stdout) {
+  const match = /"(S-1-\d+(?:-\d+)+)"/.exec(String(stdout ?? ''))
+  return match ? `*${match[1]}` : null
+}
+
+/**
+ * The arguments of icacls that make `fileName` readable and writable by `owner` alone: /inheritance:r drops every access
+ * that the file got from its folder (the copies are removed, not kept), and /grant:r gives that one user full control.
+ * `owner` is `*<SID>` (see parseWhoamiSid) or, when the SID cannot be found, the name of the user.
+ */
+export function icaclsArgs(fileName, owner) {
+  return [fileName, '/inheritance:r', '/grant:r', `${owner}:F`]
+}
+
+/**
+ * Who the files belong to, in the form icacls takes: the SID of the current user from `whoami /user`, and when that cannot
+ * be read, the user name that Node knows. Throws an Error with a message that is safe to print when there is neither.
+ */
+async function windowsOwner({ runner, env, userName }) {
+  const who = await runner(windowsTool('whoami.exe', env), ['/user', '/fo', 'csv', '/nh'], {
+    env: cleanEnv(env),
+    timeoutMs: ICACLS_TIMEOUT_MS,
+  })
+  const sid = !who.problem && who.status === 0 ? parseWhoamiSid(who.stdout) : null
+  if (sid) return sid
+  let name = ''
+  attempt(() => {
+    name = String(userName() ?? '').trim()
+  })
+  if (name && !/[:/*?"<>|]/.test(name)) return name
+  throw new Error('the current Windows user could not be found, so a dump cannot be made owner-only')
+}
+
+/**
+ * Makes `name` (a file in `cwd`) owner-only with icacls. The file name is relative and the folder is the working directory,
+ * so no path (and no user name in it) is on the command line or in a message. Throws an Error with a message that is safe
+ * to print when icacls is missing, does not finish or exits with an error: a file that cannot be closed must not be used.
+ */
+async function restrictToOwner({ name, cwd, owner, runner, env }) {
+  const result = await runner(windowsTool('icacls.exe', env), icaclsArgs(name, owner), {
+    env: cleanEnv(env),
+    cwd,
+    timeoutMs: ICACLS_TIMEOUT_MS,
+  })
+  if (result.problem === 'ENOENT') throw new Error('icacls was not found, so a dump cannot be made owner-only')
+  if (result.problem) throw new Error(`icacls did not finish (${result.problem}), so a dump cannot be made owner-only`)
+  if (result.status !== 0) throw new Error(`icacls failed (exit code ${result.status}), so a dump cannot be made owner-only`)
 }
 
 // ---- the connection string -----------------------------------------------------------------------------------------
@@ -596,10 +670,12 @@ export async function runBackup(options, deps = {}) {
     tmpdir = os.tmpdir(),
     fs: files = fs,
     umask = setProcessUmask,
+    userName = () => os.userInfo().username,
     out = console.log,
     err = console.error,
   } = deps
   const posix = platform !== 'win32'
+  const windows = !posix
   const started = now()
   const outDir = path.resolve(options.out)
   const finalName = backupFileName(started)
@@ -617,6 +693,9 @@ export async function runBackup(options, deps = {}) {
     [home, '~'],
   ]
   let scrub = makeScrubber(undefined, hiddenFolders)
+  // The user that owns the files, for icacls on Windows: asked once, when the first file needs it.
+  let ownerAsked
+  const ownerOf = () => (ownerAsked ??= windowsOwner({ runner, env, userName }))
   let host = '-'
   let folderIsOpen = false
   let result
@@ -641,6 +720,15 @@ export async function runBackup(options, deps = {}) {
     const pgEnv = connectionEnv(connectionString)
     const pgBin = resolvePgBin({ option: options.pgBin, env, platform, exists })
     const pgRestore = pgTool(pgBin, 'pg_restore', platform)
+
+    // On Windows the empty temporary file is made here and closed to every other user BEFORE pg_dump writes to it: a new file
+    // inherits the access list of its folder, which may be a shared one. pg_dump opens the existing file and overwrites it
+    // in place, which keeps the list. If this fails nothing is dumped. (On macOS and Linux the umask does the same.)
+    if (windows) {
+      const owner = await ownerOf()
+      files.writeFileSync(path.join(outDir, partialName), '')
+      await restrictToOwner({ name: partialName, cwd: outDir, owner, runner, env })
+    }
 
     // The file name is relative and the folder is the working directory of the tool, so a path with a name in another
     // alphabet never has to pass through the command line of a Windows program.
@@ -723,12 +811,27 @@ export async function runBackup(options, deps = {}) {
     error: result.message,
   })
   const folderWarning = `${formatDateTime(when)} warning ${FOLDER_WARNING}`
+  // On Windows a new backup.log is closed to other users as soon as it exists. It holds no personal data, so when that fails
+  // the line is written anyway and a warning says so.
+  let logIsOpen = false
+  if (windows) {
+    try {
+      if (!files.existsSync(logPath)) {
+        const owner = await ownerOf()
+        files.writeFileSync(logPath, '', { flag: 'wx' })
+        await restrictToOwner({ name: LOG_NAME, cwd: outDir, owner, runner, env })
+      }
+    } catch {
+      logIsOpen = true
+    }
+  }
   const logged = attempt(() => {
     if (folderIsOpen) files.appendFileSync(logPath, `${folderWarning}\n`, { encoding: 'utf8', mode: PRIVATE_FILE })
     files.appendFileSync(logPath, `${line}\n`, { encoding: 'utf8', mode: PRIVATE_FILE })
   })
   if (posix) attempt(() => files.chmodSync(logPath, PRIVATE_FILE))
   if (!logged) say(err, 'backup: could not write backup.log')
+  else if (logIsOpen) say(err, 'backup: warning, backup.log could not be made owner-only')
   if (previousMask !== undefined) attempt(() => umask(previousMask))
 
   if (folderIsOpen) say(err, `backup: warning, ${FOLDER_WARNING}`)

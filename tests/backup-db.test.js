@@ -17,6 +17,7 @@ import {
   findOpenIssue,
   formatSize,
   FOLDER_WARNING,
+  icaclsArgs,
   issueBody,
   main,
   makeScrubber,
@@ -24,12 +25,14 @@ import {
   nullDevice,
   parseArgs,
   parseNeonOutput,
+  parseWhoamiSid,
   partialFileName,
   pgTool,
   resolvePgBin,
   runBackup,
   runProcess,
   selectOld,
+  windowsTool,
 } from '../scripts/backup-db.mjs'
 
 const USER = 'backup_user'
@@ -39,6 +42,7 @@ const HOST = 'ep-test-cool-123456.eu-central-1.aws.neon.tech'
 const MASKED_HOST = 'ep-tes****.eu-central-1.aws.neon.tech'
 const URL_FAKE = `postgresql://${USER}:${ENCODED}@${HOST}/appdb?sslmode=require`
 const POOLED = `postgresql://${USER}:${ENCODED}@ep-test-cool-123456-pooler.eu-central-1.aws.neon.tech/appdb?sslmode=require`
+const SID = 'S-1-5-21-111-222-333-1001' // a fake SID
 const NOW = new Date('2026-10-03T07:15:42Z')
 const FINAL = 'building-qr-20261003T0715Z.dump'
 const PARTIAL = 'building-qr-20261003T0715Z.partial.dump'
@@ -64,6 +68,9 @@ const defaults = {
   },
   pg_restore: () => ({ status: 0, stdout: LISTING, stderr: '' }),
   neon: () => ({ status: 0, stdout: `${URL_FAKE}\n`, stderr: '' }),
+  // Windows only: the SID of the user (a fake one) and the owner-only access list of a file
+  whoami: () => ({ status: 0, stdout: `"PC\\user","${SID}"\r\n`, stderr: '' }),
+  icacls: () => ({ status: 0, stdout: 'Successfully processed 1 files; Failed processing 0 files\r\n', stderr: '' }),
   // list: no open issue yet; comment and create: done
   gh: ({ args }) => ({ status: 0, stdout: args[1] === 'list' ? '[]' : 'https://github.com/owner/repo/issues/1\n', stderr: '' }),
 }
@@ -1607,6 +1614,213 @@ describe('the command line entry', () => {
     const help = lines()
     expect(await main(['--help'], { ...help.deps, run: async () => ({ exitCode: 9 }) })).toBe(0)
     expect(help.out.join('\n')).toMatch(/^Usage: /)
+  })
+})
+
+// ---- owner-only access lists on Windows ------------------------------------------------------------------------------------------------
+
+describe('the helpers for the access list of a file on Windows', () => {
+  it('finds a tool of Windows by its full path in System32, whatever PATH holds', () => {
+    expect(windowsTool('icacls.exe', { SystemRoot: 'D:\\Win' })).toBe('D:\\Win\\System32\\icacls.exe')
+    expect(windowsTool('whoami.exe', { windir: 'E:\\Windows' })).toBe('E:\\Windows\\System32\\whoami.exe')
+    expect(windowsTool('whoami.exe', {})).toBe('C:\\Windows\\System32\\whoami.exe')
+    expect(windowsTool('whoami.exe', { SystemRoot: '  ' })).toBe('C:\\Windows\\System32\\whoami.exe')
+    expect(windowsTool('whoami.exe')).toBe('C:\\Windows\\System32\\whoami.exe')
+  })
+
+  it('reads the SID out of whoami /user /fo csv /nh, as icacls takes it, whatever the user name looks like', () => {
+    expect(parseWhoamiSid(`"PC\\user","${SID}"\r\n`)).toBe(`*${SID}`)
+    expect(parseWhoamiSid(`"PC\\Some Name","${SID}"`)).toBe(`*${SID}`)
+    expect(parseWhoamiSid(`"PC\\\u05DE\u05EA\u05DF","${SID}"\n`)).toBe(`*${SID}`)
+    expect(parseWhoamiSid('"AzureAD\\a.b@example.test","S-1-12-1-1-2-3-4"')).toBe('*S-1-12-1-1-2-3-4')
+  })
+
+  it('gives null for output that holds no SID', () => {
+    for (const text of ['', undefined, 'ERROR: not found', '"PC\\user"', 'S-1-5-21-1-2-3 without quotes', '"PC\\user","S-2-5"', '"PC\\user","S-1-"']) {
+      expect(parseWhoamiSid(text), String(text)).toBeNull()
+    }
+  })
+
+  it('builds the icacls arguments: no inheritance, full control for the one user, the file by a relative name', () => {
+    expect(icaclsArgs(PARTIAL, `*${SID}`)).toEqual([PARTIAL, '/inheritance:r', '/grant:r', `*${SID}:F`])
+    expect(icaclsArgs('backup.log', 'Test User')).toEqual(['backup.log', '/inheritance:r', '/grant:r', 'Test User:F'])
+  })
+})
+
+describe('owner-only files on Windows', () => {
+  const win = (deps = {}) => ({
+    platform: 'win32',
+    exists: () => false,
+    userName: () => 'Test User',
+    ...deps,
+    env: { SystemRoot: 'C:\\Windows', ...deps.env },
+  })
+  const ICACLS = 'C:\\Windows\\System32\\icacls.exe'
+  const WHOAMI = 'C:\\Windows\\System32\\whoami.exe'
+  const noWho = { status: 1, stdout: '', stderr: 'ERROR: nope' }
+
+  it('asks whoami (the one of Windows, by its full path) for the SID of the user, once', async () => {
+    const r = await go({ deps: win() })
+    expect(r.exitCode).toBe(0)
+    const [who] = r.runner.of('whoami')
+    expect(who.command).toBe(WHOAMI)
+    expect(who.args).toEqual(['/user', '/fo', 'csv', '/nh'])
+    expect(r.runner.of('whoami')).toHaveLength(1) // for the dump and for the log
+  })
+
+  it('makes the empty temporary file owner-only with icacls before pg_dump writes to it: SID, no inheritance, relative name', async () => {
+    const seen = {}
+    const runner = makeRunner({
+      icacls: (call) => {
+        if (call.args[0] === PARTIAL) {
+          seen.partialThere = fs.existsSync(path.join(dir, PARTIAL))
+          seen.partialSize = fs.statSync(path.join(dir, PARTIAL)).size
+          seen.finalThere = fs.existsSync(path.join(dir, FINAL))
+        }
+        return defaults.icacls(call)
+      },
+      pg_dump: (call) => {
+        seen.beforeDump = fs.readdirSync(dir)
+        return defaults.pg_dump(call)
+      },
+    })
+    const r = await go({ deps: win(), runner })
+    const [first] = r.runner.of('icacls')
+    expect(first.command).toBe(ICACLS)
+    expect(first.args).toEqual([PARTIAL, '/inheritance:r', '/grant:r', `*${SID}:F`])
+    expect(first.options.cwd).toBe(path.resolve(dir))
+    expect(Object.keys(first.options.env).filter((key) => /^PG[A-Z]/.test(key))).toEqual([])
+    expect(seen).toEqual({ partialThere: true, partialSize: 0, finalThere: false, beforeDump: [PARTIAL] })
+    // nothing in the command line names a folder, a user or the connection
+    const commandLine = JSON.stringify(first.args)
+    for (const text of [dir, tmp, os.homedir(), USER, HOST, PASSWORD]) expect(commandLine).not.toContain(text)
+  })
+
+  it('goes in this order: whoami, the empty file, icacls, pg_dump, the list, the full read, the rename, then the new log', async () => {
+    const events = []
+    const runner = makeRunner({
+      whoami: (call) => {
+        events.push(`whoami (nothing yet: ${fs.existsSync(dir) ? fs.readdirSync(dir).length : 'no folder'})`)
+        return defaults.whoami(call)
+      },
+      icacls: (call) => {
+        events.push(`icacls ${call.args[0]} [${fs.readdirSync(dir).join(' ')}]`)
+        return defaults.icacls(call)
+      },
+      pg_dump: (call) => {
+        events.push('pg_dump')
+        return defaults.pg_dump(call)
+      },
+      pg_restore: (call) => {
+        events.push(call.args[0] === '--list' ? 'list' : 'full read')
+        return defaults.pg_restore(call)
+      },
+    })
+    const r = await go({ deps: win(), runner })
+    expect(r.exitCode).toBe(0)
+    expect(events).toEqual([
+      'whoami (nothing yet: 0)',
+      `icacls ${PARTIAL} [${PARTIAL}]`,
+      'pg_dump',
+      'list',
+      'full read',
+      `icacls backup.log [backup.log ${FINAL}]`, // the rename is done: the final file is there and the temporary one is gone
+    ])
+  })
+
+  it('prefers the SID to the name: a name with a space or in another alphabet is never used', async () => {
+    const r = await go({ deps: win({ userName: () => 'Some Name \u05DE\u05EA\u05DF' }) })
+    for (const call of r.runner.of('icacls')) {
+      expect(call.args.at(-1)).toBe(`*${SID}:F`)
+      expect(JSON.stringify(call.args)).not.toContain('Some Name')
+    }
+  })
+
+  it('falls back to the user name that Node knows when whoami gives no SID (it fails, is missing or prints something else)', async () => {
+    const answers = [
+      noWho,
+      { status: null, stdout: '', stderr: '', problem: 'ENOENT' },
+      { status: 0, stdout: 'ERROR: something else\r\n', stderr: '' },
+    ]
+    for (const answer of answers) {
+      fs.rmSync(dir, { recursive: true, force: true })
+      const r = await go({ deps: win(), runner: makeRunner({ whoami: () => answer }) })
+      expect(r.exitCode, JSON.stringify(answer)).toBe(0)
+      expect(r.runner.of('icacls')[0].args.at(-1)).toBe('Test User:F')
+    }
+  })
+
+  it('fails closed, before the file is made, when the user cannot be found at all', async () => {
+    const cases = [
+      () => '',
+      () => '   ',
+      () => 'bad:name',
+      () => {
+        throw new Error('no user')
+      },
+    ]
+    for (const userName of cases) {
+      fs.rmSync(dir, { recursive: true, force: true })
+      const r = await go({ deps: win({ userName }), runner: makeRunner({ whoami: () => noWho }) })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe('the current Windows user could not be found, so a dump cannot be made owner-only')
+      expect(r.runner.of('pg_dump')).toEqual([])
+      expect(r.runner.of('icacls')).toEqual([])
+      expect(r.files).toEqual(['backup.log'])
+    }
+  })
+
+  it('fails closed when icacls fails: before pg_dump writes anything, nothing is rotated, and the message holds no path', async () => {
+    seed(oldBackups)
+    const runner = makeRunner({ icacls: () => ({ status: 5, stdout: `Failed processing 1 files: ${dir}`, stderr: `${dir}: Access is denied.` }) })
+    const r = await go({ options: { keep: 1 }, deps: win(), runner })
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe('icacls failed (exit code 5), so a dump cannot be made owner-only')
+    expect(r.runner.of('pg_dump')).toEqual([])
+    expect(r.runner.of('pg_restore')).toEqual([])
+    expect(r.files).toEqual(['backup.log', ...oldBackups]) // the empty temporary file is deleted, the old backups are all still there
+    expect(r.errs).toContain(`backup failed: ${r.message}`)
+    for (const text of [dir, tmp, os.homedir()]) expect(visible(r)).not.toContain(text)
+    expect(r.log).toBe(`03/10/2026 10:15 failed host=${MASKED_HOST} error=${r.message}\n`)
+  })
+
+  it('fails closed when icacls is missing or does not finish', async () => {
+    const missing = await go({ deps: win(), runner: makeRunner({ icacls: () => ({ status: null, stdout: '', stderr: '', problem: 'ENOENT' }) }) })
+    expect(missing.exitCode).toBe(1)
+    expect(missing.message).toBe('icacls was not found, so a dump cannot be made owner-only')
+    expect(missing.runner.of('pg_dump')).toEqual([])
+    fs.rmSync(dir, { recursive: true, force: true })
+    const slow = await go({ deps: win(), runner: makeRunner({ icacls: () => ({ status: null, stdout: '', stderr: '', problem: 'TIMEOUT' }) }) })
+    expect(slow.exitCode).toBe(1)
+    expect(slow.message).toBe('icacls did not finish (TIMEOUT), so a dump cannot be made owner-only')
+    expect(slow.runner.of('pg_dump')).toEqual([])
+    expect(slow.files).toEqual(['backup.log'])
+  })
+
+  it('closes a new backup.log the same way, and does not touch a log that exists', async () => {
+    const first = await go({ deps: win() })
+    expect(first.runner.of('icacls').map((c) => c.args)).toEqual([
+      [PARTIAL, '/inheritance:r', '/grant:r', `*${SID}:F`],
+      ['backup.log', '/inheritance:r', '/grant:r', `*${SID}:F`],
+    ])
+    const second = await go({ deps: win() })
+    expect(second.runner.of('icacls').map((c) => c.args[0])).toEqual([PARTIAL]) // the log was there already
+    expect(second.log.split('\n').filter(Boolean)).toHaveLength(2)
+  })
+
+  it('writes a log that cannot be closed anyway, with a warning: it holds no personal data', async () => {
+    const runner = makeRunner({ icacls: (call) => (call.args[0] === 'backup.log' ? { status: 5, stdout: '', stderr: '' } : defaults.icacls(call)) })
+    const r = await go({ deps: win(), runner })
+    expect(r.exitCode).toBe(0)
+    expect(r.log).toContain(' ok host=')
+    expect(r.errs).toEqual(['backup: warning, backup.log could not be made owner-only'])
+  })
+
+  it('does not run on macOS and Linux, where the umask and the modes do this work', async () => {
+    const r = await go()
+    expect(r.runner.of('whoami')).toEqual([])
+    expect(r.runner.of('icacls')).toEqual([])
+    expect(r.runner.calls.map((c) => c.tool)).toEqual(['pg_dump', 'pg_restore', 'pg_restore'])
   })
 })
 
