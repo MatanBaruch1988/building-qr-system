@@ -14,13 +14,24 @@
 //      the Neon CLI (`neon connection-string`) when --neon-project is given. It lives in memory only.
 //   2. Runs pg_dump (custom format) into a temporary file in the folder. The password goes to pg_dump through the
 //      environment (PGPASSWORD and friends), never on the command line, where other users of a machine can see it.
-//   3. Reads the file back with `pg_restore --list` and checks that it holds the data of the tables `scans` and `points`.
-//      Only then is the temporary file renamed to building-qr-<UTC time>.dump. A failure deletes the temporary file.
+//   3. Checks the file twice. `pg_restore --list` prints the table of contents, which must name the data of the tables
+//      `scans` and `points`; but it does not read the data blocks, so a dump that was cut off after its table of contents
+//      would pass. A full read (`pg_restore --file=<the null device>`) writes the SQL of the whole archive to nowhere, which
+//      reads and decompresses every data block, and must exit with 0. Only then is the temporary file renamed to
+//      building-qr-<UTC time>.dump. A failure deletes the temporary file.
 //   4. Keeps the newest --keep files that match that exact name and deletes the older ones. Any other file in the folder is
 //      left alone, and nothing is rotated after a failed backup.
 //   5. Appends one line to backup.log in the folder (the time, ok or failed, the masked host, the file and its size, or a
 //      short error) and prints a summary. It never writes the URL, the user or the password, and every message is cleaned
 //      of them first.
+//
+// Who can read the files: only the owner, because the dump holds attendance data. On macOS and Linux the script sets the
+// umask to 077 before it creates anything (pg_dump creates its file with the umask it inherits, which is often 022, so the
+// file would be readable by every account of the machine), makes the folder with mode 700, and sets mode 600 on every dump
+// and on backup.log. A folder that already exists is the user's choice: it is never changed, but a warning in backup.log
+// and on the screen says so when other users can read it. On Windows nothing is set, because a folder under the user's
+// profile (C:\Users\<name>) inherits an access list that names only that user, the administrators and the system: choose
+// such a folder, never a shared, network or synced one (for example a folder that OneDrive or Dropbox uploads).
 //
 // On a failure, with --report-issue, it opens a GitHub issue with the gh CLI, or adds a comment to the issue with that
 // title that is already open (so a failure that lasts a week is one issue, not seven). The issue says only that the backup
@@ -48,11 +59,19 @@ export const REQUIRED_TABLES = ['scans', 'points']
 // name, not a date that a person reads.
 export const BACKUP_NAME = /^building-qr-\d{8}T\d{4}Z\.dump$/
 export const WINDOWS_PG_BIN = 'C:\\Program Files\\PostgreSQL\\18\\bin'
+// The line that backup.log and the screen get when the backup folder was there already and other users can read it.
+export const FOLDER_WARNING = 'the backup folder can be read by other users: tighten it (on macOS and Linux run chmod 700 on the folder)'
 
 const NEON_TIMEOUT_MS = 2 * 60_000
 const DUMP_TIMEOUT_MS = 30 * 60_000
 const LIST_TIMEOUT_MS = 5 * 60_000
+// Reading a dump to the end takes about as long as it takes to decompress it, so it gets as long as the dump itself.
+const READ_TIMEOUT_MS = 30 * 60_000
 const GH_TIMEOUT_MS = 60_000
+// Owner only: read and write for the owner on a file, and all rights for the owner on a folder.
+const PRIVATE_FILE = 0o600
+const PRIVATE_FOLDER = 0o700
+const PRIVATE_UMASK = 0o077
 const MAX_CAPTURE = 32 * 1024 * 1024
 const SSL_MODES = new Set(['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full'])
 const CHANNEL_BINDINGS = new Set(['disable', 'prefer', 'require'])
@@ -157,6 +176,11 @@ export function pgTool(dir, name, platform = process.platform) {
   const file = platform === 'win32' ? `${name}.exe` : name
   if (!dir) return file
   return (platform === 'win32' ? path.win32 : path.posix).join(dir, file)
+}
+
+/** Where output goes to nowhere: NUL on Windows, /dev/null everywhere else. */
+export function nullDevice(platform = process.platform) {
+  return platform === 'win32' ? 'NUL' : '/dev/null'
 }
 
 // ---- the connection string -----------------------------------------------------------------------------------------
@@ -276,9 +300,12 @@ export function selectOld(names, keep, newName) {
   return others.slice(Math.max(0, keep - 1))
 }
 
-/** Deletes the old backups in `dir`. Returns { removed (names), failed (a number) }. Only plain files are considered. */
-export function rotate(dir, keep, newName) {
-  const names = fs
+/**
+ * Deletes the old backups in `dir`. Returns { removed (names), failed (a number) }. Only plain files are considered.
+ * `files` is the file system (a test passes a stub).
+ */
+export function rotate(dir, keep, newName, files = fs) {
+  const names = files
     .readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
@@ -286,7 +313,7 @@ export function rotate(dir, keep, newName) {
   let failed = 0
   for (const name of selectOld(names, keep, newName)) {
     try {
-      fs.rmSync(path.join(dir, name), { force: true })
+      files.rmSync(path.join(dir, name), { force: true })
       removed.push(name)
     } catch {
       failed++
@@ -413,6 +440,16 @@ export function issueBody(when) {
   ].join('\n')
 }
 
+/** Runs `action` and says whether it worked. For a step that must never stop the backup (a cleanup, a chmod, a message). */
+function attempt(action) {
+  try {
+    action()
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * The number of the open issue that has exactly the title of a failed backup, from the JSON that
  * `gh issue list --json number,title` printed, or null for none (or for text that is not that JSON). The search of GitHub
@@ -439,12 +476,12 @@ export function findOpenIssue(json) {
  * when there is none. When the search fails, or the comment does, it opens a new issue: a duplicate is better than silence.
  * Never throws. Returns 'opened', 'commented-<number>', 'gh-missing' or 'failed'.
  */
-async function openIssue({ repo, runner, now, env, tmpdir }) {
+async function openIssue({ repo, runner, now, env, tmpdir, files = fs }) {
   let dir
   try {
-    dir = fs.mkdtempSync(path.join(tmpdir, 'bqr-backup-issue-'))
+    dir = files.mkdtempSync(path.join(tmpdir, 'bqr-backup-issue-'))
     const bodyFile = path.join(dir, 'body.md')
-    fs.writeFileSync(bodyFile, issueBody(now()), 'utf8')
+    files.writeFileSync(bodyFile, issueBody(now()), 'utf8')
     const gh = (args) => runner('gh', args, { env: cleanEnv(env), timeoutMs: GH_TIMEOUT_MS })
     const succeeded = (result) => !result.problem && result.status === 0
 
@@ -467,7 +504,9 @@ async function openIssue({ repo, runner, now, env, tmpdir }) {
   } catch {
     return 'failed'
   } finally {
-    if (dir) fs.rmSync(dir, { recursive: true, force: true })
+    // A cleanup must never throw: it runs after the answer is known, and an error here would hide that answer (and, from
+    // a finally block, replace the return value). A body file that cannot be deleted is left in the temporary folder.
+    if (dir) attempt(() => files.rmSync(dir, { recursive: true, force: true }))
   }
 }
 
@@ -512,10 +551,24 @@ async function connectionStringFor({ options, env, platform, runner }) {
 }
 
 /**
+ * The default for `umask` of runBackup: sets the umask of this process and returns the old one. A worker thread is not
+ * allowed to change it, and then there is nothing to set (the file mode is still set with chmod afterwards).
+ */
+function setProcessUmask(mask) {
+  try {
+    return process.umask(mask)
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Makes one backup. Everything it needs from outside comes in through `deps`, so a test needs no database and no
  * PostgreSQL tools: `runner(command, args, { env, cwd, timeoutMs })` (see runProcess), `now`, `env`, `platform`, `exists`,
- * `tmpdir` (for the issue text), and `out` and `err` for the two kinds of line.
- * Returns { exitCode, ok, message, file, size, removed, issue, line }; it never throws.
+ * `tmpdir` (for the issue text), `fs` (the file system), `umask(mask)` (returns the old mask), and `out` and `err` for the
+ * two kinds of line.
+ * Returns { exitCode, ok, message, file, size, removed, issue, line }. It never throws: whatever a step does (a tool that
+ * fails, a file that cannot be deleted), it ends by writing the line of backup.log and the cleaned output.
  */
 export async function runBackup(options, deps = {}) {
   const {
@@ -525,24 +578,43 @@ export async function runBackup(options, deps = {}) {
     now = () => new Date(),
     exists = fs.existsSync,
     tmpdir = os.tmpdir(),
+    fs: files = fs,
+    umask = setProcessUmask,
     out = console.log,
     err = console.error,
   } = deps
+  const posix = platform !== 'win32'
   const started = now()
   const outDir = path.resolve(options.out)
   const finalName = backupFileName(started)
   const partialName = partialFileName(finalName)
+  const logPath = path.join(outDir, LOG_NAME)
+  const say = (print, text) => attempt(() => print(text))
   let scrub = makeScrubber()
   let host = '-'
+  let folderIsOpen = false
   let result
 
+  // Before anything is created: every file that pg_dump (a child process, which inherits the mask) or this script makes is
+  // closed to every other account. The old mask is put back at the end.
+  const previousMask = posix ? umask(PRIVATE_UMASK) : undefined
+
   try {
-    fs.mkdirSync(outDir, { recursive: true })
+    const folderExisted = files.existsSync(outDir)
+    files.mkdirSync(outDir, { recursive: true, mode: PRIVATE_FOLDER })
+    // A folder that was there already is the user's choice, so it is not changed: when other users can read it, a warning
+    // says so. (One that was made just now has the mode above.)
+    if (posix && folderExisted) {
+      attempt(() => {
+        folderIsOpen = (files.statSync(outDir).mode & 0o077) !== 0
+      })
+    }
     const connectionString = await connectionStringFor({ options, env, platform, runner })
     scrub = makeScrubber(connectionString)
     host = maskDatabaseHost(connectionString)
     const pgEnv = connectionEnv(connectionString)
     const pgBin = resolvePgBin({ option: options.pgBin, env, platform, exists })
+    const pgRestore = pgTool(pgBin, 'pg_restore', platform)
 
     // The file name is relative and the folder is the working directory of the tool, so a path with a name in another
     // alphabet never has to pass through the command line of a Windows program.
@@ -554,7 +626,8 @@ export async function runBackup(options, deps = {}) {
     if (dump.problem) throw new Error(toolProblem('pg_dump', dump.problem))
     if (dump.status !== 0) throw new Error(`pg_dump failed (exit code ${dump.status})${firstLine(dump.stderr)}`)
 
-    const listing = await runner(pgTool(pgBin, 'pg_restore', platform), ['--list', partialName], {
+    // Check 1, the table of contents: the data of the tables of this app must be in the archive.
+    const listing = await runner(pgRestore, ['--list', partialName], {
       env: cleanEnv(env),
       cwd: outDir,
       timeoutMs: LIST_TIMEOUT_MS,
@@ -566,34 +639,54 @@ export async function runBackup(options, deps = {}) {
     const missing = REQUIRED_TABLES.filter((table) => !new RegExp(`\\bTABLE DATA public ${table}\\b`).test(listing.stdout))
     if (missing.length) throw new Error(`the dump does not hold the data of the table ${missing.join(' and ')}`)
 
-    fs.renameSync(path.join(outDir, partialName), path.join(outDir, finalName))
-    const size = fs.statSync(path.join(outDir, finalName)).size
+    // Check 2, every data block: the table of contents is at the start of the file and is read without the data, so a dump
+    // that was cut off later would pass the first check. Writing the SQL of the whole archive to the null device reads and
+    // decompresses all of it, and a cut or damaged block makes pg_restore exit with an error.
+    const full = await runner(pgRestore, [`--file=${nullDevice(platform)}`, partialName], {
+      env: cleanEnv(env),
+      cwd: outDir,
+      timeoutMs: READ_TIMEOUT_MS,
+    })
+    if (full.problem) throw new Error(toolProblem('pg_restore', full.problem))
+    if (full.status !== 0) {
+      throw new Error(`the dump could not be read to the end with pg_restore (exit code ${full.status})${firstLine(full.stderr)}`)
+    }
+
+    files.renameSync(path.join(outDir, partialName), path.join(outDir, finalName))
+    const warnings = []
+    // Already 600 through the umask: this makes sure, and says so when it cannot (a file system that has no modes).
+    if (posix && !attempt(() => files.chmodSync(path.join(outDir, finalName), PRIVATE_FILE))) {
+      warnings.push('dump-permissions-not-set')
+    }
+    const size = files.statSync(path.join(outDir, finalName)).size
 
     let removed = 0
-    let warning
     try {
-      const rotation = rotate(outDir, options.keep, finalName)
+      const rotation = rotate(outDir, options.keep, finalName, files)
       removed = rotation.removed.length
-      if (rotation.failed) warning = `${rotation.failed}-old-backups-not-removed`
+      if (rotation.failed) warnings.push(`${rotation.failed}-old-backups-not-removed`)
     } catch {
-      warning = 'old-backups-not-checked'
+      warnings.push('old-backups-not-checked')
     }
-    result = { ok: true, file: finalName, size, removed, warning }
+    result = { ok: true, file: finalName, size, removed, warning: warnings.join(',') || undefined }
   } catch (error) {
-    try {
-      fs.rmSync(path.join(outDir, partialName), { force: true })
-    } catch {
-      // nothing more can be done about a file that cannot be deleted: the message below still says what failed
-    }
+    // A file that cannot be deleted is not worth hiding the real error for: the message below still says what failed.
+    attempt(() => files.rmSync(path.join(outDir, partialName), { force: true }))
     result = { ok: false, message: scrub(error instanceof Error ? error.message : 'unexpected error') }
   }
 
   let issue
   if (!result.ok && options.reportIssue) {
-    issue = await openIssue({ repo: options.reportIssue, runner, now, env, tmpdir })
+    issue = await openIssue({ repo: options.reportIssue, runner, now, env, tmpdir, files })
+  }
+  let when
+  try {
+    when = now()
+  } catch {
+    when = new Date()
   }
   const line = logLine({
-    when: now(),
+    when,
     ok: result.ok,
     host,
     file: result.file,
@@ -603,42 +696,62 @@ export async function runBackup(options, deps = {}) {
     issue,
     error: result.message,
   })
-  try {
-    fs.appendFileSync(path.join(outDir, LOG_NAME), `${line}\n`, 'utf8')
-  } catch {
-    err('backup: could not write backup.log')
-  }
+  const folderWarning = `${when.toISOString().replace(/\.\d{3}Z$/, 'Z')} warning ${FOLDER_WARNING}`
+  const logged = attempt(() => {
+    if (folderIsOpen) files.appendFileSync(logPath, `${folderWarning}\n`, { encoding: 'utf8', mode: PRIVATE_FILE })
+    files.appendFileSync(logPath, `${line}\n`, { encoding: 'utf8', mode: PRIVATE_FILE })
+  })
+  if (posix) attempt(() => files.chmodSync(logPath, PRIVATE_FILE))
+  if (!logged) say(err, 'backup: could not write backup.log')
+  if (previousMask !== undefined) attempt(() => umask(previousMask))
 
+  if (folderIsOpen) say(err, `backup: warning, ${FOLDER_WARNING}`)
   if (result.ok) {
-    const files = result.removed === 1 ? 'file' : 'files'
-    out(`backup ok: ${result.file}, ${formatSize(result.size)}, removed ${result.removed} old ${files}`)
-    if (result.warning) err(`backup: warning, ${result.warning}`)
+    const noun = result.removed === 1 ? 'file' : 'files'
+    say(out, `backup ok: ${result.file}, ${formatSize(result.size)}, removed ${result.removed} old ${noun}`)
+    if (result.warning) say(err, `backup: warning, ${result.warning}`)
   } else {
-    err(`backup failed: ${result.message}`)
-    if (issue === 'opened') err('backup: an issue was opened')
-    if (issue?.startsWith('commented-')) err(`backup: a comment was added to the open issue ${issue.slice('commented-'.length)}`)
-    if (issue === 'gh-missing') err('backup: no issue opened, the gh CLI was not found')
-    if (issue === 'failed') err('backup: no issue opened, gh failed')
+    say(err, `backup failed: ${result.message}`)
+    if (issue === 'opened') say(err, 'backup: an issue was opened')
+    if (issue?.startsWith('commented-')) say(err, `backup: a comment was added to the open issue ${issue.slice('commented-'.length)}`)
+    if (issue === 'gh-missing') say(err, 'backup: no issue opened, the gh CLI was not found')
+    if (issue === 'failed') say(err, 'backup: no issue opened, gh failed')
   }
   return { exitCode: result.ok ? 0 : 1, line, issue, ...result }
 }
 
-async function main() {
-  let options
-  try {
-    options = parseArgs(process.argv.slice(2))
-  } catch (error) {
-    console.error(`backup: ${error.message}`)
-    console.error(USAGE)
-    process.exitCode = 1
-    return
-  }
-  if (options.help) {
-    console.log(USAGE)
-    return
-  }
-  const result = await runBackup(options)
-  process.exitCode = result.exitCode
+/** What an unexpected error may say about itself in public: its code or its name, never its message (it may hold a path). */
+function errorLabel(error) {
+  if (typeof error?.code === 'string' && /^[A-Z0-9_]{1,40}$/.test(error.code)) return error.code
+  if (typeof error?.name === 'string' && /^[A-Za-z]{1,40}$/.test(error.name)) return error.name
+  return 'Error'
 }
 
-if (isMain(import.meta.url)) await main()
+/**
+ * The command line: reads the arguments, runs the backup, and returns the exit code. It never throws and never lets an
+ * unhandled rejection print a stack (which would show absolute paths): an unexpected error becomes one cleaned line.
+ * `run`, `out` and `err` are for a test.
+ */
+export async function main(argv = process.argv.slice(2), { run = runBackup, out = console.log, err = console.error } = {}) {
+  try {
+    let options
+    try {
+      options = parseArgs(argv)
+    } catch (error) {
+      err(`backup: ${error.message}`)
+      err(USAGE)
+      return 1
+    }
+    if (options.help) {
+      out(USAGE)
+      return 0
+    }
+    const result = await run(options)
+    return result.exitCode
+  } catch (error) {
+    attempt(() => err(`backup failed: unexpected error (${errorLabel(error)})`))
+    return 1
+  }
+}
+
+if (isMain(import.meta.url)) process.exitCode = await main()

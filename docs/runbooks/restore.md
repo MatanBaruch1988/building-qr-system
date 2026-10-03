@@ -66,14 +66,28 @@ check-ins, the e-mail addresses of the committee), so they never go to GitHub, i
 `*.dump` is in `.gitignore` as a second net.
 
 **What runs.** `scripts/backup-db.mjs` (`npm run db:backup`), once a day. It asks the Neon CLI for the direct connection
-string of the production branch (kept in memory, never written down), runs `pg_dump`, reads the file back with
-`pg_restore --list` and checks that it holds the data of `scans` and `points`, and only then names it
-`building-qr-<UTC date and time>.dump`. A failed dump leaves no file behind. It keeps the newest 30 dumps (`--keep`) and
+string of the production branch (kept in memory, never written down), runs `pg_dump`, and checks the file twice: the
+table of contents (`pg_restore --list`) must name the data of `scans` and `points`, and then a full read
+(`pg_restore --file=` to the null device, `NUL` on Windows and `/dev/null` elsewhere) must get through every data block
+and exit with 0. The first check alone is not enough, because the table of contents is at the start of the file and a dump
+that was cut off after it would pass. Only then is the file named `building-qr-<UTC date and time>.dump`. A failed dump
+leaves no file behind. It keeps the newest 30 dumps (`--keep`) and
 deletes older ones, and it never touches another file in the folder. One line per run is added to `backup.log` in the same
 folder: the time (UTC), ok or failed, the masked host, the file and its size, or a short error. It never holds the
 connection string, the user or the password.
 
 **Where the files are.** A folder on the owner's computer, outside the repository, set with `--out` in the scheduled task.
+
+**Who can read them.** Only the owner, because the dump holds attendance data.
+
+- On macOS and Linux the script sets the umask to 077 before it creates anything (`pg_dump` makes its file with the umask it
+  inherits, which is often 022 and would let every account of the machine read it), makes the folder with mode 700, and sets
+  mode 600 on every dump and on `backup.log`. A folder that already exists is your choice, so the script does not change
+  it: if other users can read it, `backup.log` and the screen get a warning line that says to tighten it
+  (`chmod 700 <folder>`).
+- On Windows nothing is set, because a folder under your user profile (`C:\Users\<your name>`) already has an access list
+  that names only you, the administrators and the system. So choose a folder under the profile, and never a shared folder, a
+  network drive or a folder that a service synchronises to the internet (for example OneDrive or Dropbox).
 
 **What it needs on that computer.**
 
@@ -94,7 +108,9 @@ connection string, the user or the password.
 - Open the last line of `backup.log` in the backup folder: it says `ok`, with a time from the last 24 hours, and a size that
   is not far from yesterday's. The newest file in the folder has the same name.
 - Look inside a file: `pg_restore --list <file>` prints the table of contents. It must show lines such as
-  `TABLE DATA public scans` and `TABLE DATA public points` (one `TABLE DATA` line for every table).
+  `TABLE DATA public scans` and `TABLE DATA public points` (one `TABLE DATA` line for every table). To read every data
+  block, as the script does, run `pg_restore --file=/dev/null <file>` (`--file=NUL` on Windows): it prints nothing and exits
+  with 0 for a good file, and with an error such as "could not read from input file: end of file" for a cut one.
 - A run by hand is the same command as the task (below). It prints one line with the file, its size and how many old files
   it removed, and exits with 1 on a failure.
 
