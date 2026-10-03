@@ -1,10 +1,76 @@
-import React, { useState } from 'react'
+import React, { useId, useState } from 'react'
 import { adminApi, errorText } from '../api.js'
 import { useLoad, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconBan, IconCheck, IconShield, IconAlert, IconTrash } from '../icons.jsx'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+// The same limits as the server (server/building.js), so that the person is told before sending.
+const ADDRESS_MAX = 200
+const CONTROL_RE = /[\p{Cc}\p{Zl}\p{Zp}]/u
+
+/**
+ * The building's address: shown at the top of the service providers' app, kept in the database of this committee.
+ * It can stay empty, and then that app shows no address. One field and a save button, so there are no row actions here
+ * (and the card is not an <article>: the committee members' cards are).
+ */
+function BuildingCard() {
+  const titleId = useId()
+  const toast = useToast()
+  const [busy, run] = useAction(toast, errorText)
+  const [stored, setStored] = useState('') // as the server has it
+  const [text, setText] = useState('') // what the field says now
+  const [error, setError] = useState('')
+  const loaded = useLoad(async () => {
+    const { building } = await adminApi('/building')
+    setStored(building.address)
+    setText(building.address)
+    return building
+  })
+
+  const address = text.trim()
+  const changed = address !== stored
+  const submit = async (e) => {
+    e.preventDefault()
+    if (busy || !changed) return
+    if (CONTROL_RE.test(address)) return setError('הכתובת מכילה תווים שאי אפשר לשמור, למשל ירידת שורה.')
+    const res = await run(
+      () => adminApi('/building', { method: 'PUT', body: { address } }),
+      address ? 'כתובת הבניין נשמרה' : 'כתובת הבניין הוסרה',
+    )
+    if (res) {
+      setStored(res.building.address)
+      setText(res.building.address)
+    }
+  }
+
+  return (
+    <section className="a-card a-card--form" aria-labelledby={titleId}>
+      <h2 className="a-card__title" id={titleId}>פרטי הבניין</h2>
+      {loaded.status === 'loading' && <Spinner />}
+      {loaded.status === 'error' && !loaded.data && (
+        <>
+          <p className="w-error" role="alert"><IconAlert size={18} />לא הצלחנו לטעון את פרטי הבניין.</p>
+          <div className="a-actions"><button type="button" className="w-btn w-btn--small w-btn--quiet" onClick={loaded.reload}>נסו שוב</button></div>
+        </>
+      )}
+      {loaded.data && (
+        <form className="a-form" onSubmit={submit} noValidate>
+          <Field label="כתובת הבניין" error={error}
+            hint="הכתובת מופיעה בראש האפליקציה של נותני השירות, בדרך כלל תוך דקה מהשמירה. אפשר להשאיר ריק, ואז לא תוצג כתובת.">
+            {/* dir="auto": the address is typed in any language, and each one should read the right way round */}
+            <input className="a-input" dir="auto" value={text} maxLength={ADDRESS_MAX} autoComplete="off"
+              onChange={(e) => { setText(e.target.value); setError('') }} />
+          </Field>
+          <div className="a-actions">
+            <button type="submit" className="w-btn w-btn--small" disabled={busy || !changed}>{busy ? 'שומר…' : 'שמירה'}</button>
+          </div>
+        </form>
+      )}
+    </section>
+  )
+}
 
 function AddDialog({ onClose, onAdded }) {
   const toast = useToast()
@@ -109,6 +175,8 @@ export default function CommitteeView({ admin }) {
           )
         })}
       </div>
+
+      <BuildingCard />
 
       {adding && <AddDialog onClose={() => setAdding(false)} onAdded={() => { setAdding(false); admins.reload() }} />}
     </>
