@@ -20,27 +20,27 @@ test('a scan link opens the sign-in list, in Hebrew, naming the point', async ({
 test('a wrong password is refused with a clear message and a clear field', async ({ page }) => {
   allowConsoleErrors(page, /status of 401/) // the browser notes the 401 this test provokes
   await page.goto(scanLink(POINTS.lobby))
-  await signIn(page, { name: PEOPLE.lior.name, password: 'not-the-password' })
+  await signIn(page, { name: PEOPLE.ploni.name, password: 'not-the-password' })
   await expect(page.getByRole('alert')).toContainText(he['login.wrong'])
   await expect(page.getByLabel(he['login.passwordLabel'], { exact: true })).toHaveValue('')
 })
 
 test('signing in checks in at the point, names who signed in, and lists the visit on the home screen', async ({ page }) => {
   await page.goto(scanLink(POINTS.lobby))
-  await signIn(page, PEOPLE.lior)
+  await signIn(page, PEOPLE.ploni)
 
   await expect(page.getByRole('heading', { name: he['checkin.success.title'] })).toBeVisible()
-  await expect(page.getByText(/משתמש:/)).toContainText('ליאור · ניקיון')
+  await expect(page.getByText(/משתמש:/)).toContainText(`${PEOPLE.ploni.name} · ניקיון`)
 
   await page.getByRole('button', { name: he['checkin.done'] }).click()
-  await expect(page.getByRole('heading', { name: /שלום/ })).toContainText('ליאור')
+  await expect(page.getByRole('heading', { name: /שלום/ })).toContainText(PEOPLE.ploni.name)
   await expect(page.getByRole('list').getByText('לובי')).toBeVisible()
   await expect(page.getByRole('list').getByText(/^\d{2}:\d{2}$/)).toBeVisible() // the time of the visit: HH:MM
 })
 
 test('scanning the same point again says it was already recorded', async ({ page }) => {
   await page.goto(scanLink(POINTS.lobby))
-  await signIn(page, PEOPLE.lior)
+  await signIn(page, PEOPLE.ploni)
   await expect(page.getByRole('heading', { name: he['checkin.success.title'] })).toBeVisible()
 
   await page.goto(scanLink(POINTS.lobby)) // still signed in on this phone
@@ -49,7 +49,7 @@ test('scanning the same point again says it was already recorded', async ({ page
 
 test('a point that is not assigned to the person is refused with its own message, in the person\'s language', async ({ page }) => {
   allowConsoleErrors(page, /status of 403/) // the browser notes the 403 this test provokes
-  await page.goto(scanLink(POINTS.gym)) // the gym is Lior's only
+  await page.goto(scanLink(POINTS.gym)) // the gym is Ploni's only
   // John reads English: he picks it himself on his phone (the committee does not set a language for anyone)
   await page.getByLabel(he['lang.label']).selectOption('en')
   await signIn(page, PEOPLE.john, en)
@@ -61,7 +61,7 @@ test('a point that is not assigned to the person is refused with its own message
 test('a point that requires the location refuses a phone that is far away', async ({ page, context }) => {
   await context.setGeolocation(FAR)
   await page.goto(scanLink(POINTS.gym))
-  await signIn(page, PEOPLE.lior)
+  await signIn(page, PEOPLE.ploni)
   await expect(page.getByRole('heading', { name: he['checkin.far.title'] })).toBeVisible()
   await expect(page.getByRole('button', { name: he['checkin.retry'] })).toBeVisible()
 })
@@ -69,7 +69,7 @@ test('a point that requires the location refuses a phone that is far away', asyn
 test('a code that is not ours is refused', async ({ page }) => {
   allowConsoleErrors(page, /status of 404/) // the browser notes the 404 this test provokes
   await page.goto(scanLink('BQR-doesnotexist000000000000'))
-  await signIn(page, PEOPLE.lior)
+  await signIn(page, PEOPLE.ploni)
   await expect(page.getByText(he['error.unknown_code'])).toBeVisible()
 })
 
@@ -78,7 +78,7 @@ test('a check-in made with no network is kept on the phone and sent when the net
   allowConsoleErrors(page, OFFLINE_NOISE) // every request that fails while the network is off is logged by the browser
   // first an ordinary check-in, so the person stays signed in and the point is known to the phone
   await page.goto(scanLink(POINTS.basement))
-  await signIn(page, PEOPLE.lior)
+  await signIn(page, PEOPLE.ploni)
   await expect(page.getByRole('heading', { name: he['checkin.success.title'] })).toBeVisible()
   await page.getByRole('button', { name: he['checkin.done'] }).click()
   await page.evaluate(() => navigator.serviceWorker.ready)

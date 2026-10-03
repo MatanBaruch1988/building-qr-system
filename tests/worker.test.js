@@ -3,6 +3,7 @@ import { performCheckIn, withScanContext, providerLabel } from '../src/worker/ch
 import { KNOWN_ERROR_CODES, errorMessageKey, isKnownError } from '../src/worker/errors.js'
 import { createQueue, flushQueue } from '../src/worker/scanQueue.js'
 import { api, ApiError } from '../src/api/client.js'
+import { SAMPLE_PROVIDER_NAMES } from '../scripts/sample-data.mjs'
 
 const memoryStorage = () => {
   const m = new Map()
@@ -50,7 +51,7 @@ describe('performCheckIn', () => {
   })
 
   it("labels who is signed in the way the committee named them", () => {
-    expect(providerLabel({ contact_name: 'ליאור', company: 'ניקיון' })).toBe('ליאור · ניקיון')
+    expect(providerLabel({ contact_name: SAMPLE_PROVIDER_NAMES.cleaner, company: 'ניקיון' })).toBe(`${SAMPLE_PROVIDER_NAMES.cleaner} · ניקיון`)
     expect(providerLabel({ contact_name: '', company: 'ניקיון' })).toBe('ניקיון')
     expect(providerLabel(null)).toBe('')
   })

@@ -2,26 +2,27 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
 import { importFirestore } from '../server/importFirestore.js'
+import { SAMPLE_POINT, SAMPLE_COARSE_POINT, SAMPLE_PROVIDER_NAMES, SAMPLE_LEGACY_TOKENS } from '../scripts/sample-data.mjs'
 
 let db
 
-const OLD_QR = 'https://building-qr-system.web.app/scan?code=BQR-1770182207272-1770182207272-08tcx7'
+const OLD_QR = `https://building-qr-system.web.app/scan?code=${SAMPLE_LEGACY_TOKENS.lobby}`
 
 const data = {
   workers: [
-    { id: 'w1', company: 'ניקיון', name: 'ליאור', isActive: true, pinHash: 'old', createdAt: { __ts: '2026-02-01T08:00:00.000Z' } },
-    { id: 'w2', company: 'גינון', name: 'חמודי', isActive: true },
+    { id: 'w1', company: 'ניקיון', name: SAMPLE_PROVIDER_NAMES.cleaner, isActive: true, pinHash: 'old', createdAt: { __ts: '2026-02-01T08:00:00.000Z' } },
+    { id: 'w2', company: 'גינון', name: SAMPLE_PROVIDER_NAMES.gardener, isActive: true },
     { id: 'w3', company: 'בדיקות', name: 'מערכת', isActive: false },
   ],
   locations: [
     {
-      id: 'l1', name: 'לובי', description: 'קומת קרקע', latitude: 32.3132, longitude: 34.9442, radiusMeters: 50,
+      id: 'l1', name: 'לובי', description: 'קומת קרקע', latitude: SAMPLE_POINT.lat, longitude: SAMPLE_POINT.lng, radiusMeters: 50,
       isActive: true, qrCode: OLD_QR, assignedWorkerIds: ['', 'w1', 'w-deleted'], createdAt: { __ts: '2026-02-01T08:00:00.000Z' },
     },
-    { id: 'l2', name: 'גימבורי', latitude: 32.31, longitude: 34.94, radiusMeters: 5000, isActive: true,
-      qrCode: 'https://building-qr-system.web.app/scan?code=BQR-1770302217878-1770302217878-sd1vhk', assignedWorkerId: 'w2' },
+    { id: 'l2', name: 'גימבורי', latitude: SAMPLE_COARSE_POINT.lat, longitude: SAMPLE_COARSE_POINT.lng, radiusMeters: 5000, isActive: true,
+      qrCode: `https://building-qr-system.web.app/scan?code=${SAMPLE_LEGACY_TOKENS.gym}`, assignedWorkerId: 'w2' },
     { id: 'l3', name: 'בלי QR', isActive: false, qrCode: 'garbage' },
-    { id: 'l4', name: 'יתום', qrCode: 'https://x.web.app/scan?code=BQR-1770999999999-1770999999999-orphan', assignedWorkerIds: ['ghost'] },
+    { id: 'l4', name: 'יתום', qrCode: `https://x.web.app/scan?code=${SAMPLE_LEGACY_TOKENS.orphan}`, assignedWorkerIds: ['ghost'] },
   ],
   scans: [
     // online scan, ISO-string timestamp (old shape)
@@ -65,13 +66,13 @@ describe('Firestore import', () => {
     const providers = (await db.pool.query('select company, contact_name, service_type, is_active, password_hash from providers order by company')).rows
     expect(providers).toEqual([
       { company: 'בדיקות', contact_name: 'מערכת', service_type: null, is_active: false, password_hash: null },
-      { company: 'גינון', contact_name: 'חמודי', service_type: 'gardening', is_active: true, password_hash: null },
-      { company: 'ניקיון', contact_name: 'ליאור', service_type: 'cleaning', is_active: true, password_hash: null },
+      { company: 'גינון', contact_name: SAMPLE_PROVIDER_NAMES.gardener, service_type: 'gardening', is_active: true, password_hash: null },
+      { company: 'ניקיון', contact_name: SAMPLE_PROVIDER_NAMES.cleaner, service_type: 'cleaning', is_active: true, password_hash: null },
     ])
 
     const points = (await db.pool.query('select name, qr_token, radius_m, is_active, gps_mode from points order by name')).rows
     const byName = Object.fromEntries(points.map((p) => [p.name, p]))
-    expect(byName['לובי'].qr_token).toBe('BQR-1770182207272-1770182207272-08tcx7') // printed QR preserved
+    expect(byName['לובי'].qr_token).toBe(SAMPLE_LEGACY_TOKENS.lobby) // printed QR preserved
     expect(byName['גימבורי'].radius_m).toBe(50) // out-of-range radius replaced by the default
     expect(byName['בלי QR'].qr_token).toMatch(/^BQR-[0-9a-f]{24}$/)
     expect(byName['לובי'].gps_mode).toBe('optional')
@@ -106,13 +107,13 @@ describe('Firestore import', () => {
     await seedAdmin(db.pool)
     const cookie = await adminCookie()
     const providers = (await call('GET', '/api/admin/providers', { cookie })).json.providers
-    const lior = providers.find((p) => p.contact_name === 'ליאור')
-    expect(lior.has_password).toBe(false)
+    const ploni = providers.find((p) => p.contact_name === SAMPLE_PROVIDER_NAMES.cleaner)
+    expect(ploni.has_password).toBe(false)
 
     // Can't sign in until the committee sets a password...
-    expect((await call('POST', '/api/session', { body: { provider_id: lior.id, password: 'x1234567' } })).status).toBe(401)
-    await call('PATCH', `/api/admin/providers/${lior.id}`, { cookie, body: { password: 'fresh-pass-1' } })
-    const token = (await call('POST', '/api/session', { body: { provider_id: lior.id, password: 'fresh-pass-1' } })).json.token
+    expect((await call('POST', '/api/session', { body: { provider_id: ploni.id, password: 'x1234567' } })).status).toBe(401)
+    await call('PATCH', `/api/admin/providers/${ploni.id}`, { cookie, body: { password: 'fresh-pass-1' } })
+    const token = (await call('POST', '/api/session', { body: { provider_id: ploni.id, password: 'fresh-pass-1' } })).json.token
 
     const resolved = await call('GET', `/api/public/points/resolve?code=${encodeURIComponent(OLD_QR)}`)
     expect(resolved.json.point.name).toBe('לובי')
@@ -123,7 +124,7 @@ describe('Firestore import', () => {
     // assignment carried over: the gardener-only point refuses the cleaner
     const gym = await call('POST', '/api/scan', {
       token,
-      body: { id: randomUUID(), code: 'BQR-1770302217878-1770302217878-sd1vhk' },
+      body: { id: randomUUID(), code: SAMPLE_LEGACY_TOKENS.gym },
     })
     expect(gym.json.error.code).toBe('not_assigned')
   })

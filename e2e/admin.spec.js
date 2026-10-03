@@ -1,6 +1,6 @@
 // The committee screens on a phone and on a computer: the same icons, nothing spilling off the screen, and deleting.
 import { randomUUID } from 'node:crypto'
-import { test, expect, he, PEOPLE, POINTS, FAR, adminSignIn, clearScans, allowConsoleErrors } from './fixtures.js'
+import { test, expect, he, PEOPLE, POINTS, FAR, SAMPLE_POINT, adminSignIn, clearScans, allowConsoleErrors } from './fixtures.js'
 
 const COMPUTER = { width: 1280, height: 800 }
 // Each tab and the heading of its page (every view renders its own h1 above its content)
@@ -89,12 +89,12 @@ test('deleting a point keeps its scans, and a scan row can be deleted on its own
   const name = `בדיקת מחיקה ${randomUUID().slice(0, 6)}`
 
   // a throwaway point with one scan, made through the API
-  const created = await page.request.post('/api/admin/points', { data: { name, lat: 32.3132, lng: 34.9442, gps_mode: 'none' } })
+  const created = await page.request.post('/api/admin/points', { data: { name, lat: SAMPLE_POINT.lat, lng: SAMPLE_POINT.lng, gps_mode: 'none' } })
   const point = (await created.json()).point
   const phone = await playwright.request.newContext({ baseURL: page.url().split('/admin')[0] })
   const providers = (await (await phone.get('/api/public/providers')).json()).providers
-  const lior = providers.find((p) => p.contact_name === PEOPLE.lior.name)
-  const session = await (await phone.post('/api/session', { data: { provider_id: lior.id, password: PEOPLE.lior.password } })).json()
+  const ploni = providers.find((p) => p.contact_name === PEOPLE.ploni.name)
+  const session = await (await phone.post('/api/session', { data: { provider_id: ploni.id, password: PEOPLE.ploni.password } })).json()
   const scan = await phone.post('/api/scan', {
     headers: { authorization: `Bearer ${session.token}` },
     data: { id: randomUUID(), code: point.qr_token, gps: null },
@@ -149,12 +149,12 @@ test('every screen has its actions in the same order and places, with the red tr
   const dead = (await (await page.request.post('/api/admin/api-keys', { data: { name: `בוטל ${tag}` } })).json()).api_key
   // a write needs a JSON body, even an empty one
   expect((await page.request.post(`/api/admin/api-keys/${dead.id}/revoke`, { data: {} })).ok()).toBe(true)
-  // Lior signs in on a phone (a connected device) and makes one visit that is accepted and one that is refused as too far
+  // Ploni signs in on a phone (a connected device) and makes one visit that is accepted and one that is refused as too far
   const phone = await playwright.request.newContext({ baseURL: page.url().split('/admin')[0] })
   try {
     const providers = (await (await phone.get('/api/public/providers')).json()).providers
-    const lior = providers.find((p) => p.contact_name === PEOPLE.lior.name)
-    const session = await (await phone.post('/api/session', { data: { provider_id: lior.id, password: PEOPLE.lior.password } })).json()
+    const ploni = providers.find((p) => p.contact_name === PEOPLE.ploni.name)
+    const session = await (await phone.post('/api/session', { data: { provider_id: ploni.id, password: PEOPLE.ploni.password } })).json()
     const scan = (code, gps) => phone.post('/api/scan', { headers: { authorization: `Bearer ${session.token}` }, data: { id: randomUUID(), code, gps } })
     expect((await (await scan(POINTS.basement, null)).json()).scan.outcome).toBe('accepted')
     expect((await (await scan(POINTS.gym, { lat: FAR.latitude, lng: FAR.longitude, accuracy: FAR.accuracy })).json()).scan.outcome).toBe('rejected_far')
@@ -303,12 +303,12 @@ test.describe('dates on the committee screens', () => {
     await adminSignIn(page)
     const tag = randomUUID().slice(0, 6)
     const key = (await (await page.request.post('/api/admin/api-keys', { data: { name: `מפתח ${tag}` } })).json()).api_key
-    // Lior makes a visit, so there is a "last visit" for him and a row in the history
+    // Ploni makes a visit, so there is a "last visit" for him and a row in the history
     const phone = await playwright.request.newContext({ baseURL: page.url().split('/admin')[0] })
     try {
       const providers = (await (await phone.get('/api/public/providers')).json()).providers
-      const lior = providers.find((p) => p.contact_name === PEOPLE.lior.name)
-      const session = await (await phone.post('/api/session', { data: { provider_id: lior.id, password: PEOPLE.lior.password } })).json()
+      const ploni = providers.find((p) => p.contact_name === PEOPLE.ploni.name)
+      const session = await (await phone.post('/api/session', { data: { provider_id: ploni.id, password: PEOPLE.ploni.password } })).json()
       const visit = await phone.post('/api/scan', { headers: { authorization: `Bearer ${session.token}` }, data: { id: randomUUID(), code: POINTS.basement, gps: null } })
       expect((await visit.json()).scan.outcome).toBe('accepted')
 
@@ -320,8 +320,8 @@ test.describe('dates on the committee screens', () => {
       // providers: the last visit
       await page.goto('/admin#providers')
       await loaded(page, 'נותני שירות')
-      const liorCard = page.getByRole('article').filter({ hasText: PEOPLE.lior.name })
-      await expect(liorCard.locator('dd').nth(0)).toHaveText(DAY_TIME) // "last visit"
+      const ploniCard = page.getByRole('article').filter({ hasText: PEOPLE.ploni.name })
+      await expect(ploniCard.locator('dd').nth(0)).toHaveText(DAY_TIME) // "last visit"
       await noOtherFormat('providers')
 
       // committee: the last sign-in of the member who is signed in now
@@ -403,8 +403,8 @@ test.describe('dates on the committee screens', () => {
     const phone = await playwright.request.newContext({ baseURL: page.url().split('/admin')[0] })
     try {
       const providers = (await (await phone.get('/api/public/providers')).json()).providers
-      const lior = providers.find((p) => p.contact_name === PEOPLE.lior.name)
-      const session = await (await phone.post('/api/session', { data: { provider_id: lior.id, password: PEOPLE.lior.password } })).json()
+      const ploni = providers.find((p) => p.contact_name === PEOPLE.ploni.name)
+      const session = await (await phone.post('/api/session', { data: { provider_id: ploni.id, password: PEOPLE.ploni.password } })).json()
       const visit = await phone.post('/api/scan', { headers: { authorization: `Bearer ${session.token}` }, data: { id: randomUUID(), code: POINTS.basement, gps: null } })
       expect((await visit.json()).scan.outcome).toBe('accepted')
     } finally {
