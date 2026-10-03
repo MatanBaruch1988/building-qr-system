@@ -218,8 +218,11 @@ The limits, all of them in the two workflows:
 - At most 2 agent branches (`claude/...`) that are not merged or deleted, counted before a run: the action never opens a
   pull request itself, so a task counts from its first push, not from the moment you click its link. A merged branch is
   deleted by the repository setting "Automatically delete head branches"; an abandoned one counts until you delete it, so
-  delete an abandoned `claude/` branch to free its slot. One run at a time per issue or pull request, 30 turns and 45
-  minutes. A review is 15 turns.
+  delete an abandoned `claude/` branch to free its slot. Runs that make a new branch (an issue, a comment on an issue, a
+  comment on a closed pull request) go one at a time, so two tasks started together cannot both pass that count: GitHub
+  keeps one run going and at most one waiting, and a newer waiting start replaces the older one, so start tasks one at a
+  time and start a replaced one again. A comment on an open pull request runs on its own. 30 turns and 45 minutes. A
+  review is 15 turns.
 - No network tools (`WebFetch`, `WebSearch`, `curl`, `wget`, `gh api`), no merge, no deploy, no force-push. The shell is
   limited to the commands that the workflow lists, and a change to those lists is a review finding (below).
 - The agent may not touch `.github/`, `scripts/check-*`, `scripts/ci-git.mjs`, `scripts/hooks/`, `scripts/text-rules.mjs`,
@@ -227,8 +230,9 @@ The limits, all of them in the two workflows:
   test. It follows this file, and `.claude/settings.json` applies to it too. Edit rules deny the file tools those paths,
   but a deny rule does not see a shell (an allowed command such as `npm run test:unit` can run a script that Claude
   changed). So after every run a separate job, `check`, reads through the GitHub API what the run pushed: it refuses a
-  branch that touches any of those paths or modifies, renames or deletes a migration that exists on `master`, deletes the
-  branch of an issue run, only reports on a pull request's branch (the owner decides), writes a note and fails. It is a
+  branch that touches any of those paths or modifies, renames or deletes a migration that exists on `master`, or that
+  changes 300 files or more (GitHub lists at most 300 files of a comparison, so a bigger change cannot be seen in full),
+  deletes the branch of an issue run, only reports on a pull request's branch (the owner decides), writes a note and fails. It is a
   job on a fresh runner so that the code that Claude ran cannot reach it. What is left: the Claude GitHub App's token has
   write access to workflows too, so the check only sees `claude/` branches and the head of the pull request that was
   commented on. The required CI checks, the owner's review and the P1 rules below are the next layers: read every change

@@ -22,8 +22,8 @@
 # conversation of the pull request, and quotes the inline comment if it matters.
 #
 # What is limited, and where: at most 2 agent branches (claude/...) that are not merged or deleted (the first step), one
-# run per issue or pull request at a time (concurrency), 30 turns and 45 minutes, no network tools, no merge, no deploy
-# (the tool lists below). Claude sees only the comments of the owner, of claude[bot] and of the Codex review bot
+# run at a time for everything that makes a new branch (concurrency, below), 30 turns and 45 minutes, no network tools, no
+# merge, no deploy (the tool lists below). Claude sees only the comments of the owner, of claude[bot] and of the Codex review bot
 # (include_comments_by_actor): on a public repository anybody can comment, and a comment is text that an agent would
 # read as a prompt.
 #
@@ -99,8 +99,15 @@ jobs:
     # A concurrency group at the job level, not the workflow level: a run whose job is skipped by the `if` above (every
     # comment of a stranger) must not queue behind, or replace, a real run. cancel-in-progress is false so that a second
     # request waits for the run that is going and never kills it half way through a push.
+    # Everything that makes a NEW branch shares one group: an issue run, a comment on an issue, and a comment on a closed
+    # or merged pull request (the action makes a new branch there too). So two tasks started together do not run side by
+    # side and both pass the count of agent branches in the first step: the second one starts after the first has pushed,
+    # and counts its branch. A comment on an open pull request makes no branch and has a group per pull request.
+    # What GitHub does with a group: at most one run is running and at most one is pending. A newer run that arrives while
+    # one is pending replaces the pending one (the replaced run is cancelled and never starts). So start tasks one at a
+    # time, and start a replaced one again (take the label off and put it on again, or comment again).
     concurrency:
-      group: claude-agent-${{ github.event.issue.number }}
+      group: ${{ (github.event.issue.pull_request == null || github.event.issue.state == 'closed') && 'claude-agent-new-task' || format('claude-agent-pr-{0}', github.event.issue.number) }}
       cancel-in-progress: false
     # Values for the job `check` below. Every one of them is written by a step that runs BEFORE Claude, so nothing that
     # Claude does can change it (an output of the Claude step itself could be rewritten by the code that Claude runs).
@@ -146,12 +153,12 @@ jobs:
           egress-policy: audit
 
       # Before anything else, list the agent branches (claude/...) that exist now. Two uses.
-      # (1) In a run that is about to make a new branch (an issue run, or a comment on an issue) it stops when 2 are already
-      # waiting. The action never opens a pull request itself, so a task is "waiting" from its first push until the owner
-      # merges its pull request or deletes the branch: counting open pull requests would let three tasks run before the
-      # owner clicks any link. A branch of a merged pull request is deleted by the repository setting "Automatically delete
-      # head branches"; an abandoned one counts until the owner deletes it, and the message below says so. Only branches of
-      # this repository can be listed, by construction, so nobody can block the loop from a fork.
+      # (1) In a run that is about to make a new branch (see the concurrency group) it stops when 2 are already waiting. The
+      # action never opens a pull request itself, so a task is "waiting" from its first push until the owner merges its pull
+      # request or deletes the branch: counting open pull requests would let three tasks run before the owner clicks any
+      # link. A branch of a merged pull request is deleted by the repository setting "Automatically delete head branches"; an
+      # abandoned one counts until the owner deletes it, and the message below says so. Only branches of this repository can
+      # be listed, by construction, so nobody can block the loop from a fork.
       # (2) In every run it remembers the list (commit and name), as an output of a step that runs before Claude, so that the
       # job `check` can tell which branches this run made or moved.
       - name: List the agent branches, and stop when two are waiting
@@ -160,8 +167,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          # An issue run makes a new branch, and so does a comment on an issue. A comment on a pull request pushes to its branch.
-          NEW_BRANCH_RUN: ${{ github.event_name == 'issues' || (github.event_name == 'issue_comment' && github.event.issue.pull_request == null) }}
+          # The same condition as the concurrency group: an issue run, a comment on an issue, or a comment on a closed or merged
+          # pull request makes a new branch. A comment on an open pull request pushes to its branch. This step runs inside the
+          # job that holds the group, before the action makes the branch, so the count is never raced by another new task.
+          NEW_BRANCH_RUN: ${{ github.event.issue.pull_request == null || github.event.issue.state == 'closed' }}
           MAX_AGENT_BRANCHES: "2"
         run: |
           set -euo pipefail
@@ -286,7 +295,8 @@ jobs:
       # head of the pull request that was commented on when it is not a claude/ branch (only what the run added). A branch
       # that the run did not touch is not looked at, so an old branch cannot be deleted by a later run.
       # An existing migration is one that exists on the default branch: a migration that only the branch has can be edited.
-      # Any answer from GitHub that is not clear stops the job instead of letting a branch through.
+      # Any answer from GitHub that is not clear stops the job instead of letting a branch through. So does a comparison of
+      # 300 files or more: GitHub shows at most 300 and does not say how many there are, so it cannot be checked in full.
       - name: Refuse a branch that changed a protected path
         env:
           GH_TOKEN: ${{ github.token }}
@@ -304,6 +314,7 @@ jobs:
           NOTE="$RUNNER_TEMP/note.md"
           HITS=""
           HIT=""
+          TOO_LARGE=no
           failed=0
           to_delete=()
 
@@ -358,12 +369,20 @@ jobs:
             return 1
           }
 
-          # What the commits between $1 and $2 changed that nobody may change: sets HITS, one path per line.
+          # What the commits between $1 and $2 changed that nobody may change: sets HITS (one path per line) and TOO_LARGE.
+          # GitHub's compare lists at most 300 changed files for the whole comparison, on its first page only, and the
+          # response has no field with the real total. So 300 entries or more means that the list may be cut off, and a
+          # protected path could be behind the cut: that is refused, like a protected path.
           scan() {
-            local files status file prev p
+            local files status file prev p count
             HITS=""
-            files=$(gh api --paginate "repos/$GH_REPO/compare/$1...$2?per_page=100" \
-              --jq '.files[] | [.status, .filename, (.previous_filename // "")] | @tsv')
+            TOO_LARGE=no
+            files=$(gh api "repos/$GH_REPO/compare/$1...$2" \
+              --jq '(.files // [])[] | [.status, .filename, (.previous_filename // "")] | @tsv')
+            count=$(printf '%s\n' "$files" | awk 'NF' | wc -l | tr -d ' ')
+            if [ "$count" -ge 300 ]; then
+              TOO_LARGE=yes
+            fi
             while IFS=$'\t' read -r status file prev; do
               [ -n "$file" ] || continue
               for p in "$file" "$prev"; do
@@ -382,12 +401,17 @@ jobs:
             local label="$1" del="$2" name="$3" p
             failed=1
             {
-              printf '\n`%s` changed paths that no agent may change:\n\n' "$(clean "$label")"
-              printf '%s' "$HITS" | sort -u | head -n 30 | while IFS= read -r p; do
-                printf -- '- `%s`\n' "$(clean "$p")"
-              done
+              if [ -n "$HITS" ]; then
+                printf '\n`%s` changed paths that no agent may change:\n\n' "$(clean "$label")"
+                printf '%s' "$HITS" | sort -u | head -n 30 | while IFS= read -r p; do
+                  printf -- '- `%s`\n' "$(clean "$p")"
+                done
+              fi
+              if [ "$TOO_LARGE" = "yes" ]; then
+                printf '\n`%s`: the change is too large to check: 300 files or more (GitHub lists at most 300 files of a comparison, so the rest cannot be seen).\n' "$(clean "$label")"
+              fi
             } >> "$NOTE"
-            echo "::error title=Protected path changed::$(clean "$label") changed a protected path"
+            echo "::error title=Agent branch refused::$(clean "$label") changed a protected path, or changed too much to be checked"
             if [ "$del" = "yes" ]; then
               to_delete+=("$name")
               printf '\nThe branch is deleted.\n' >> "$NOTE"
@@ -396,7 +420,7 @@ jobs:
             fi
           }
 
-          printf 'The agent run changed paths that no agent may change (.github/, the scripts/check-* guards, scripts/ci-git.mjs, scripts/hooks/, scripts/text-rules.mjs, .claude/, env files, and the existing migrations). Its work must not become a pull request, so do not open one from it, and do not merge it as it is.\n' > "$NOTE"
+          printf 'The agent run changed paths that no agent may change (.github/, the scripts/check-* guards, scripts/ci-git.mjs, scripts/hooks/, scripts/text-rules.mjs, .claude/, env files, and the existing migrations), or changed too much to be checked (300 files or more). Its work must not become a pull request, so do not open one from it, and do not merge it as it is.\n' > "$NOTE"
 
           declare -A before=()
           for entry in $BEFORE; do
@@ -428,7 +452,7 @@ jobs:
               scan "$BASE_BRANCH" "$sha"
               del="$delete_allowed"
             fi
-            if [ -n "$HITS" ]; then
+            if [ -n "$HITS" ] || [ "$TOO_LARGE" = "yes" ]; then
               refuse "$name" "$del" "$name"
             else
               echo "ok: $name"
@@ -443,7 +467,7 @@ jobs:
                 now=$(gh pr view "$ISSUE_NUMBER" --json headRefOid --jq .headRefOid)
                 if [ "$now" != "$PR_HEAD_SHA" ]; then
                   scan "$PR_HEAD_SHA" "$now"
-                  if [ -n "$HITS" ]; then
+                  if [ -n "$HITS" ] || [ "$TOO_LARGE" = "yes" ]; then
                     refuse "$PR_HEAD_REF" no "$PR_HEAD_REF"
                   else
                     echo "ok: the pull request branch $(clean "$PR_HEAD_REF")"

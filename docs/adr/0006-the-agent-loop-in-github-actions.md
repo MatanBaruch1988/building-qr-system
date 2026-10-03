@@ -35,12 +35,15 @@ Two workflows run `anthropics/claude-code-action`, pinned to a commit SHA like e
   request that a bot account opened is reviewed when the owner adds the label, because the sender is then the owner.
 - The limit is 2 agent branches (`claude/...`) that are not merged or deleted, not open pull requests: the action never
   opens one, so three tasks could all run before the owner clicked a link. An abandoned branch counts until the owner
-  deletes it. The shell is limited to listed commands, with no network tool, no merge and no force-push.
+  deletes it. Every run that makes a new branch shares one concurrency group, so the count is never raced by a task
+  started at the same moment. GitHub keeps one run going and one waiting, and a newer waiting start replaces the older
+  one: start tasks one at a time. The shell is limited to listed commands, with no network tool, no merge, no force-push.
 - After every run a separate job, `check`, compares through the GitHub API what the run pushed with a list of protected
   paths (`.github/`, the `scripts/check-*` guards, the edit hook, the text rules, `.claude/`, env files) and with the
   migrations on `master`. A deny rule does not see a shell: Claude can change a protected file through an allowed command
-  (a package.json script run by `npm run test:unit`). On a violation `check` deletes the branch of an issue run, only
-  reports on a pull request's branch, writes a note and fails. It is a job and not a step so that the code Claude ran
+  (a package.json script run by `npm run test:unit`). A comparison of 300 files or more is refused too, because GitHub
+  lists at most 300 and gives no total. On a violation `check` deletes the branch of an issue run, only reports on a
+  pull request's branch, writes a note and fails. It is a job and not a step so that the code Claude ran
   cannot change it through `GITHUB_ENV`, `GITHUB_PATH` or the git configuration, and its inputs come from the event and
   from a step before Claude, never from Claude's own step.
 - The agent holds no production secret. It sees this public repository and a throwaway Postgres container.
