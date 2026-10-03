@@ -167,6 +167,11 @@ The same holds for the API and the offline sync payload (`POST /api/scans/sync`,
 - When a version of a stored shape has to change (the queue key `qr.queue.v1`, the session in the browser), read the old
   one and the new one.
 
+Authorization is checked by each handler, so a new route must either refuse a request without credentials (its handler
+starts with `requireAdmin`, `requireProvider` or `requireApiKey`, before it reads the body or looks anything up) or be
+on the `PUBLIC` list of `tests/route-auth.test.js` with a one-line reason. That test walks every registered route
+(`routeTable()` in `server/router.js`) and fails for a route that answers anything but 401 without credentials.
+
 ## Git and pull requests
 
 - Branch from `master`. One pull request is about one thing and stays small.
@@ -235,6 +240,9 @@ reviewing agent should apply it too.
   `pull_request_target`, or sets `persist-credentials: true`.
 - An endpoint under `/api` without the right authorization check (committee member, service provider or agent key), or
   any write through the agent API (it is read-only).
+- A route added to the `PUBLIC` list of `tests/route-auth.test.js` without a reason that justifies answering without
+  credentials, or a protected route made public (moved to that list, or its authorization call removed or moved after
+  other work).
 
 **Report as P2 when you are sure:**
 

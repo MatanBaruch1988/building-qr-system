@@ -7,7 +7,16 @@ function compile(pattern) {
 }
 
 export function route(method, pattern, handler) {
-  routes.push({ method, segments: compile(pattern), handler })
+  routes.push({ method, pattern, segments: compile(pattern), handler })
+}
+
+/**
+ * A frozen copy of every registered route as `{ method, path }` (the path pattern exactly as it was registered, with
+ * `:name` for a parameter). It exists for tests/route-auth.test.js, which walks the table to prove that every route
+ * that is not on its PUBLIC list refuses a request without credentials. Requests never use it.
+ */
+export function routeTable() {
+  return Object.freeze(routes.map((r) => Object.freeze({ method: r.method, path: r.pattern })))
 }
 
 function match(segments, path) {
