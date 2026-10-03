@@ -15,7 +15,7 @@ Report it privately, through GitHub's private vulnerability reporting (it is ena
 https://github.com/MatanBaruch1988/building-qr-system/security/advisories/new
 
 Never report a vulnerability in a public issue, a pull request or a discussion, and do not share the details anywhere
-else before it is fixed. English or Hebrew is fine.
+else before it is fixed. Please write in English.
 
 Please include:
 

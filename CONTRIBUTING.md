@@ -1,7 +1,7 @@
 # Contributing
 
 Thank you for helping. This is a tool that building committees can host for themselves, and the maintainer's own
-building is its first user. Issues and pull requests are welcome in English or Hebrew.
+building is its first user. Issues and pull requests are welcome, and they are written in English.
 
 By taking part you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md). To report a security problem, do not open
 an issue: follow [SECURITY.md](SECURITY.md).
@@ -31,8 +31,8 @@ npm run dev:api -- --schema=dev_ui   # the local API (port 3001), with a dev-onl
 npm run dev                          # the app (port 3000)
 ```
 
-The [README](README.md) has the rest (it is written in Hebrew). The Google sign-in setup there is only needed to host
-your own deployment, not to work on the code.
+The [README](README.md) has the rest. The Google sign-in setup there is only needed to host your own deployment, not
+to work on the code.
 
 ## The project rules
 
@@ -45,7 +45,8 @@ The full list is in [`AGENTS.md`](AGENTS.md), under "Rules for every change". Th
   dates on purpose.
 - **Phone and computer:** the app is used on both. Change both layouts together and check both.
 - **UI text** comes from `src/i18n/*.js`, in all four languages: Hebrew, English, Russian and Arabic.
-- **Code comments are in English.**
+- **Everything is written in English:** code comments, commit messages, issues, pull requests and documents. Only the
+  app's own interface text is in other languages (see the UI text rule above).
 - **The committee app lists the actions of every tile and row in one order:** the actions of that screen, then edit,
   then switch off / on, and last the red trash can (red is only for deleting).
 

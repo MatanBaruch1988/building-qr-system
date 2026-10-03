@@ -3,10 +3,10 @@
 Building attendance log: one row per QR scan by a service provider (cleaning company, gardener).
 The app records facts and signals only. It never analyses, scores or judges: that is your job.
 
-- **Base URL:** `https://<your-domain>/api/agent/v1` (the committee sees the exact address in the admin screen, tab "אייג׳נט")
+- **Base URL:** `https://<your-domain>/api/agent/v1` (the committee sees the exact address in the admin screen, in the Agent tab ("אייג׳נט"))
 - **Auth:** `Authorization: Bearer qrk_…`, a key the committee creates and can revoke at any time. Read-only.
 - **Self-description:** `GET /schema` returns this contract as JSON. Read it first.
-- **Ready-made system prompt for the committee's agent (Hebrew):** [`agent-prompt.md`](agent-prompt.md).
+- **Ready-made system prompt for the committee's agent:** [`agent-prompt.md`](agent-prompt.md).
 - **Time:** all human-readable times are Israel time. `checked_in_at` is UTC ISO, `checked_in_local` is
   `YYYY-MM-DD HH:mm:ss` in Asia/Jerusalem, `local_date` is the Israeli calendar day (use it for "per day").
 
@@ -24,7 +24,7 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 
 `from`, `to` (`YYYY-MM-DD` = Israel calendar day, or a full ISO time with `Z`/offset), `point_id`, `provider_id`,
 `service_type`, `flag`, `outcome` (`accepted` default | `rejected` | `all`), `include_voided`, `include_demo`,
-`order` (`desc` default | `asc`), `limit` (1–500, default 100), `cursor`, `format` (`json` | `csv`).
+`order` (`desc` default | `asc`), `limit` (1 to 500, default 100), `cursor`, `format` (`json` | `csv`).
 
 Paging: the response has `next_cursor`; pass it back as `cursor`. For CSV the cursor is in the `X-Next-Cursor` header.
 
@@ -41,8 +41,8 @@ curl -H "Authorization: Bearer $KEY" \
   "checked_in_at": "2026-09-30T06:04:10.821Z",
   "checked_in_local": "2026-09-30 09:04:10",
   "local_date": "2026-09-30",
-  "point_id": "uuid", "point_name": "לובי",
-  "provider_id": "uuid", "provider_name": "ניקיון – ליאור",
+  "point_id": "uuid", "point_name": "Lobby",
+  "provider_id": "uuid", "provider_name": "Sparkle Cleaning",
   "service_type": "cleaning",
   "source": "online",
   "outcome": "accepted",
