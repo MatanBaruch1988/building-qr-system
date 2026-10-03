@@ -1,18 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import { parseQrToken, evaluateGps, resolveClock, haversineMeters } from '../server/scanLogic.js'
 import { hashPassword, verifyPassword } from '../server/crypto.js'
+import { SAMPLE_POINT, SAMPLE_LEGACY_TOKENS } from '../scripts/sample-data.mjs'
 
-const point = { lat: 32.3132, lng: 34.9442, radius_m: 50 }
+const point = { ...SAMPLE_POINT, radius_m: 50 }
 // ~111 m per 0.001° of latitude
 const at = (metersNorth) => ({ lat: point.lat + metersNorth / 111_000, lng: point.lng })
 
 describe('parseQrToken', () => {
   it('accepts the printed URL of the legacy format', () => {
-    expect(parseQrToken('https://building-qr-system.web.app/scan?code=BQR-1770182174672-1770182174672-mftfhf'))
-      .toBe('BQR-1770182174672-1770182174672-mftfhf')
+    expect(parseQrToken(`https://building-qr-system.web.app/scan?code=${SAMPLE_LEGACY_TOKENS.printed}`))
+      .toBe(SAMPLE_LEGACY_TOKENS.printed)
   })
   it('accepts the bare token and new-style tokens', () => {
-    expect(parseQrToken('BQR-1770182174672-1770182174672-mftfhf')).toBe('BQR-1770182174672-1770182174672-mftfhf')
+    expect(parseQrToken(SAMPLE_LEGACY_TOKENS.printed)).toBe(SAMPLE_LEGACY_TOKENS.printed)
     expect(parseQrToken('BQR-0123456789abcdef01234567')).toBe('BQR-0123456789abcdef01234567')
   })
   it('rejects anything else', () => {

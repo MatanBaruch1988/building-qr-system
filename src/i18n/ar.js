@@ -1,6 +1,5 @@
 export default {
   'app.name': 'الحضور في المبنى',
-  'brand.address': 'أهافات أدم 86، كفار يونا',
   'lang.label': 'اللغة',
   'footer.admin': 'دخول اللجنة',
   'common.loading': 'جارٍ التحميل…',

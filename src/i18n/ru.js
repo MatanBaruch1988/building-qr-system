@@ -1,6 +1,5 @@
 export default {
   'app.name': 'Посещаемость здания',
-  'brand.address': 'Ахават Адам 86, Кфар-Йона',
   'lang.label': 'Язык',
   'footer.admin': 'Вход для правления',
   'common.loading': 'Загрузка…',

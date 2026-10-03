@@ -1,5 +1,5 @@
 // What makes the app a PWA, checked on the production build: the manifest, the service worker, and offline use.
-import { test, expect, he, OFFLINE_NOISE, skipOfflineOnWebKit, allowConsoleErrors } from './fixtures.js'
+import { test, expect, he, BUILDING_ADDRESS, OFFLINE_NOISE, skipOfflineOnWebKit, allowConsoleErrors } from './fixtures.js'
 
 test.describe('manifest', () => {
   test('is linked, loads, and describes a standalone app with working icons', async ({ page }) => {
@@ -107,6 +107,7 @@ test.describe('offline', () => {
     await page.goto('/')
     // wait for the names themselves: they are saved on the phone only once they have arrived
     await expect(page.getByRole('list').getByRole('button').first()).toBeVisible()
+    await expect(page.getByText(BUILDING_ADDRESS)).toBeVisible() // the address is saved on the phone once it has arrived
     await page.evaluate(() => navigator.serviceWorker.ready)
     await page.reload() // now controlled by the service worker, with the shell cached
     await expect(page.getByRole('heading', { name: he['login.title'] })).toBeVisible()
@@ -114,7 +115,7 @@ test.describe('offline', () => {
     await context.setOffline(true)
     await page.reload()
     await expect(page.getByRole('heading', { name: he['login.title'] })).toBeVisible()
-    await expect(page.getByText(he['brand.address'])).toBeVisible()
+    await expect(page.getByText(BUILDING_ADDRESS)).toBeVisible() // the saved address, since the network is off
     // the list of names was saved on the first visit, so the person can still choose who they are
     await expect(page.getByRole('list').getByRole('button').first()).toBeVisible()
   })

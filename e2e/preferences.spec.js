@@ -72,7 +72,7 @@ test.describe('kept on the phone', () => {
     await page.goto('/')
     await page.getByLabel(he['lang.label']).selectOption('ru')
     await page.getByLabel(ru['theme.label']).selectOption('light')
-    await signIn(page, PEOPLE.lior, ru)
+    await signIn(page, PEOPLE.ploni, ru)
     await expect(page.getByRole('heading', { name: /Здравствуйте/ })).toBeVisible()
 
     await page.getByRole('button', { name: ru['home.switchWorker'] }).click()

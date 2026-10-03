@@ -4,8 +4,9 @@ import { test as base, expect } from '@playwright/test'
 import he from '../src/i18n/he.js'
 import en from '../src/i18n/en.js'
 import ru from '../src/i18n/ru.js'
+import { SAMPLE_POINT, SAMPLE_FAR_POINT, SAMPLE_PROVIDER_NAMES } from '../scripts/sample-data.mjs'
 
-export { expect, he, en, ru }
+export { expect, he, en, ru, SAMPLE_POINT }
 
 /** What the browser logs for every request that fails because the test switched the network off on purpose. */
 export const OFFLINE_NOISE = /net::ERR_INTERNET_DISCONNECTED/
@@ -23,14 +24,15 @@ export const skipOfflineOnWebKit = (browserName) =>
 export const POINTS = {
   lobby: 'BQR-dev00000000000000000001', // GPS checked if available, open to everyone
   basement: 'BQR-dev00000000000000000002', // no GPS check
-  gym: 'BQR-dev00000000000000000003', // GPS required, only for Lior
+  gym: 'BQR-dev00000000000000000003', // GPS required, only for Ploni
 }
 export const PEOPLE = {
-  lior: { name: 'ליאור', password: 'dev-pass-1' },
+  ploni: { name: SAMPLE_PROVIDER_NAMES.cleaner, password: 'dev-pass-1' },
   john: { name: 'John', password: 'dev-pass-4' }, // reads English: he picks it on his phone, nobody sets it for him
 }
 export const ADMIN_EMAIL = 'dev@example.test'
-export const FAR = { latitude: 32.3632, longitude: 34.9442, accuracy: 10 } // about 5.5 km from the sample points
+export const BUILDING_ADDRESS = 'רחוב הדוגמה 1, עיר לדוגמה' // the invented address that scripts/dev-seed.mjs sets
+export const FAR = { latitude: SAMPLE_FAR_POINT.lat, longitude: SAMPLE_FAR_POINT.lng, accuracy: 10 } // about 5.5 km from the sample points
 
 // ---- console guard ---------------------------------------------------------------------------------------------
 

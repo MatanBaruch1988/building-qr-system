@@ -38,6 +38,7 @@ process.env.DB_SCHEMA = schema
 const { getPool, query } = await import('../server/db.js')
 const { migrate } = await import('../server/migrate.js')
 const { hashPassword } = await import('../server/crypto.js')
+const { SAMPLE_POINT, SAMPLE_PROVIDER_NAMES } = await import('./sample-data.mjs')
 
 await migrate(getPool())
 const { rows } = await query('select count(*)::int n from providers')
@@ -49,8 +50,8 @@ if (rows[0].n === 0) {
       'insert into providers (company, contact_name, service_type, password_hash, is_demo) values ($1,$2,$3,$4,$5) returning id',
       [company, contact, service, await hashPassword(pw), demo],
     )).rows[0].id
-  const lior = await provider('ניקיון', 'ליאור', 'cleaning', 'dev-pass-1')
-  await provider('גינון', 'חמודי', 'gardening', 'dev-pass-2')
+  const ploni = await provider('ניקיון', SAMPLE_PROVIDER_NAMES.cleaner, 'cleaning', 'dev-pass-1')
+  await provider('גינון', SAMPLE_PROVIDER_NAMES.gardener, 'gardening', 'dev-pass-2')
   await provider('Уборка', 'Иван', 'cleaning', 'dev-pass-3')
   await provider('Cleaning Co', 'John', 'cleaning', 'dev-pass-4')
   await provider('דמו', 'לקוח דמה', null, 'dev-pass-5', true)
@@ -58,15 +59,18 @@ if (rows[0].n === 0) {
   const point = async (name, mode, token, extra = {}) =>
     (await query(
       `insert into points (name, gps_mode, qr_token, lat, lng, radius_m, service_type, is_active)
-       values ($1,$2,$3,32.3132,34.9442,50,$4,$5) returning id`,
-      [name, mode, token, extra.service ?? null, extra.active ?? true],
+       values ($1,$2,$3,$6,$7,50,$4,$5) returning id`,
+      [name, mode, token, extra.service ?? null, extra.active ?? true, SAMPLE_POINT.lat, SAMPLE_POINT.lng],
     )).rows[0].id
   await point('לובי', 'optional', 'BQR-dev00000000000000000001')
   await point('מינוס 1', 'none', 'BQR-dev00000000000000000002')
   const gym = await point('גימבורי', 'required', 'BQR-dev00000000000000000003')
   await point('נקודה ישנה', 'optional', 'BQR-dev00000000000000000004', { active: false })
-  await query('insert into point_providers (point_id, provider_id) values ($1,$2)', [gym, lior])
+  await query('insert into point_providers (point_id, provider_id) values ($1,$2)', [gym, ploni])
   console.log('Seeded sample admin, 5 providers (one demo), 4 points.')
 }
+// An invented address, so that the header of the provider app shows a line in development and in the E2E tests (the
+// committee sets the real one in the committee app). Only when it is still empty: a value typed since is kept.
+await query("update building_settings set address = 'רחוב הדוגמה 1, עיר לדוגמה' where id = 1 and address = ''")
 console.log(`Scratch schema "${schema}" is ready. Start the API with: node server/dev.mjs --schema=${schema}`)
 await getPool().end()

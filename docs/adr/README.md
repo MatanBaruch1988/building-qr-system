@@ -26,3 +26,4 @@ can be fixed in place.
 | [0003](0003-the-reviewer-is-from-another-vendor.md) | The reviewer of a pull request is from another vendor than the writer | Accepted |
 | [0004](0004-revoke-a-leaked-key-do-not-rewrite-history.md) | A leaked key is revoked, history is not rewritten | Accepted |
 | [0005](0005-local-tooling-never-touches-production.md) | Local tooling never touches the production database | Accepted |
+| [0006](0006-the-agent-loop-in-github-actions.md) | The agent loop runs in GitHub Actions: Claude implements agent tasks and reviews Codex pull requests | Accepted |

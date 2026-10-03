@@ -7,6 +7,7 @@ import {
 } from '../http.js'
 import { requireAdmin, guardLogin } from '../auth.js'
 import { verifyGoogleCredential } from '../google.js'
+import { readAddress, saveAddress, parseAddress } from '../building.js'
 import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvRow } from '../scans.js'
 import {
   ADMIN_COOKIE, ADMIN_SESSION_DAYS, PASSWORD_MIN_LENGTH,
@@ -158,6 +159,22 @@ route('DELETE', '/admin/admins/:id', async ({ req, params }) => {
   if (!r.rows.length) throw notFound('admin_not_found', 'Admin not found')
   await audit(admin, 'admin.delete', 'admin', id, { email: r.rows[0].email, name: r.rows[0].name })
   return { ok: true }
+})
+
+// ---------- the building ----------
+
+// The address shown at the top of the service providers' app. It may be empty: then the app shows no address.
+route('GET', '/admin/building', async ({ req }) => {
+  await requireAdmin(req)
+  return { building: { address: await readAddress() } }
+})
+
+route('PUT', '/admin/building', async ({ req, body }) => {
+  const { admin } = await requireAdmin(req)
+  const address = parseAddress(body.address)
+  await saveAddress(admin.id, address)
+  await audit(admin, 'building.update', 'building', null, { address })
+  return { building: { address } }
 })
 
 // ---------- points ----------
