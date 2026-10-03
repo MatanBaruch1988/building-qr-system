@@ -28,8 +28,14 @@ Two workflows run `anthropics/claude-code-action`, pinned to a commit SHA like e
   `pull_request_review_comment` trigger: GitHub runs that event's workflow from the pull request itself, so a pull request
   could carry a changed copy and run it with the secrets. `issues` and `issue_comment` run the default branch's file.
 - `claude-review.yml`: Claude reviews a pull request that Codex wrote (the branch starts with `codex/`) or any pull request
-  with the label `review:claude`. It posts one comment under the "Code Review Rules" of `AGENTS.md` and has no tool that
-  changes code. It does not run on every push or for Dependabot, because of the quota.
+  with the label `review:claude`. It posts one comment under the "Code Review Rules" of `AGENTS.md` as it is on the base
+  branch, and has no tool that changes code. It does not run on every push or for Dependabot, because of the quota.
+- The rules come from `master`, not from the branch that is being worked on. On a pull request run the action works on the
+  pull request's branch and restores `CLAUDE.md` and `.claude/` from the base branch, but not `AGENTS.md`, which `CLAUDE.md`
+  imports. So the prompt makes Claude read `AGENTS.md` and `CLAUDE.md` with `git show origin/master:...` (two exact
+  commands) first, and a difference in the working tree is part of the change under review. The review reads the base
+  branch's Code Review Rules, so a pull request that edits the rules is reviewed under the old ones and the edit is a
+  finding. `AGENTS.md` and `CLAUDE.md` are protected paths: an agent never changes the rules, the owner does.
 - Only the owner starts an agent, in both workflows, and never from a fork. The workflow checks the sender, the action
   refuses bots and actors without write access, and `allowed_bots` and `allowed_non_write_users` are never set. A Codex pull
   request that a bot account opened is reviewed when the owner adds the label, because the sender is then the owner.
@@ -39,13 +45,13 @@ Two workflows run `anthropics/claude-code-action`, pinned to a commit SHA like e
   started at the same moment. GitHub keeps one run going and one waiting, and a newer waiting start replaces the older
   one: start tasks one at a time. The shell is limited to listed commands, with no network tool, no merge, no force-push.
 - After every run a separate job, `check`, compares through the GitHub API what the run pushed with a list of protected
-  paths (`.github/`, the `scripts/check-*` guards, the edit hook, the text rules, `.claude/`, env files) and with the
-  migrations on `master`. A deny rule does not see a shell: Claude can change a protected file through an allowed command
-  (a package.json script run by `npm run test:unit`). A comparison of 300 files or more is refused too, because GitHub
-  lists at most 300 and gives no total. On a violation `check` deletes the branch of an issue run, only reports on a
-  pull request's branch, writes a note and fails. It is a job and not a step so that the code Claude ran
-  cannot change it through `GITHUB_ENV`, `GITHUB_PATH` or the git configuration, and its inputs come from the event and
-  from a step before Claude, never from Claude's own step.
+  paths (`.github/`, the `scripts/check-*` guards, the edit hook, the text rules, `.claude/`, `AGENTS.md`, `CLAUDE.md`,
+  env files) and with the migrations on `master`. A deny rule does not see a shell: Claude can change a protected file
+  through an allowed command (a package.json script run by `npm run test:unit`). A comparison of 300 files or more is
+  refused too, because GitHub lists at most 300 and gives no total. On a violation `check` deletes the branch of an
+  issue run, only reports on a pull request's branch, writes a note and fails. It is a job and not a step so that the
+  code Claude ran cannot change it through `GITHUB_ENV`, `GITHUB_PATH` or the git configuration, and its inputs come
+  from the event and from a step before Claude, never from Claude's own step.
 - The agent holds no production secret. It sees this public repository and a throwaway Postgres container.
   Untrusted text (comments of strangers) is filtered out, a task written by a stranger is rewritten by the owner first,
   and nobody else can start the run: that cuts the "lethal trifecta" (untrusted text, private data, a way out).
