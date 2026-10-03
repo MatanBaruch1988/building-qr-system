@@ -68,5 +68,8 @@ if (rows[0].n === 0) {
   await query('insert into point_providers (point_id, provider_id) values ($1,$2)', [gym, lior])
   console.log('Seeded sample admin, 5 providers (one demo), 4 points.')
 }
+// An invented address, so that the header of the provider app shows a line in development and in the E2E tests (the
+// committee sets the real one in the committee app). Only when it is still empty: a value typed since is kept.
+await query("update building_settings set address = 'רחוב הדוגמה 1, עיר לדוגמה' where id = 1 and address = ''")
 console.log(`Scratch schema "${schema}" is ready. Start the API with: node server/dev.mjs --schema=${schema}`)
 await getPool().end()

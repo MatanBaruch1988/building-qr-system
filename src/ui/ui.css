@@ -107,9 +107,12 @@
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding-block: max(32px, calc(env(safe-area-inset-top) + 18px)) 12px;
 }
-.w-topbar__tools { display: flex; align-items: center; gap: 2px; }
+/* margin-inline-start: auto keeps the two icons at the end of the bar when there is no address line before them
+   (justify-content alone would pull a lone item to the start). */
+.w-topbar__tools { display: flex; align-items: center; gap: 2px; margin-inline-start: auto; }
 /* The building's address is the title of the screen: large, and free to wrap onto a second line in a narrow phone or a
-   longer language, so it never pushes the two icons off the edge. */
+   longer language, so it never pushes the two icons off the edge. It is the committee's own text (any language), and it
+   is absent when the committee typed none. */
 .w-brand { min-width: 0; font-size: 1.25rem; line-height: 1.25; font-weight: var(--w-weight-semibold); color: var(--w-text); overflow-wrap: anywhere; }
 
 /* The appearance picker (src/ui/ThemeSwitch.jsx) and the language picker (TopBar) are just an icon: no edge, no fill,

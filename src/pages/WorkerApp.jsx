@@ -6,7 +6,7 @@ import { createQueue } from '../worker/scanQueue.js'
 import { getFix } from '../worker/geo.js'
 import { performCheckIn, withScanContext } from '../worker/checkIn.js'
 import { uuid } from '../worker/uuid.js'
-import { useProviders, usePoint, useTodayVisits, useQueueSync } from '../worker/hooks.js'
+import { useProviders, useBuildingAddress, usePoint, useTodayVisits, useQueueSync } from '../worker/hooks.js'
 import { TopBar, LoginView, HomeView, WorkingView, ResultView } from '../worker/components.jsx'
 import '../ui/ui.css'
 
@@ -38,6 +38,7 @@ function WorkerShell({ session, setSession }) {
   const { t } = useI18n()
   const queue = useMemo(() => createQueue(), [])
   const deps = useMemo(() => ({ api, getFix, queue, newId: uuid, now: () => new Date() }), [queue])
+  const address = useBuildingAddress() // the header's line, asked once when the app starts
 
   // The QR link is /scan?code=…. The code stays in the address bar (and in `code`) until the check-in has
   // produced an answer, so a refresh while signing in or while waiting does not lose it.
@@ -177,7 +178,7 @@ function WorkerShell({ session, setSession }) {
   return (
     <div className="w-app">
       <div className="w-shell">
-        <TopBar />
+        <TopBar address={address} />
         <main style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           {!session ? (
             <LoginScreen pointName={pointState.point?.name} notice={loginNotice} onSignedIn={onSignedIn} />

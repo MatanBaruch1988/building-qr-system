@@ -1,6 +1,5 @@
 export default {
   'app.name': 'Building attendance',
-  'brand.address': 'Ahavat Adam 86, Kfar Yona',
   'lang.label': 'Language',
   'footer.admin': 'Committee sign-in',
   'common.loading': 'Loading…',

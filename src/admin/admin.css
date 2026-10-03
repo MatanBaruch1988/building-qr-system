@@ -86,6 +86,8 @@
 .a-card { background: var(--w-surface); border: 1px solid var(--w-border); border-radius: 20px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 /* "Off" is shown with muted colours that still pass contrast, not with blanket opacity (which did not). */
 .a-card.is-off .a-card__title { color: var(--w-text-2); }
+/* A card that holds one short form (the building's address), set under a list of cards: it does not stretch across a wide screen. */
+.a-card--form { margin-block-start: 24px; max-width: 640px; }
 .a-card__top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .a-card__top > :first-child { flex: 1; min-width: 0; }
 /* The tile's actions live in its header, as icons, so the tile has no row of buttons at the bottom. The negative margins
