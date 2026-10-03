@@ -10,8 +10,9 @@
 # promotion of a deployment can lag behind the event, so the script waits (up to 5 minutes) until the domain serves the
 # commit before it judges anything.
 #
-# Why `issues: write`: only the last step needs it, to open the issue with the `gh` CLI (it is on GitHub's runners, so no
-# third-party action is used). Every other step only reads, and the checks of the site only read it.
+# Why `issues: write`, and where: only the jobs that open an issue have it (report-smoke and failed-deploy), and they check
+# out nothing and run no code of the repository: they only call the `gh` CLI that GitHub's runners have. The smoke job, which
+# runs the deployed commit's script, has a read-only token.
 #
 # The secret SMOKE_AGENT_KEY is a read-only agent key, for the database step (GET /api/health/db). Make one in the Agent tab
 # of the committee app (/admin), name it for example "smoke test" (it can be revoked there at any time), and set the secret
@@ -41,11 +42,9 @@ jobs:
     if: github.event.deployment_status.state == 'success' && startsWith(github.event.deployment.environment, 'Production')
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # A job that lists permissions gets none of the others, so the read access to the code is listed too.
+    # Read only: this job runs the deployed commit's code. Opening the issue is the job report-smoke below.
     permissions:
       contents: read
-      # Open the issue when the smoke test fails (the last step).
-      issues: write
     # One run per deployed commit at a time: a redeploy of the same commit waits for the run that is going.
     concurrency:
       group: smoke-${{ github.event.deployment.sha }}
@@ -66,9 +65,19 @@ jobs:
           SMOKE_AGENT_KEY: ${{ secrets.SMOKE_AGENT_KEY }}
         run: node scripts/smoke-check.mjs
 
+  # Opens the issue when the smoke test failed. A job of its own, so that the job that runs the checked-out code never holds
+  # a token that can write to the repository. It checks out nothing.
+  report-smoke:
+    name: report smoke failure
+    needs: smoke
+    if: always() && needs.smoke.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
       # Each paragraph of the issue is one line: GitHub shows a line break inside an issue as a break.
       - name: Open an issue
-        if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
