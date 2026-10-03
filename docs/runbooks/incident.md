@@ -7,8 +7,10 @@ page: [something-broke.md](something-broke.md).
    phone? A phone that shows old behaviour may simply run an old installed version of the app.
 2. **`/api/health`**: `https://<your-domain>/api/health`. It does not use the database. If it fails, the deployment or Vercel
    is the problem. If it answers, look at `commit`: is it the commit you expect?
-3. **`/api/health/db`**: `https://<your-domain>/api/health/db`. `200` shows the newest `migration`. `503` means this
-   deployment cannot reach its database or the query failed (the cause is only in the Vercel logs, the page says nothing).
+3. **`/api/health/db`**: it needs a read-only agent key (the Agent tab of `/admin`):
+   `curl -H "Authorization: Bearer <agent key>" https://<your-domain>/api/health/db`. `200` shows the newest `migration`.
+   `503` means this deployment cannot reach its database or the query failed (the cause is only in the Vercel logs, the
+   response says nothing). `401` means the key is missing, wrong or revoked, not that the site is down.
 4. **Vercel**: Deployments, the latest production deployment: did the build pass, did the migration print an error, is it the
    one that is promoted? Open **Logs** for runtime errors of `/api/*` (by rule they never contain personal data; if one
    does, that is a second problem to fix).

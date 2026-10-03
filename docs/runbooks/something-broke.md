@@ -4,8 +4,8 @@ A short page for the owner, no programming needed. The details are in [incident.
 [deploy-and-rollback.md](deploy-and-rollback.md) and [restore.md](restore.md).
 
 1. **Check that the site is alive.** Open `https://<your-domain>/api/health` in a browser. If it shows `"ok":true`, the
-   server is running. Then open `/api/health/db`: if it shows `"ok":true`, the database answers too. If it shows
-   `"ok":false` or an error, go to step 2.
+   server is running. (The database check, `/api/health/db`, needs an agent key, so ask the agent to run it.) If the page
+   does not open or shows an error, go to step 2.
 2. **Go back to the previous version in Vercel.** Open Vercel, the project, the **Deployments** tab. Find the last version
    that worked well (below the current one), open its menu (the three dots) and choose **Instant Rollback**. It brings the
    previous code back within seconds and does not touch the data. If the trouble started after a merge, this is usually

@@ -219,7 +219,8 @@ reviewing agent should apply it too.
 - Local tooling that could reach the production database: a bypass of `server/dbGuard.js` or `server/loadEnv.js`, or a
   marker check that trusts an environment variable.
 - A change to `scripts/vercel-build.mjs` or `server/productionMigrate.js` that loosens the gate (the production build of
-  a commit on master from the Vercel Git integration) or that migrates a database outside it.
+  a commit on master from the Vercel Git integration, and a refusal of any build whose environment is unknown), drops the
+  check that every pending migration is byte-identical to the file on GitHub master, or migrates a database outside it.
 - A GitHub Actions change that uses an action not pinned to a full commit SHA, widens `permissions`, adds
   `pull_request_target`, or sets `persist-credentials: true`.
 - An endpoint under `/api` without the right authorization check (committee member, service provider or agent key), or

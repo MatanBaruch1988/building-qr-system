@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const DEFAULT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'db', 'migrations')
+export const DEFAULT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'db', 'migrations')
 
 // Two runs on one schema (two deployments building at once, a retried build) must not apply the same file twice.
 // The wait is long enough for a normal migration to finish, short enough that a stuck one fails the build.
@@ -10,6 +10,23 @@ const LOCK_WAIT_MS = 60_000
 const LOCK_RETRY_MS = 1_000
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** The migration files of `dir` in the order they are applied: *.sql, sorted by name. The one rule for "which files". */
+export function migrationFiles(dir = DEFAULT_DIR) {
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
+}
+
+/**
+ * The files of `dir` that schema_migrations does not list yet, in order. It only reads: the table may not exist yet (a new
+ * database), and then every file is pending. `db` is a pg Pool or Client on the schema that migrate() will use.
+ */
+export async function pendingMigrations(db, dir = DEFAULT_DIR) {
+  const { rows: found } = await db.query("select to_regclass('schema_migrations') is not null as present")
+  const done = found[0].present
+    ? new Set((await db.query('select name from schema_migrations')).rows.map((r) => r.name))
+    : new Set()
+  return migrationFiles(dir).filter((file) => !done.has(file))
+}
 
 /**
  * Takes the session-level advisory lock of the current schema on `client`, retrying until `waitMs` has passed.
@@ -49,7 +66,7 @@ export async function migrate(pool, dir = DEFAULT_DIR, { lockWaitMs = LOCK_WAIT_
     )
     const done = new Set((await client.query('select name from schema_migrations')).rows.map((r) => r.name))
     const applied = []
-    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
+    for (const file of migrationFiles(dir)) {
       if (done.has(file)) continue
       const sql = fs.readFileSync(path.join(dir, file), 'utf8')
       try {

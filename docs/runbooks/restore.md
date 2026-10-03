@@ -49,9 +49,9 @@ Also look at `point_providers`, `provider_devices`, `admins`, `api_keys` and `au
   `psql` dump of the missing rows. Use it when only some rows are gone (a deleted point, a deleted scan). Scans are
   append-only, so a missing scan can be put back as it was.
 
-After a restore, open `/api/health/db` and look at a few screens of `/admin`. Check in the Neon SQL editor that
-`public.environment_marker` still says `production` (the marker is part of the data, so a restore from before it was
-created removes it: the next deploy marks the database again).
+After a restore, call `/api/health/db` with an agent key (see `incident.md`) and look at a few screens of `/admin`.
+Check in the Neon SQL editor that `public.environment_marker` still says `production` (the marker is part of the data,
+so a restore from before it was created removes it: the next deploy marks the database again).
 
 ## 4. Afterwards
 
