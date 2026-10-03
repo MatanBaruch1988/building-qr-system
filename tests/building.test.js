@@ -68,7 +68,7 @@ describe('GET /api/public/building', () => {
 describe('the committee routes', () => {
   it('need a committee session: no cookie, a provider token and a bad cookie are all 401', async () => {
     const provider = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'ניקיון', contact_name: 'פלוני', password: 'ploni-1234' } })).json.provider
-    const token = (await call('POST', '/api/session', { body: { provider_id: provider.id, password: 'lior-1234' } })).json.token
+    const token = (await call('POST', '/api/session', { body: { provider_id: provider.id, password: 'ploni-1234' } })).json.token
     for (const options of [{}, { token }, { cookie: 'qr_admin=qra_nope' }]) {
       const read = await call('GET', '/api/admin/building', options)
       expect(read.status).toBe(401)
