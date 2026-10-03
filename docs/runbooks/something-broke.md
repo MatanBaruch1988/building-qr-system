@@ -3,6 +3,8 @@
 A short page for the owner, no programming needed. The details are in [incident.md](incident.md),
 [deploy-and-rollback.md](deploy-and-rollback.md) and [restore.md](restore.md).
 
+An issue on GitHub titled "Smoke test failed after deploying ..." means that a deploy broke something: follow the steps below.
+
 1. **Check that the site is alive.** Open `https://<your-domain>/api/health` in a browser. If it shows `"ok":true`, the
    server is running. (The database check, `/api/health/db`, needs an agent key, so ask the agent to run it.) If the page
    does not open or shows an error, go to step 2.

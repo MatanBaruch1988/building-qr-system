@@ -37,6 +37,54 @@ code at the same time (expand and contract, `AGENTS.md`, "Database and API chang
   `curl -H "Authorization: Bearer <agent key>" https://<your-domain>/api/health/db`. Both should show the commit you merged,
   and the second should show the newest file in `db/migrations/`. Keep the key in a file or a secret, never in a chat.
 
+## The smoke test after a deploy
+
+Nobody has to remember the check above: after Vercel promotes a production deployment, GitHub gets a `deployment_status`
+event and `.github/workflows/smoke.yml` runs `scripts/smoke-check.mjs` against the production domain (never the unique URL
+of the deployment, which Vercel Deployment Protection can hide). It is not a merge check: it runs after the merge, so it
+cannot block one. If it finds something wrong it opens an issue.
+
+A production deployment that fails (the build, the gate or a migration) opens an issue too, titled "Production
+deployment failed for <commit>", with the link to its build log on Vercel: nothing is down then, but the merge is not in
+production until a later deployment succeeds.
+
+Where to see it: GitHub, the **Actions** tab, the workflow **Smoke test**. A run for a preview deployment shows as skipped,
+which is normal. Open the run of the production deployment: the log has one line per step (`ok`, `FAIL`, `warn` or `skip`)
+and, at the end, a summary of the problems.
+
+The three steps:
+
+1. `GET /api/health` until the domain serves the commit that was deployed. It asks every 10 s for up to 5 minutes, because
+   the promotion can lag behind the event.
+2. `GET /` returns the app page with its root element.
+3. `GET /api/health/db` with a read-only agent key: the database answers, and its newest migration is the newest file in
+   `db/migrations/` of that commit. It needs the secret `SMOKE_AGENT_KEY`. Without it this step is skipped with a warning
+   (`warn 3/3`) and the run still passes. How to set it is at the top of `smoke.yml`: make a key in the Agent tab of
+   `/admin`, then run `gh secret set SMOKE_AGENT_KEY` and paste the key at the prompt, never on the command line.
+
+If step 1 fails, steps 2 and 3 are skipped, because they would test a different deployment.
+
+**What an issue means.** An issue titled `Smoke test failed after deploying <commit>` (label `bug`) means that a deploy broke
+something, or did not take effect. It links to the run. Read the `FAIL` line there, then go to [incident.md](incident.md)
+(the owner's short page is [something-broke.md](something-broke.md)):
+
+- `production does not serve <commit>, it serves <other>`: after 5 minutes the domain still serves another deployment. Look
+  in Vercel: did the build fail, was the deployment never promoted? This is also what the run shows after an Instant
+  Rollback, when a later merge is built but not promoted until you promote it. If it only needed more time, run the job
+  again from the Actions tab (**Re-run all jobs**).
+- `GET /` is not the app page: the deployment serves something that cannot start the app. Roll the code back.
+- `the database is at <old file>, the code expects <new file>`: the deployment is live but its migration did not run. Look
+  in the build log for the `Deploy gate:` line, and read "A failed migration" below. Fix forward: never edit a merged
+  migration.
+- `the database check failed (HTTP 503)`: this deployment cannot reach its database, so see steps 3 to 5 of
+  [incident.md](incident.md). The script asked three times, 5 s apart, so it was not one slow wake-up.
+- `the agent key was refused (HTTP 401)`: the secret is wrong or the key was revoked. Make a new key in the Agent tab and
+  set the secret again. The site itself may be fine.
+
+Nothing closes the issue by itself: close it when it is fixed. The script only reads, so it can also be run by hand from a
+checkout of the deployed commit: `EXPECTED_SHA=<the full commit> node scripts/smoke-check.mjs`. For the database step put
+`SMOKE_AGENT_KEY` in the environment from a file or a prompt, never on the command line and never in a chat.
+
 ## A failed migration
 
 The build prints `Production migration failed: Migration NNN_name.sql failed: <reason>` and exits 1. Vercel marks the

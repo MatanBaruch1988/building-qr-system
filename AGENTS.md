@@ -127,6 +127,10 @@ guards (`scripts/check-migrations.mjs`, `scripts/check-tests.mjs`) catch the com
 migration, or of deleting, renaming away or skipping a test; they are heuristics, not a replacement for reading the
 diff. A test that really has to go is the owner's call: say why in the pull request (the label is `allow-test-removal`).
 
+`.github/workflows/smoke.yml` is not a merge check: it runs after each production deployment (`scripts/smoke-check.mjs`
+against the production domain) and opens an issue labelled `bug` when the deployment is broken
+(`docs/runbooks/deploy-and-rollback.md`).
+
 Not automated, on purpose: Home Screen install, standalone mode, the status bar, offline use on a real iPhone, push.
 Check them by hand with `docs/manual-ios-checklist.md` before a release that touches the PWA files, the layout or the
 location flow.

@@ -3,6 +3,12 @@
 Use it when something is broken in production. Go in order, and write down the time of each step. The owner has a shorter
 page: [something-broke.md](something-broke.md).
 
+An entry point: after every production deploy the smoke test runs (`.github/workflows/smoke.yml`), and when it fails it
+opens an issue titled `Smoke test failed after deploying <commit>`. Open the run that the issue links to and read its
+`FAIL` line: `production does not serve <commit>` and `GET /` point to steps 2 and 4, and the two database lines (`the
+database is at ...` and `the database check failed`) to steps 3 to 5. Each line is explained in
+[deploy-and-rollback.md](deploy-and-rollback.md), "The smoke test after a deploy". Then go on from step 2 below.
+
 1. **What is broken?** Who sees it (providers, the committee, the agent), on which screen, since when. Is it everyone or one
    phone? A phone that shows old behaviour may simply run an old installed version of the app.
 2. **`/api/health`**: `https://<your-domain>/api/health`. It does not use the database. If it fails, the deployment or Vercel

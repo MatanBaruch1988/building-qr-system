@@ -97,7 +97,8 @@ unchanged.
   needs a read-only agent key (`Authorization: Bearer qrk_...`, the key of the Agent tab): an open route that queries the
   database would let anyone wake the Neon compute and tie up the small connection pool. A missing or malformed key is
   refused without a query. With a key it runs one query and shows the newest migration (503 without detail when it
-  fails), for a smoke test after a deploy. See `docs/runbooks/`.
+  fails), for a smoke test after a deploy. See `docs/runbooks/`. The workflow `.github/workflows/smoke.yml` now does this
+  check automatically after every production deployment (`scripts/smoke-check.mjs`) and opens an issue when it fails.
 - **A setting it depends on.** The gate reads Vercel's system environment variables, which reach the build only while the
   project setting "Automatically expose System Environment Variables" is on (it is: checked on 03/10/2026). With it off, a
   build has no `VERCEL_ENV`, and the gate answers `refuse`: the deployment fails instead of deploying without its
