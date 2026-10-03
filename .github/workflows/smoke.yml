@@ -1,0 +1,127 @@
+# Smoke test after a production deployment. When Vercel finishes a production deployment it reports it to GitHub (a
+# deployment_status event), and this workflow then checks that the live site really is the new commit: the domain serves
+# that commit, the app page loads, and the database answers with the newest migration of the commit. If any of that is
+# wrong it opens an issue labelled bug, because a green build proves little and nobody watches a green run.
+# The checks are in scripts/smoke-check.mjs (Node built-ins only, so there is no `npm ci`). What an issue means and what to
+# do is in docs/runbooks/deploy-and-rollback.md.
+#
+# Why it tests the production domain and not the deployment URL: the unique URL of a deployment can sit behind Vercel
+# Deployment Protection, which answers a GitHub runner with a login page, and the domain is what the people use. The
+# promotion of a deployment can lag behind the event, so the script waits (up to 5 minutes) until the domain serves the
+# commit before it judges anything.
+#
+# Why `issues: write`, and where: only the jobs that open an issue have it (report-smoke and failed-deploy), and they check
+# out nothing and run no code of the repository: they only call the `gh` CLI that GitHub's runners have. The smoke job, which
+# runs the deployed commit's script, has a read-only token.
+#
+# The secret SMOKE_AGENT_KEY is a read-only agent key, for the database step (GET /api/health/db). Make one in the Agent tab
+# of the committee app (/admin), name it for example "smoke test" (it can be revoked there at any time), and set the secret
+# from the repository folder with
+#   gh secret set SMOKE_AGENT_KEY
+# and paste the key at the prompt: never put it on the command line, where the shell keeps it in its history. Without the
+# secret the run still passes, with a warning, and the database step is skipped.
+#
+# This is not a required check and it is not in .github/rulesets/: it runs after a merge, never on a pull request. Every
+# preview deployment starts a run too, which shows as skipped in the Actions tab: that is the `if` below, not a problem.
+# Every third-party action is pinned to a full commit SHA (the tag is in the comment), like in ci.yml. Nothing in this file
+# is text that anyone can write, and every ${{ }} value that the shell script of a step reads goes in through env anyway.
+name: Smoke test
+
+on: deployment_status
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke
+    # Vercel names the environment of a production deployment "Production" and the others "Preview", with the project name
+    # after it when a repository has several projects, hence startsWith. If this never runs after a merge, look at the name
+    # that Vercel reports: gh api repos/<owner>/<repo>/deployments --jq '.[].environment'. A deployment that failed has
+    # nothing to test (Vercel keeps serving the previous one): the job failed-deploy below reports it instead.
+    if: github.event.deployment_status.state == 'success' && startsWith(github.event.deployment.environment, 'Production')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Read only: this job runs the deployed commit's code. Opening the issue is the job report-smoke below.
+    permissions:
+      contents: read
+    # One run per deployed commit at a time: a redeploy of the same commit waits for the run that is going.
+    concurrency:
+      group: smoke-${{ github.event.deployment.sha }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The commit that was deployed, so that db/migrations is the one that the code expects. It is a SHA, not free text.
+          ref: ${{ github.event.deployment.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Smoke test the production domain
+        env:
+          EXPECTED_SHA: ${{ github.event.deployment.sha }}
+          SMOKE_AGENT_KEY: ${{ secrets.SMOKE_AGENT_KEY }}
+        run: node scripts/smoke-check.mjs
+
+  # Opens the issue when the smoke test failed. A job of its own, so that the job that runs the checked-out code never holds
+  # a token that can write to the repository. It checks out nothing.
+  report-smoke:
+    name: report smoke failure
+    needs: smoke
+    if: always() && needs.smoke.result == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      # Each paragraph of the issue is one line: GitHub shows a line break inside an issue as a break.
+      - name: Open an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEPLOYED_SHA: ${{ github.event.deployment.sha }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          short="${DEPLOYED_SHA:0:7}"
+          cat > "$RUNNER_TEMP/issue.md" <<EOF
+          The smoke test that runs after each production deployment failed.
+
+          - Run, with one line per step (the line that says FAIL tells what is wrong): $RUN_URL
+          - Commit: $DEPLOYED_SHA
+
+          A deploy broke something. Follow [something-broke.md]($REPO_URL/blob/$DEPLOYED_SHA/docs/runbooks/something-broke.md) (the short version) or [incident.md]($REPO_URL/blob/$DEPLOYED_SHA/docs/runbooks/incident.md) (the checklist). If the new code is the cause, Instant Rollback in Vercel is quick and reversible ([deploy-and-rollback.md]($REPO_URL/blob/$DEPLOYED_SHA/docs/runbooks/deploy-and-rollback.md)). Close this issue by hand when it is fixed.
+          EOF
+          gh issue create --title "Smoke test failed after deploying $short" --label bug --body-file "$RUNNER_TEMP/issue.md"
+
+  # A production deployment that failed (a failed build, a refused gate, a failed migration: see
+  # docs/runbooks/deploy-and-rollback.md). The previous deployment keeps serving, so nothing is down, but a merge did not
+  # reach production and nobody would notice without this issue.
+  failed-deploy:
+    name: failed deploy
+    if: (github.event.deployment_status.state == 'failure' || github.event.deployment_status.state == 'error') && startsWith(github.event.deployment.environment, 'Production')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEPLOYED_SHA: ${{ github.event.deployment.sha }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          # The page of the deployment on Vercel, with its build log. Vercel sets it; it is a link, never run.
+          LOG_URL: ${{ github.event.deployment_status.target_url }}
+        run: |
+          short="${DEPLOYED_SHA:0:7}"
+          cat > "$RUNNER_TEMP/issue.md" <<EOF
+          The production deployment of $DEPLOYED_SHA failed on Vercel. The previous deployment keeps serving, so the site is up, but this merge is not in production.
+
+          - Build log on Vercel (search for the line that starts with "Deploy gate:" and for the last error): $LOG_URL
+
+          What each failure means and what to do: [deploy-and-rollback.md]($REPO_URL/blob/$DEPLOYED_SHA/docs/runbooks/deploy-and-rollback.md). Close this issue by hand when a later deployment succeeds.
+          EOF
+          gh issue create --title "Production deployment failed for $short" --label bug --body-file "$RUNNER_TEMP/issue.md"

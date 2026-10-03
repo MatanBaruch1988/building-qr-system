@@ -56,3 +56,15 @@ so a restore from before it was created removes it: the next deploy marks the da
 ## 4. Afterwards
 
 Delete the check branch when you are done (it holds personal data). Then write the short note described in `incident.md`.
+
+## Drill log
+
+A restore that was never tried is a hope, not a plan. Repeat the drill every few months, and after any change to the
+database setup (a new Neon project, plan or region, or a change of the production branch). Add one entry here each time,
+with no connection string, project id or personal data in it.
+
+- `03/10/2026`: restore drill on the production project with the Neon CLI. A branch of production as of one hour earlier
+  (`neon branches create --project-id <id> --name restore-drill-<date> --parent <ISO timestamp> --expires-at <ISO timestamp> --no-secrets`)
+  was created in 2.5 s, and its data was readable after 10 s. The whole drill, including deleting the branch, took 15 s.
+  The row counts of the main tables on the branch equal production's. The marker said production and the newest migration
+  was 005.
