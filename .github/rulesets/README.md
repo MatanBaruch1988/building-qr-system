@@ -15,6 +15,12 @@ against the usual command, not a security boundary (`docs/adr/0003-the-reviewer-
 never merging matters more than the setting. An agent in GitHub Actions runs as its own app, which is not an admin, so
 it needs the approval like anybody else. The two rulesets add up, so the checks and the squash rule still hold.
 
+The agent loop (`.github/workflows/claude.yml`, ADR 0006) works through the Claude GitHub App: it pushes branches
+named `claude/...` and comments, and the owner opens the pull request from the link in its comment. The app is not
+an admin and is not in `bypass_actors`, so a pull request of the agent needs the owner's approval like anybody else's,
+and the owner merges. The rulesets protect `master` only, so the app can push its own `claude/` branches, but never
+`master` itself.
+
 A pull request can change its own workflow and guard scripts, and the checks that run on it are the changed ones. So a
 change under `.github/` or to `scripts/check-*` needs the owner's careful look: green checks are not proof that the
 checks themselves were not weakened.
