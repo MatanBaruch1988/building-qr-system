@@ -3,6 +3,7 @@ import { api } from '../api/client.js'
 import { parseQrToken } from '../../server/scanLogic.js' // one definition of "what is one of our QR codes"
 import { safeStorage, readJson } from './storage.js'
 import { getCachedPoint, setCachedPoint, dropCachedPoint } from './pointCache.js'
+import { getCachedAddress, setCachedAddress } from './buildingCache.js'
 import { flushQueue } from './scanQueue.js'
 import { isoDay } from '../../shared/datetime.js'
 
@@ -24,6 +25,29 @@ export function useProviders() {
   }, [])
   useEffect(load, [load])
   return { ...state, reload: load }
+}
+
+/**
+ * The building's address for the header. The last one the phone saw is shown at once (and with no signal), then the
+ * network answer replaces it, an empty one included. A failed request changes nothing. Asked once, when the app starts.
+ */
+export function useBuildingAddress() {
+  const [address, setAddress] = useState(() => getCachedAddress())
+  useEffect(() => {
+    let cancelled = false
+    api('/public/building', { timeoutMs: 8000 })
+      .then((res) => {
+        const next = res?.building?.address
+        if (typeof next !== 'string') return // not an answer of ours: keep what the phone knows
+        setCachedAddress(next)
+        if (!cancelled) setAddress(next)
+      })
+      .catch(() => {}) // no signal or a server hiccup: keep the saved one
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return address
 }
 
 /**
