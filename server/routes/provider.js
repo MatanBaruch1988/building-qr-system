@@ -6,6 +6,7 @@ import { requireProvider, guardLogin } from '../auth.js'
 import { recordScan, scanJson } from '../scans.js'
 import { parseQrToken } from '../scanLogic.js'
 import { MAX_SYNC_BATCH } from '../config.js'
+import { readAddress } from '../building.js'
 
 const providerJson = (p) => ({
   id: p.id,
@@ -23,6 +24,14 @@ route('GET', '/public/providers', async () => {
   )
   return { providers: rows }
 })
+
+// The building's address for the header of the app: only that, nothing else about the building. One single-row select by
+// primary key. Every phone asks once per app start, so the CDN may keep the answer for a minute (the browser always
+// revalidates, max-age=0); a change by the committee shows up within that minute.
+route('GET', '/public/building', async () => ({
+  json: { building: { address: await readAddress() } },
+  headers: { 'Cache-Control': 'public, max-age=0, s-maxage=60' },
+}))
 
 // Lets the phone show "Lobby" before anyone signs in, and skip GPS for points that never use it.
 route('GET', '/public/points/resolve', async ({ query: q }) => {
