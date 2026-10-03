@@ -45,7 +45,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { maskDatabaseHost } from '../server/dbGuard.js'
-import { formatDateTimeUtc } from '../shared/datetime.js'
+import { formatDateTime, formatDateTimeUtc } from '../shared/datetime.js'
 import { isMain } from './ci-git.mjs'
 
 export const DEFAULT_KEEP = 30
@@ -532,9 +532,12 @@ export function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-/** One line of backup.log: the UTC time, ok or failed, then key=value fields, and the error (the only free text) last. */
+/**
+ * One line of backup.log: the time (DD/MM/YYYY HH:MM in the building's time, written by shared/datetime.js, because a
+ * person reads this file), ok or failed, then key=value fields, and the error (the only free text) last.
+ */
 export function logLine({ when, ok, host, file, size, removed, warning, issue, error }) {
-  const parts = [when.toISOString().replace(/\.\d{3}Z$/, 'Z'), ok ? 'ok' : 'failed', `host=${host}`]
+  const parts = [formatDateTime(when), ok ? 'ok' : 'failed', `host=${host}`]
   if (file) parts.push(`file=${file}`)
   if (size !== undefined) parts.push(`size=${size}`)
   if (removed !== undefined) parts.push(`removed=${removed}`)
@@ -719,7 +722,7 @@ export async function runBackup(options, deps = {}) {
     issue,
     error: result.message,
   })
-  const folderWarning = `${when.toISOString().replace(/\.\d{3}Z$/, 'Z')} warning ${FOLDER_WARNING}`
+  const folderWarning = `${formatDateTime(when)} warning ${FOLDER_WARNING}`
   const logged = attempt(() => {
     if (folderIsOpen) files.appendFileSync(logPath, `${folderWarning}\n`, { encoding: 'utf8', mode: PRIVATE_FILE })
     files.appendFileSync(logPath, `${line}\n`, { encoding: 'utf8', mode: PRIVATE_FILE })

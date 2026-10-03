@@ -764,7 +764,7 @@ describe('a failing pg_dump', () => {
     expect(r.out).toEqual([])
     expect(r.errs).toEqual(['backup failed: pg_dump failed (exit code 1): pg_dump: error: server closed the connection unexpectedly'])
     expect(r.log).toBe(
-      `2026-10-03T07:15:42Z failed host=${MASKED_HOST} error=pg_dump failed (exit code 1): pg_dump: error: server closed the connection unexpectedly\n`,
+      `03/10/2026 10:15 failed host=${MASKED_HOST} error=pg_dump failed (exit code 1): pg_dump: error: server closed the connection unexpectedly\n`,
     )
   })
 
@@ -904,12 +904,12 @@ describe('retention', () => {
 describe('backup.log', () => {
   it('gets one line per run: the UTC time, ok, the masked host, the file and its size', async () => {
     const first = await go()
-    expect(first.log).toBe(`2026-10-03T07:15:42Z ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0\n`)
+    expect(first.log).toBe(`03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0\n`)
     const later = new Date('2026-10-04T07:15:03Z')
     const second = await go({ deps: { now: () => later } })
     expect(second.log.split('\n').filter(Boolean)).toEqual([
-      `2026-10-03T07:15:42Z ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0`,
-      `2026-10-04T07:15:03Z ok host=${MASKED_HOST} file=building-qr-20261004T0715Z.dump size=15 removed=0`,
+      `03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0`,
+      `04/10/2026 10:15 ok host=${MASKED_HOST} file=building-qr-20261004T0715Z.dump size=15 removed=0`,
     ])
   })
 
@@ -921,7 +921,7 @@ describe('backup.log', () => {
     })
     const lines = r.log.split('\n').filter(Boolean)
     expect(lines).toHaveLength(2)
-    expect(lines[1]).toBe(`2026-10-04T07:15:03Z failed host=${MASKED_HOST} error=pg_dump failed (exit code 2): bad ***`)
+    expect(lines[1]).toBe(`04/10/2026 10:15 failed host=${MASKED_HOST} error=pg_dump failed (exit code 2): bad ***`)
     for (const secret of [PASSWORD, ENCODED, USER, HOST, 'postgresql://']) expect(r.log).not.toContain(secret)
   })
 
@@ -1269,7 +1269,7 @@ describe('the full read of the dump', () => {
     expect(r.files).toEqual(['backup.log', ...oldBackups])
     expect(r.out).toEqual([])
     expect(r.errs).toEqual([`backup failed: ${r.message}`])
-    expect(r.log).toBe(`2026-10-03T07:15:42Z failed host=${MASKED_HOST} error=${r.message}\n`)
+    expect(r.log).toBe(`03/10/2026 10:15 failed host=${MASKED_HOST} error=${r.message}\n`)
   })
 
   it('also fails when the full read cannot start or takes too long', async () => {
@@ -1399,8 +1399,8 @@ describe('files for the owner only', () => {
     expect(r.exitCode).toBe(0)
     expect(rec.chmods.filter((c) => c.folder)).toEqual([])
     expect(r.log.split('\n').filter(Boolean)).toEqual([
-      `2026-10-03T07:15:42Z warning ${FOLDER_WARNING}`,
-      `2026-10-03T07:15:42Z ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0`,
+      `03/10/2026 10:15 warning ${FOLDER_WARNING}`,
+      `03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0`,
     ])
     expect(r.errs).toEqual([`backup: warning, ${FOLDER_WARNING}`])
     expect(FOLDER_WARNING).toMatch(/tighten it/)
@@ -1482,7 +1482,7 @@ describe('a cleanup that fails', () => {
     const r = await go({ deps: { fs: files }, runner })
     expect(r.exitCode).toBe(1)
     expect(r.message).toBe('pg_dump failed (exit code 1): pg_dump: error: boom ***')
-    expect(r.log).toBe(`2026-10-03T07:15:42Z failed host=${MASKED_HOST} error=${r.message}\n`)
+    expect(r.log).toBe(`03/10/2026 10:15 failed host=${MASKED_HOST} error=${r.message}\n`)
     expect(r.errs).toEqual([`backup failed: ${r.message}`])
     expect(visible(r)).not.toContain('secret-place')
     expect(visible(r)).not.toContain(tmp)
