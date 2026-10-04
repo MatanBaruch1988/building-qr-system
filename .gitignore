@@ -33,6 +33,9 @@ skills-lock.json
 .vercel
 .env*.local
 
+# Database backups (pg_dump files hold personal data and must never be committed; see docs/runbooks/restore.md)
+*.dump
+
 # Playwright (end-to-end test output)
 playwright-report/
 test-results/
