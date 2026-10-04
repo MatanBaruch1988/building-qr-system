@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  LOG_NOT_REGULAR_ERROR,
   AMBIGUOUS_SOURCE_ERROR,
   BACKUP_NAME,
   DEFAULT_KEEP,
@@ -31,7 +32,9 @@ import {
   parseArgs,
   notProductionMessage,
   parseMarkerValues,
+  aclProblem,
   parseNeonOutput,
+  parseWhoamiAccount,
   parseWhoamiSid,
   PARTIAL_NAME,
   PATH_TOO_LONG_ERROR,
@@ -89,6 +92,12 @@ const markerSql = (...rows) =>
 const NO_MARKER_SQL = "--\n-- PostgreSQL database dump\n--\n\nSET client_encoding = 'UTF8';\n\n-- PostgreSQL database dump complete\n"
 const isMarkerCall = (call) => call.args.includes('--data-only')
 
+/** The account of the fake user that the whoami stub answers with, as icacls prints an entry for it on a directory. */
+const OWNER_ENTRY = 'PC\\user:(OI)(CI)(F)'
+/** What `icacls <name>` prints: the name and the first entry on one line, the others under it, then the summary. */
+const aclListing = (name, ...entries) =>
+  [`${name} ${entries[0] ?? ''}`.trimEnd(), ...entries.slice(1).map((entry) => `${' '.repeat(name.length + 1)}${entry}`), '', 'Successfully processed 1 files; Failed processing 0 files', '', ''].join('\r\n')
+
 // ---- a stub runner ---------------------------------------------------------------------------------------------------
 
 function toolOf(command) {
@@ -105,7 +114,11 @@ const defaults = {
   neon: () => ({ status: 0, stdout: `${URL_FAKE}\n`, stderr: '' }),
   // Windows only: the SID of the user (a fake one) and the owner-only access list of a file
   whoami: () => ({ status: 0, stdout: `"PC\\user","${SID}"\r\n`, stderr: '' }),
-  icacls: () => ({ status: 0, stdout: 'Successfully processed 1 files; Failed processing 0 files\r\n', stderr: '' }),
+  // a call that changes an access list says what it did; a call with the name alone reads the list, and it is the user's alone
+  icacls: ({ args }) =>
+    args.length === 1
+      ? { status: 0, stdout: aclListing(args[0], OWNER_ENTRY), stderr: '' }
+      : { status: 0, stdout: 'Successfully processed 1 files; Failed processing 0 files\r\n', stderr: '' },
   // list: no open issue yet; comment and create: done
   gh: ({ args }) => ({ status: 0, stdout: args[1] === 'list' ? '[]' : 'https://github.com/owner/repo/issues/1\n', stderr: '' }),
 }
@@ -1309,12 +1322,14 @@ describe('backup.log', () => {
     for (const secret of [PASSWORD, ENCODED, USER, HOST, 'postgresql://']) expect(r.log).not.toContain(secret)
   })
 
-  it('does not stop a run when it cannot be written, and says so', async () => {
+  it('refuses a backup.log that is a folder: nothing is dumped, and the message says what to do', async () => {
     fs.mkdirSync(path.join(dir, 'backup.log'), { recursive: true }) // a folder where the log should be
     const r = await go()
-    expect(r.exitCode).toBe(0)
-    expect(r.errs).toEqual(['backup: could not write backup.log'])
-    expect(r.files).toContain(FINAL)
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe(LOG_NOT_REGULAR_ERROR)
+    expect(r.runner.calls).toEqual([])
+    expect(r.errs).toEqual([`backup failed: ${LOG_NOT_REGULAR_ERROR}`])
+    expect(r.files).toEqual(['backup.log'])
   })
 
   it('formats a size the way a person reads it', () => {
@@ -2055,7 +2070,7 @@ describe('owner-only files on Windows', () => {
       },
     })
     const r = await go({ deps: win(), runner })
-    const [dirCall, fileCall] = r.runner.of('icacls')
+    const [dirCall, fileCall] = r.runner.of('icacls').filter((call) => call.args.length > 1) // the calls that change a list
     // the directory: found by a relative name in the temp folder, with the rights that what is made inside inherits
     expect(dirCall.command).toBe(ICACLS)
     expect(dirCall.args).toEqual([expect.stringMatching(/^bqr-work-[A-Za-z0-9]{6}$/), '/inheritance:r', '/grant:r', `*${SID}:(OI)(CI)F`])
@@ -2088,7 +2103,7 @@ describe('owner-only files on Windows', () => {
         return defaults.whoami(call)
       },
       icacls: (call) => {
-        events.push(`icacls ${named(call.args[0])} (${where()})`)
+        events.push(`icacls ${named(call.args[0])}${call.args.length === 1 ? ' read back' : ''} (${where()})`)
         return defaults.icacls(call)
       },
       pg_dump: (call) => {
@@ -2105,6 +2120,7 @@ describe('owner-only files on Windows', () => {
     expect(events).toEqual([
       'whoami (out: empty, work: -)',
       'icacls <work> (out: empty, work: )', // the directory exists and is empty when its list is set, and the output folder is empty
+      'icacls <work> read back (out: empty, work: )', // and its list is read back before anything is written into it
       `icacls ${PARTIAL} (out: empty, work: ${PARTIAL})`,
       'pg_dump',
       'list',
@@ -2117,7 +2133,7 @@ describe('owner-only files on Windows', () => {
 
   it('prefers the SID to the name: a name with a space or in another alphabet is never used', async () => {
     const r = await go({ deps: win({ userName: () => 'Some Name \u05DE\u05EA\u05DF' }) })
-    for (const call of r.runner.of('icacls')) {
+    for (const call of r.runner.of('icacls').filter((c) => c.args.length > 1)) {
       expect(call.args.at(-1)).toMatch(new RegExp(`^\\*${SID}:(\\(OI\\)\\(CI\\))?F$`))
       expect(JSON.stringify(call.args)).not.toContain('Some Name')
     }
@@ -2188,11 +2204,12 @@ describe('owner-only files on Windows', () => {
     const first = await go({ deps: win() })
     expect(first.runner.of('icacls').map((c) => c.args)).toEqual([
       [expect.stringMatching(/^bqr-work-/), '/inheritance:r', '/grant:r', `*${SID}:(OI)(CI)F`],
+      [expect.stringMatching(/^bqr-work-/)], // the list of the work directory, read back
       [PARTIAL, '/inheritance:r', '/grant:r', `*${SID}:F`],
       ['backup.log', '/inheritance:r', '/grant:r', `*${SID}:F`],
     ])
     const second = await go({ deps: win() })
-    expect(second.runner.of('icacls').map((c) => c.args[0])).toEqual([expect.stringMatching(/^bqr-work-/), PARTIAL]) // the log was there already
+    expect(second.runner.of('icacls').map((c) => c.args[0])).toEqual([expect.stringMatching(/^bqr-work-/), expect.stringMatching(/^bqr-work-/), PARTIAL]) // the log was there already
     expect(second.log.split('\n').filter(Boolean)).toHaveLength(2)
   })
 
@@ -2726,6 +2743,286 @@ describe('a folder that other users can write in', () => {
       expect(message).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\//)
     }
     expect(FOLDER_WRITABLE_ERROR).toMatch(/chmod 700/)
+  })
+})
+
+// ---- the access list of the work directory is read back ------------------------------------------------------------------------------------
+
+describe('the access list of the work directory is read back on Windows', () => {
+  const win = (deps = {}) => ({
+    platform: 'win32',
+    exists: () => false,
+    userName: () => 'Test User',
+    ...deps,
+    env: { SystemRoot: 'C:\\Windows', ...deps.env },
+  })
+  /** An icacls that answers a read of the work directory with `listing(name)` and everything else as usual. */
+  const reading = (listing) =>
+    makeRunner({
+      icacls: (call) =>
+        call.args.length === 1 && call.args[0].startsWith('bqr-work-') ? { status: 0, stdout: listing(call.args[0]), stderr: '' } : defaults.icacls(call),
+    })
+  const NOT_ALONE = (why) => `the access list of the work directory is not the user's alone (${why}), so nothing was dumped: is the temp folder shared with another account?`
+
+  describe('what is read', () => {
+    const name = 'bqr-work-AbC123'
+
+    it('accepts the one entry that is made: the user, full control, inherited by files and folders', () => {
+      expect(aclProblem(aclListing(name, OWNER_ENTRY), { name, account: 'PC\\user' })).toBeNull()
+      // real icacls output has this shape (an account name with a space, here an invented one)
+      const real = `${name} pc_owner\\Some Person:(OI)(CI)(F)\r\n\r\nSuccessfully processed 1 files; Failed processing 0 files\r\n`
+      expect(aclProblem(real, { name, account: 'pc_owner\\some person' })).toBeNull() // whoami writes the name in lower case
+    })
+
+    it('does not depend on the language of the summary line, or on the case of the account', () => {
+      const german = `${name} PC\\user:(OI)(CI)(F)\r\n\r\n1 Dateien erfolgreich verarbeitet; Fehler bei der Verarbeitung von 0 Dateien\r\n`
+      expect(aclProblem(german, { name, account: 'pc\\USER' })).toBeNull()
+    })
+
+    it('refuses a second entry, whoever it is for and in whatever language its name is', () => {
+      for (const extra of ['Everyone:(OI)(CI)(R)', 'BUILTIN\\Administratoren:(I)(OI)(CI)(F)', 'S-1-5-21-1-2-3-1001:(OI)(CI)(F)', 'NT AUTHORITY\\SYSTEM:(OI)(CI)(F)']) {
+        expect(aclProblem(aclListing(name, OWNER_ENTRY, extra), { name, account: 'PC\\user' }), extra).toBe('more than one entry')
+        expect(aclProblem(aclListing(name, extra, OWNER_ENTRY), { name, account: 'PC\\user' }), extra).toBe('more than one entry')
+      }
+    })
+
+    it('refuses an entry that is inherited, a deny, not full control, or not inherited by what is inside', () => {
+      for (const rights of ['(I)(OI)(CI)(F)', '(OI)(CI)(DENY)(F)', '(OI)(CI)(M)', '(F)', '(OI)(F)', '(CI)(F)', '(OI)(CI)(IO)(F)', '(OI)(CI)(RX)']) {
+        expect(aclProblem(aclListing(name, `PC\\user:${rights}`), { name, account: 'PC\\user' }), rights).toBe(
+          'the entry is inherited, a deny, or not full control for the folder and what is in it',
+        )
+      }
+    })
+
+    it('refuses an entry of another account, when the account of the user is known', () => {
+      expect(aclProblem(aclListing(name, 'BUILTIN\\Users:(OI)(CI)(F)'), { name, account: 'PC\\user' })).toBe('the entry is for another account')
+      expect(aclProblem(aclListing(name, 'BUILTIN\\Users:(OI)(CI)(F)'), { name, account: null })).toBeNull() // only the shape can be checked
+    })
+
+    it('refuses an output that holds no entry at all (nothing is trusted that cannot be read)', () => {
+      for (const output of ['', undefined, 'Successfully processed 0 files; Failed processing 1 files\r\n', 'garbage']) {
+        expect(aclProblem(output, { name, account: 'PC\\user' }), String(output)).toBe('no entry could be read')
+      }
+    })
+
+    it('reads the account of the user out of the whoami line', () => {
+      expect(parseWhoamiAccount(`"PC\\user","${SID}"\r\n`)).toBe('PC\\user')
+      expect(parseWhoamiAccount(`"PC\\Some Name","${SID}"`)).toBe('PC\\Some Name')
+      for (const bad of ['', undefined, 'ERROR: nope', '"PC\\user"']) expect(parseWhoamiAccount(bad), String(bad)).toBeNull()
+    })
+  })
+
+  describe('in a run', () => {
+    const entries = {
+      'a second entry of another account (the one the finding is about)': [OWNER_ENTRY, 'Everyone:(OI)(CI)(R)'],
+      'an entry for another account only': ['BUILTIN\\Users:(OI)(CI)(F)'],
+      'an inherited entry': ['PC\\user:(I)(OI)(CI)(F)'],
+      'a deny entry': ['PC\\user:(OI)(CI)(DENY)(F)'],
+      'an entry that is not inherited by what is inside': ['PC\\user:(F)'],
+      'no entry that can be read': [],
+    }
+    for (const [what, list] of Object.entries(entries)) {
+      it(`refuses ${what}: nothing is written into the directory, nothing is dumped, and nothing is rotated`, async () => {
+        seed(oldBackups)
+        const written = []
+        const files = {
+          ...fs,
+          statSync: privateStat,
+          writeFileSync: (target, data, options) => {
+            written.push(path.basename(String(target)))
+            return fs.writeFileSync(target, data, options)
+          },
+        }
+        const runner = reading((name) => aclListing(name, ...list))
+        const r = await go({ options: { keep: 1 }, runner, deps: win({ fs: files }) })
+        const why = list.length === 0 ? 'no entry could be read' : null
+        expect(r.exitCode).toBe(1)
+        expect(r.message).toMatch(/^the access list of the work directory is not the user's alone \(/)
+        if (why) expect(r.message).toBe(NOT_ALONE(why))
+        expect(r.message).not.toMatch(/Everyone|Users|PC|user:/) // no account name in the message
+        expect(written).not.toContain(PARTIAL) // the temporary file was never made
+        expect(r.runner.of('pg_dump')).toEqual([])
+        expect(r.runner.of('pg_restore')).toEqual([])
+        expect(workDirsNow()).toEqual([]) // the directory is deleted
+        expect(r.files.filter((name) => BACKUP_NAME.test(name))).toEqual(oldBackups)
+        expect(r.log).toContain(' failed host=')
+        expect(visible(r)).not.toContain(tmp)
+      })
+    }
+
+    it('says why in the message: more than one entry', async () => {
+      const r = await go({ runner: reading((name) => aclListing(name, OWNER_ENTRY, 'Everyone:(OI)(CI)(R)')), deps: win() })
+      expect(r.message).toBe(NOT_ALONE('more than one entry'))
+    })
+
+    it('reads the list after the call that changes it, in the temp folder, before the file is made and before pg_dump', async () => {
+      const seen = []
+      const runner = makeRunner({
+        icacls: (call) => {
+          if (call.args.length === 1) {
+            seen.push({ args: call.args, cwd: call.options.cwd, partial: fs.existsSync(path.join(call.options.cwd, call.args[0], PARTIAL)), calls: r0.length })
+          }
+          return defaults.icacls(call)
+        },
+        pg_dump: (call) => {
+          seen.push('pg_dump')
+          return defaults.pg_dump(call)
+        },
+      })
+      const r0 = []
+      const r = await go({ runner, deps: win() })
+      expect(r.exitCode).toBe(0)
+      expect(seen).toEqual([{ args: [expect.stringMatching(/^bqr-work-/)], cwd: path.resolve(tmp), partial: false, calls: 0 }, 'pg_dump'])
+    })
+
+    it('fails closed when the list cannot be read back at all (icacls fails, is missing or does not finish)', async () => {
+      const answers = [{ status: 5, stdout: '', stderr: '' }, { status: null, stdout: '', stderr: '', problem: 'ENOENT' }, { status: null, stdout: '', stderr: '', problem: 'TIMEOUT' }]
+      for (const answer of answers) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const runner = makeRunner({ icacls: (call) => (call.args.length === 1 ? answer : defaults.icacls(call)) })
+        const r = await go({ runner, deps: win() })
+        expect(r.exitCode, JSON.stringify(answer)).toBe(1)
+        expect(r.message).toBe('icacls could not read the access list of the work directory back, so nothing was dumped')
+        expect(r.runner.of('pg_dump')).toEqual([])
+        expect(workDirsNow()).toEqual([])
+      }
+    })
+
+    it('compares the entry with the account of the user, in any case, and accepts a list that is the user alone', async () => {
+      const r = await go({ runner: reading((name) => aclListing(name, 'pc\\USER:(OI)(CI)(F)')), deps: win() })
+      expect(r.exitCode).toBe(0)
+    })
+
+    it('when only the name of the user is known (whoami failed), checks the shape of the list and cannot say whose it is', async () => {
+      const whoamiFails = { status: 1, stdout: '', stderr: 'ERROR: nope' }
+      const alone = makeRunner({
+        whoami: () => whoamiFails,
+        icacls: (call) => (call.args.length === 1 ? { status: 0, stdout: aclListing(call.args[0], 'PC\\Some Name:(OI)(CI)(F)'), stderr: '' } : defaults.icacls(call)),
+      })
+      expect((await go({ runner: alone, deps: win() })).exitCode).toBe(0)
+      fs.rmSync(dir, { recursive: true, force: true })
+      const shared = makeRunner({
+        whoami: () => whoamiFails,
+        icacls: (call) => (call.args.length === 1 ? { status: 0, stdout: aclListing(call.args[0], 'PC\\Some Name:(OI)(CI)(F)', 'Everyone:(OI)(CI)(R)'), stderr: '' } : defaults.icacls(call)),
+      })
+      const r = await go({ runner: shared, deps: win() })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(NOT_ALONE('more than one entry'))
+    })
+
+    it('is not done on macOS and Linux, where the mode of the work directory is read back instead', async () => {
+      const r = await go()
+      expect(r.runner.of('icacls')).toEqual([])
+    })
+  })
+})
+
+// ---- a backup.log that is not a plain file --------------------------------------------------------------------------------------------------
+
+describe('a backup.log that is a link or has another name', () => {
+  const logPath = () => path.join(dir, 'backup.log')
+  /** An lstat that says a stub, whatever the file is: for a platform that cannot make the real thing. */
+  const lstatSaying = (info, after = 0) => {
+    let calls = 0
+    return (target, ...rest) => {
+      if (path.basename(String(target)) === 'backup.log' && ++calls > after) return info
+      return fs.lstatSync(target, ...rest)
+    }
+  }
+  const SYMLINK = { isFile: () => false, isSymbolicLink: () => true, nlink: 1 }
+
+  it('refuses a symbolic link (seen through a stub): nothing is dumped, nothing is appended, and the message says what to do', async () => {
+    seed([])
+    fs.writeFileSync(logPath(), 'the log\n')
+    const files = { ...fs, statSync: privateStat, lstatSync: lstatSaying(SYMLINK) }
+    const r = await go({ deps: { fs: files } })
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe(LOG_NOT_REGULAR_ERROR)
+    expect(LOG_NOT_REGULAR_ERROR).toMatch(/delete it or move it away/)
+    expect(r.runner.calls).toEqual([]) // not even the Neon CLI
+    expect(workDirsNow()).toEqual([])
+    expect(r.errs).toEqual([`backup failed: ${LOG_NOT_REGULAR_ERROR}`]) // said once
+    expect(fs.readFileSync(logPath(), 'utf8')).toBe('the log\n') // nothing was appended
+  })
+
+  it('refuses a real symbolic link (only where this platform can make one), and does not write through it', async () => {
+    seed([])
+    const target = path.join(tmp, 'another-file-of-the-owner.txt')
+    fs.writeFileSync(target, 'precious\n')
+    try {
+      fs.symlinkSync(target, logPath())
+    } catch {
+      return // this platform needs a privilege to make a symbolic link: the stub test above covers the check
+    }
+    const r = await go()
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe(LOG_NOT_REGULAR_ERROR)
+    expect(fs.readFileSync(target, 'utf8')).toBe('precious\n')
+    expect(r.runner.calls).toEqual([])
+  })
+
+  it('refuses a dangling symbolic link as well (seen through a stub: it points at nothing, so it "does not exist" for existsSync)', async () => {
+    seed([])
+    const files = { ...fs, statSync: privateStat, lstatSync: lstatSaying(SYMLINK), existsSync: (target) => (path.basename(String(target)) === 'backup.log' ? false : fs.existsSync(target)) }
+    const r = await go({ deps: { fs: files } })
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe(LOG_NOT_REGULAR_ERROR)
+  })
+
+  it('refuses a hard link (another name of the same file): the other name is not written to', async () => {
+    seed([])
+    const other = path.join(tmp, 'another-name.txt')
+    fs.writeFileSync(other, 'precious\n')
+    fs.linkSync(other, logPath()) // two names for one file: nlink is 2
+    const r = await go()
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe(LOG_NOT_REGULAR_ERROR)
+    expect(fs.readFileSync(other, 'utf8')).toBe('precious\n')
+    expect(r.runner.calls).toEqual([])
+    expect(r.files).toEqual(['backup.log'])
+  })
+
+  it('refuses a log that cannot be inspected', async () => {
+    seed([])
+    const files = {
+      ...fs,
+      statSync: privateStat,
+      lstatSync: (target, ...rest) => {
+        if (path.basename(String(target)) === 'backup.log') throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+        return fs.lstatSync(target, ...rest)
+      },
+    }
+    const r = await go({ deps: { fs: files } })
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe(LOG_NOT_REGULAR_ERROR)
+  })
+
+  it('still appends to a normal log that is there already, and makes one that is not', async () => {
+    seed([])
+    fs.writeFileSync(logPath(), 'an older line\n')
+    const first = await go()
+    expect(first.exitCode).toBe(0)
+    expect(first.log.split('\n').filter(Boolean)).toEqual(['an older line', `03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0`])
+    fs.rmSync(dir, { recursive: true, force: true })
+    const second = await go()
+    expect(second.exitCode).toBe(0)
+    expect(second.log.split('\n').filter(Boolean)).toHaveLength(1)
+  })
+
+  it('checks again right before the append: a link planted in between gets nothing, the dump is kept, and the screen says why', async () => {
+    seed([])
+    fs.writeFileSync(logPath(), 'the log\n')
+    // the first look (before anything is dumped) sees a plain file, the second (before the append) sees a link
+    const files = { ...fs, statSync: privateStat, lstatSync: lstatSaying(SYMLINK, 1) }
+    const r = await go({ deps: { fs: files } })
+    expect(r.exitCode).toBe(0) // the backup itself was fine
+    expect(r.files).toEqual(['backup.log', FINAL])
+    expect(fs.readFileSync(logPath(), 'utf8')).toBe('the log\n') // nothing was appended
+    expect(r.errs).toEqual([LOG_NOT_REGULAR_ERROR])
+  })
+
+  it('has a message that holds no path', () => {
+    expect(LOG_NOT_REGULAR_ERROR).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\//)
   })
 })
 

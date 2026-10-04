@@ -124,7 +124,12 @@ and its size, or a short error. It never holds the connection string, the user o
 - **On Windows** a new file or folder inherits the access list of its parent, so the script closes each thing itself, with
   `icacls`, as a second net inside the private temp folder: the work directory first (all inherited access removed, full
   control for your own account alone, inherited by what is made inside), then the empty temporary file in it the same way,
-  then `pg_dump` overwrites that file in place (which keeps its list). The account is found by its SID with `whoami /user`,
+  then `pg_dump` overwrites that file in place (which keeps its list). Right after the first call the list of the work
+  directory is read back (`icacls <dir>`), and the run stops, before anything is written into the directory, unless it is
+  exactly one entry: yours, full control, inherited by what is inside (`(OI)(CI)(F)`). Another entry, an inherited one or a
+  deny stops it. This catches an entry that another account added to the directory in the moment before its list was set,
+  which neither removing inheritance nor granting your account removes (it could only happen if another account can write in
+  the temp folder). The account is found by its SID with `whoami /user`,
   so a name with a space or in another alphabet does not matter. The rename into the backup folder keeps the list (checked on
   Windows 11), and `backup.log` gets the same list when it is created. If `icacls` is missing or fails, the backup stops
   before anything is dumped, `backup.log` says why, and nothing is rotated. You can look at the result with `icacls <file>`: it
@@ -134,6 +139,11 @@ and its size, or a short error. It never holds the connection string, the user o
   characters, so the script refuses, before it makes anything, a backup folder or a temp folder whose paths would be longer
   than 245 characters (the names inside the work directory are short): use a short backup folder, such as
   `C:\backups\building-qr` or one directly under your profile.
+- **`backup.log` must be a plain file with one name.** Before anything is dumped, and again right before the line is added,
+  the script checks (without following a link) that an existing `backup.log` is a regular file and has no other name. A
+  symbolic link or another reparse point, or a hard link, which an account that can write in the backup folder could plant
+  so that an append goes to another of your files, makes the run stop (exit code 1, nothing dumped, nothing written): delete
+  the file, or move it away, and run again.
 - Choose a backup folder under your user profile (`C:\Users\<your name>`), and never a shared folder, a network drive or a folder
   that a service synchronises to the internet (for example OneDrive or Dropbox): a synchronisation client copies the file
   somewhere else, and no access list can stop that copy.

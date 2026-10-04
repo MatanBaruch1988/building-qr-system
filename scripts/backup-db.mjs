@@ -19,7 +19,10 @@
 //      It is not made in the output folder on purpose: an account that can write in the output folder could add an access
 //      entry of its own (an explicit, inheritable one, which neither `icacls /inheritance:r` nor `/grant:r` removes) between
 //      the moment a directory is made there and the moment it is closed, or swap a path for its own. On Windows the directory
-//      then also gets an owner-only access list (icacls), and on macOS and Linux its mode is read back: a second net.
+//      then also gets an owner-only access list (icacls), and on macOS and Linux its mode is read back: a second net. On
+//      Windows the list is READ BACK too (`icacls <dir>`) and the run refuses unless it is exactly one entry, the user's, full
+//      control inherited by files and folders: an explicit, inheritable entry that another account added to the directory
+//      before the list was set survives `/inheritance:r` and `/grant:r`, and would be inherited by partial.dump.
 //      pg_dump (custom format) writes into a temporary file there (`partial.dump`, created empty and exclusively before
 //      pg_dump starts). The password goes to pg_dump through the environment (PGPASSWORD and friends), never on the command
 //      line, where other users of a machine can see it. The session is READ-ONLY on the server
@@ -50,7 +53,10 @@
 //      the warning `own-dump-older-than-kept`, because a newer verified dump exists). A name with a time in the future (a
 //      clock that was wrong) is not counted and not deleted. Any other file in the folder is left alone, and nothing is
 //      rotated after a failed backup.
-//   5. Appends one line to backup.log in the folder (the time, ok or failed, the masked host, the file and its size, or a
+//   5. An existing backup.log must be a regular file with one name (lstat: not a symbolic link, nlink 1), checked before
+//      anything is dumped and again right before the append: a link that another account planted in a folder it can write in
+//      would send the append to another file of the owner, and a hard link is the same trick. The run refuses (nothing is
+//      dumped or written); delete the file. Appends one line to backup.log in the folder (the time, ok or failed, the masked host, the file and its size, or a
 //      short error) and prints a summary. It never writes the URL, the user or the password, and every message is cleaned
 //      of them first.
 //
@@ -122,6 +128,10 @@ export const EXDEV_ERROR =
   'the backup folder is on another drive than the temp folder, so the finished dump cannot be moved into it: put the backup folder on the same drive as the temp folder, or point TEMP (on macOS and Linux TMPDIR) at a private folder on the drive of the backup folder'
 // The table that says which database it is (server/dbGuard.js): `production` in the production database, `nonprod` in the other.
 export const MARKER_TABLE = 'environment_marker'
+// backup.log exists but is not a plain file with one name: a symbolic link (or another reparse point) or a hard link that another
+// account planted in a folder it can write in would make an append go to another file of the owner.
+export const LOG_NOT_REGULAR_ERROR =
+  'backup.log in the backup folder is not a regular file (it is a link, or it has more than one name), so nothing was dumped and nothing was written to it: delete it or move it away'
 export const LOG_SKIPPED = 'backup: backup.log was not written, because other users can write in the backup folder'
 
 const NEON_TIMEOUT_MS = 2 * 60_000
@@ -272,6 +282,15 @@ export function parseWhoamiSid(stdout) {
 }
 
 /**
+ * The account name of the current user (`DOMAIN\name`) from the same output of `whoami /user /fo csv /nh`, or null. icacls prints
+ * names, not SIDs, so this is what the access list read back is compared with.
+ */
+export function parseWhoamiAccount(stdout) {
+  const match = /^"([^"]+)","S-1-\d+(?:-\d+)+"/m.exec(String(stdout ?? ''))
+  return match ? match[1] : null
+}
+
+/**
  * The arguments of icacls that make `fileName` readable and writable by `owner` alone: /inheritance:r drops every access
  * that the file got from its folder (the copies are removed, not kept), and /grant:r gives that one user full control.
  * `owner` is `*<SID>` (see parseWhoamiSid) or, when the SID cannot be found, the name of the user.
@@ -282,8 +301,9 @@ export function icaclsArgs(fileName, owner, { directory = false } = {}) {
 }
 
 /**
- * Who the files belong to, in the form icacls takes: the SID of the current user from `whoami /user`, and when that cannot
- * be read, the user name that Node knows. Throws an Error with a message that is safe to print when there is neither.
+ * Who the files belong to: { id (in the form icacls takes: the SID of the current user from `whoami /user`, and when that
+ * cannot be read, the user name that Node knows), account (`DOMAIN\name` when the SID was found, else null) }. Throws an
+ * Error with a message that is safe to print when there is neither.
  */
 async function windowsOwner({ runner, env, userName }) {
   const who = await runner(windowsTool('whoami.exe', env), ['/user', '/fo', 'csv', '/nh'], {
@@ -291,22 +311,23 @@ async function windowsOwner({ runner, env, userName }) {
     timeoutMs: ICACLS_TIMEOUT_MS,
   })
   const sid = !who.problem && who.status === 0 ? parseWhoamiSid(who.stdout) : null
-  if (sid) return sid
+  if (sid) return { id: sid, account: parseWhoamiAccount(who.stdout) }
   let name = ''
   attempt(() => {
     name = String(userName() ?? '').trim()
   })
-  if (name && !/[:/*?"<>|]/.test(name)) return name
+  // Only the name is known: the access list can be checked for its shape, but not for whose it is.
+  if (name && !/[:/*?"<>|]/.test(name)) return { id: name, account: null }
   throw new Error('the current Windows user could not be found, so a dump cannot be made owner-only')
 }
 
 /**
- * Makes `name` (a file in `cwd`) owner-only with icacls. The file name is relative and the folder is the working directory,
+ * Makes `name` (a file in `cwd`) owner-only with icacls. `owner` is what windowsOwner returned. The file name is relative and the folder is the working directory,
  * so no path (and no user name in it) is on the command line or in a message. Throws an Error with a message that is safe
  * to print when icacls is missing, does not finish or exits with an error: a file that cannot be closed must not be used.
  */
 async function restrictToOwner({ name, cwd, owner, runner, env, directory = false }) {
-  const result = await runner(windowsTool('icacls.exe', env), icaclsArgs(name, owner, { directory }), {
+  const result = await runner(windowsTool('icacls.exe', env), icaclsArgs(name, owner.id, { directory }), {
     env: cleanEnv(env),
     cwd,
     timeoutMs: ICACLS_TIMEOUT_MS,
@@ -318,6 +339,50 @@ async function restrictToOwner({ name, cwd, owner, runner, env, directory = fals
     throw new Error('icacls failed (exit code 3, path not found: a very long backup folder path is the usual cause), so a dump cannot be made owner-only')
   }
   if (result.status !== 0) throw new Error(`icacls failed (exit code ${result.status}), so a dump cannot be made owner-only`)
+}
+
+/**
+ * What is wrong with the access list that `icacls <name>` printed, as a short reason, or null when it is exactly the one entry
+ * that restrictToOwner makes for a directory: one entry, not inherited, full control, inherited by the files and folders in it
+ * (`(OI)(CI)(F)`), for the current user (`account`, when it is known). icacls prints names and not SIDs, and the names of
+ * groups are in the language of Windows, but the codes in the brackets are not, and the user's own account name is the same
+ * as whoami's. A deny entry, an inherited entry, a second entry or an entry of another account is a problem: another account
+ * that could write in the folder of the work directory could have added an inheritable entry of its own between the moment
+ * the directory was made and the moment its list was set, and `/inheritance:r` does not remove an explicit entry and
+ * `/grant:r` does not replace the entry of another account. The list is read from the output of the process, not from a
+ * file, so there is nothing to swap.
+ */
+export function aclProblem(output, { name, account = null }) {
+  const entries = []
+  for (const raw of String(output ?? '').split(/\r?\n/)) {
+    let line = raw.trim()
+    if (line.startsWith(name)) line = line.slice(name.length).trim() // the first line begins with the name that was given
+    const match = /^(.+):((?:\([^()]*\))+)$/.exec(line)
+    if (match) entries.push({ principal: match[1], rights: match[2] })
+  }
+  if (entries.length === 0) return 'no entry could be read'
+  if (entries.length > 1) return 'more than one entry'
+  const [entry] = entries
+  if (entry.rights !== '(OI)(CI)(F)') return 'the entry is inherited, a deny, or not full control for the folder and what is in it'
+  if (account && entry.principal.trim().toLowerCase() !== account.toLowerCase()) return 'the entry is for another account'
+  return null
+}
+
+/**
+ * Reads the access list of the work directory back (`icacls <name>`, no change) and refuses it unless it is the user's alone
+ * (see aclProblem). Throws an Error with a message that names no account and no path.
+ */
+async function checkOwnerOnly({ name, cwd, owner, runner, env }) {
+  const result = await runner(windowsTool('icacls.exe', env), [name], { env: cleanEnv(env), cwd, timeoutMs: ICACLS_TIMEOUT_MS })
+  if (result.problem || result.status !== 0) {
+    throw new Error('icacls could not read the access list of the work directory back, so nothing was dumped')
+  }
+  const problem = aclProblem(result.stdout, { name, account: owner.account })
+  if (problem) {
+    throw new Error(
+      `the access list of the work directory is not the user's alone (${problem}), so nothing was dumped: is the temp folder shared with another account?`,
+    )
+  }
 }
 
 // ---- the connection string -----------------------------------------------------------------------------------------
@@ -665,6 +730,21 @@ export function issueBody(when) {
   ].join('\n')
 }
 
+/**
+ * True when `logPath` is not there, or is a regular file with exactly one name. lstat does not follow a link, so a symbolic link
+ * (or a junction) is seen for what it is, and a file with another name somewhere (a hard link) has nlink above 1. Anything that
+ * cannot be inspected is refused. Both would send an append to a file that is not the log.
+ */
+function logIsRegular(files, logPath) {
+  let info
+  try {
+    info = files.lstatSync(logPath)
+  } catch (error) {
+    return error?.code === 'ENOENT'
+  }
+  return info.isFile() && !info.isSymbolicLink() && info.nlink === 1
+}
+
 /** Runs `action` and says whether it worked. For a step that must never stop the backup (a cleanup, a chmod, a message). */
 function attempt(action) {
   try {
@@ -883,6 +963,11 @@ export async function runBackup(options, deps = {}) {
       }
       folderIsOpen = (mode & 0o077) !== 0
     }
+    // An existing backup.log must be a plain file with one name, before anything is dumped (see logIsRegular).
+    if (!logIsRegular(files, logPath)) {
+      logSkipped = '' // the message of the failure says it all, and no log is written
+      throw new Error(LOG_NOT_REGULAR_ERROR)
+    }
     const connectionString = await connectionStringFor({ options, env, platform, runner })
     scrub = makeScrubber(connectionString, hiddenFolders)
     host = maskDatabaseHost(connectionString)
@@ -904,7 +989,13 @@ export async function runBackup(options, deps = {}) {
     workDir = files.mkdtempSync(path.join(tmpdir, WORK_PREFIX))
     workCreated = true
     partialPath = path.join(workDir, partialName)
-    if (windows) await restrictToOwner({ name: path.basename(workDir), cwd: path.dirname(workDir), owner, runner, env, directory: true })
+    if (windows) {
+      const where = { name: path.basename(workDir), cwd: path.dirname(workDir), owner, runner, env }
+      await restrictToOwner({ ...where, directory: true })
+      // The list is read back and must be the user's alone: an entry that another account added to the directory before this
+      // point is not removed by the call above.
+      await checkOwnerOnly(where)
+    }
     if (posix) {
       let workIsPrivate = false
       attempt(() => {
@@ -1048,6 +1139,9 @@ export async function runBackup(options, deps = {}) {
   attempt(() => {
     logExisted = files.existsSync(logPath)
   })
+  // The same check again right before the append, because it is a moment later than the first and a link could have been planted
+  // in between: then nothing is written, and the screen says why.
+  if (logSkipped === null && !logIsRegular(files, logPath)) logSkipped = LOG_NOT_REGULAR_ERROR
   const logAllowed = logSkipped === null // (a log in a folder that others can write could be a link to another file of the owner)
   if (windows && logAllowed) {
     try {
