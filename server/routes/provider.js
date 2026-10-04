@@ -4,8 +4,18 @@ import { verifyPassword, burnPasswordCheck, randomToken, sha256 } from '../crypt
 import { ApiError, bad, notFound, requireUuid, str, clientIp } from '../http.js'
 import { requireProvider, guardLogin } from '../auth.js'
 import { recordScan, scanJson } from '../scans.js'
-import { parseQrToken } from '../scanLogic.js'
-import { MAX_SYNC_BATCH, PROVIDER_TOKEN_PREFIX } from '../config.js'
+import { parseQrToken } from '../../shared/qrToken.js'
+import { PROVIDER_TOKEN_PREFIX } from '../config.js'
+import {
+  MAX_SYNC_BATCH,
+  PASSWORD_MAX_LENGTH,
+  DEVICE_LABEL_MAX_LENGTH,
+  SOURCE_ONLINE,
+  SOURCE_OFFLINE_SYNC,
+  SCAN_ERROR_INVALID_CODE,
+  SCAN_ERROR_UNKNOWN_CODE,
+  SCAN_ERROR_INVALID_ITEM,
+} from '../../shared/contract.js'
 import { readAddress } from '../building.js'
 
 const providerJson = (p) => ({
@@ -36,19 +46,19 @@ route('GET', '/public/building', async () => ({
 // Lets the phone show "Lobby" before anyone signs in, and skip GPS for points that never use it.
 route('GET', '/public/points/resolve', async ({ query: q }) => {
   const token = parseQrToken(q.code)
-  if (!token) throw bad('invalid_code', 'This is not a QR code of this system')
+  if (!token) throw bad(SCAN_ERROR_INVALID_CODE, 'This is not a QR code of this system')
   const { rows } = await query(
     'select name, description, is_active, gps_mode from points where qr_token = $1',
     [token],
   )
-  if (!rows.length) throw notFound('unknown_code', 'QR code not found in the system')
+  if (!rows.length) throw notFound(SCAN_ERROR_UNKNOWN_CODE, 'QR code not found in the system')
   return { point: rows[0] }
 })
 
 route('POST', '/session', async ({ req, body }) => {
   const providerId = requireUuid(body.provider_id, 'invalid_provider')
-  const password = str(body.password, { field: 'password', max: 200, required: true })
-  const label = str(body.device_label, { field: 'device_label', max: 80 }) ?? ''
+  const password = str(body.password, { field: 'password', max: PASSWORD_MAX_LENGTH, required: true })
+  const label = str(body.device_label, { field: 'device_label', max: DEVICE_LABEL_MAX_LENGTH }) ?? ''
 
   const attempt = await guardLogin({ scope: 'provider', account: providerId, ip: clientIp(req) })
   const { rows } = await query(
@@ -87,12 +97,14 @@ route('POST', '/scan', async ({ req, body }) => {
     provider,
     deviceId,
     input: toInput(body),
-    source: 'online',
+    source: SOURCE_ONLINE,
   })
   return { scan, duplicate }
 })
 
-// Batch upload of scans saved on the phone while it had no signal. Each item succeeds or fails alone.
+// Batch upload of scans saved on the phone while it had no signal. Each item succeeds or fails alone. The error of an item
+// carries one of the SCAN_ERROR_* codes of shared/contract.js (the phone drops the item for a permanent code and keeps it
+// for any other); the size limit and the phone's chunk are in the same file.
 route('POST', '/scans/sync', async ({ req, body }) => {
   const { provider, deviceId } = await requireProvider(req)
   if (!Array.isArray(body.scans)) throw bad('invalid_field', 'scans must be a list', { field: 'scans' })
@@ -106,7 +118,7 @@ route('POST', '/scans/sync', async ({ req, body }) => {
         provider,
         deviceId,
         input: toInput(item),
-        source: 'offline_sync',
+        source: SOURCE_OFFLINE_SYNC,
       })
       results.push({ id: item?.id, ok: true, scan, duplicate })
     } catch (err) {
@@ -115,7 +127,7 @@ route('POST', '/scans/sync', async ({ req, body }) => {
       } else if (typeof err?.code === 'string' && /^2[23]/.test(err.code)) {
         // The database rejected this one item's data (out of range, malformed): retrying can never help,
         // and it must not block the good items queued behind it.
-        results.push({ id: item?.id, ok: false, error: { code: 'invalid_item', message: 'Item could not be stored' } })
+        results.push({ id: item?.id, ok: false, error: { code: SCAN_ERROR_INVALID_ITEM, message: 'Item could not be stored' } })
       } else {
         throw err // infrastructure trouble (connection, timeout): fail the request so the phone retries later
       }

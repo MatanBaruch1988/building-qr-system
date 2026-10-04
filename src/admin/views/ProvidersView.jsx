@@ -4,12 +4,13 @@ import { useLoad, SERVICE_TYPES, serviceLabel, formatDateTime } from '../hooks.j
 import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconEdit, IconKey, IconDevice, IconBan, IconCheck, IconCopy, IconRefresh, IconUsers, IconAlert, IconTrash } from '../icons.jsx'
 import { generatePassword } from '../password.js'
+import { PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH, NAME_MAX_LENGTH } from '../../../shared/contract.js'
 
 function PasswordBox({ value, onChange, id, ...aria }) {
   const toast = useToast()
   return (
     <div className="a-secret" style={{ padding: 8 }}>
-      <input id={id} className="a-input a-code" value={value} onChange={(e) => onChange(e.target.value)} maxLength={200} autoComplete="new-password" spellCheck="false" {...aria} />
+      <input id={id} className="a-input a-code" value={value} onChange={(e) => onChange(e.target.value)} maxLength={PASSWORD_MAX_LENGTH} autoComplete="new-password" spellCheck="false" {...aria} />
       <button type="button" className="w-btn w-btn--ghost w-btn--small" onClick={() => onChange(generatePassword())}><IconRefresh size={18} />יצירה</button>
       <button type="button" className="a-icon-btn" aria-label="העתקת הסיסמה" disabled={!value}
         onClick={async () => toast.ok((await copyText(value)) ? 'הסיסמה הועתקה' : 'ההעתקה נכשלה')}><IconCopy /></button>
@@ -46,8 +47,8 @@ function ProviderForm({ provider, onClose, onSaved }) {
     e.preventDefault()
     const next = {}
     if (!form.company.trim()) next.company = 'צריך שם חברה או שם.'
-    if (!provider && form.password.length < 8) next.password = 'סיסמה של 8 תווים לפחות.'
-    if (provider && form.password && form.password.length < 8) next.password = 'סיסמה של 8 תווים לפחות, או להשאיר ריק.'
+    if (!provider && form.password.length < PASSWORD_MIN_LENGTH) next.password = `סיסמה של ${PASSWORD_MIN_LENGTH} תווים לפחות.`
+    if (provider && form.password && form.password.length < PASSWORD_MIN_LENGTH) next.password = `סיסמה של ${PASSWORD_MIN_LENGTH} תווים לפחות, או להשאיר ריק.`
     setErrors(next)
     if (Object.keys(next).length) return
     const body = {
@@ -75,10 +76,10 @@ function ProviderForm({ provider, onClose, onSaved }) {
     >
       <form id="provider-form" className="a-form" onSubmit={submit} noValidate>
         <Field label="חברה" error={errors.company}>
-          <input className="a-input" value={form.company} onChange={(e) => set('company', e.target.value)} maxLength={120} placeholder="לדוגמה: ניקיון אלון" />
+          <input className="a-input" value={form.company} onChange={(e) => set('company', e.target.value)} maxLength={NAME_MAX_LENGTH} placeholder="לדוגמה: ניקיון אלון" />
         </Field>
         <Field label="שם העובד" hint="השם שיופיע ברשימה במסך הכניסה של הטלפון.">
-          <input className="a-input" value={form.contact_name} onChange={(e) => set('contact_name', e.target.value)} maxLength={120} />
+          <input className="a-input" value={form.contact_name} onChange={(e) => set('contact_name', e.target.value)} maxLength={NAME_MAX_LENGTH} />
         </Field>
         <Field label="סוג שירות">
           <select className="a-input" value={form.service_type} onChange={(e) => set('service_type', e.target.value)}>
@@ -109,7 +110,7 @@ function PasswordDialog({ provider, onClose, onSaved }) {
   const [busy, run] = useAction(toast, errorText)
   const submit = async (e) => {
     e.preventDefault()
-    if (password.length < 8) return setError('סיסמה של 8 תווים לפחות.')
+    if (password.length < PASSWORD_MIN_LENGTH) return setError(`סיסמה של ${PASSWORD_MIN_LENGTH} תווים לפחות.`)
     const res = await run(() => adminApi(`/providers/${provider.id}`, { method: 'PATCH', body: { password } }))
     if (res) onSaved(res.provider, password)
   }

@@ -17,21 +17,18 @@ import {
   FLAG_OFFLINE_SYNC,
   FLAG_CLOCK_SKEW,
 } from '../shared/flags.js'
+import {
+  GPS_MODE_NONE,
+  GPS_MODE_OPTIONAL,
+  GPS_MODE_REQUIRED,
+  OUTCOME_ACCEPTED,
+  OUTCOME_REJECTED_FAR,
+  OUTCOME_REJECTED_NO_LOCATION,
+  SOURCE_OFFLINE_SYNC,
+} from '../shared/contract.js'
 
-const TOKEN_RE = /^BQR-[A-Za-z0-9-]{6,80}$/
-
-/** Accepts the full printed URL (…/scan?code=BQR-…) or the bare BQR-… token. */
-export function parseQrToken(input) {
-  if (typeof input !== 'string') return null
-  const raw = input.trim()
-  if (TOKEN_RE.test(raw)) return raw
-  try {
-    const code = new URL(raw).searchParams.get('code')
-    return code && TOKEN_RE.test(code) ? code : null
-  } catch {
-    return null
-  }
-}
+// "What is one of our QR codes" is shared with the phone (shared/qrToken.js); it is still importable from here.
+export { parseQrToken } from '../shared/qrToken.js'
 
 export function haversineMeters(lat1, lng1, lat2, lng2) {
   const R = 6371000
@@ -66,7 +63,7 @@ function validGps(gps) {
  * Returns { outcome, distance_m, gps_accuracy_m, flags }.
  */
 export function evaluateGps({ mode, point, gps }) {
-  const result = { outcome: 'accepted', distance_m: null, gps_accuracy_m: null, flags: [] }
+  const result = { outcome: OUTCOME_ACCEPTED, distance_m: null, gps_accuracy_m: null, flags: [] }
   const hasFix = validGps(gps)
   const hasPointCoords = Number.isFinite(point.lat) && Number.isFinite(point.lng)
 
@@ -78,7 +75,7 @@ export function evaluateGps({ mode, point, gps }) {
     }
   }
 
-  if (mode === 'none') return result
+  if (mode === GPS_MODE_NONE) return result
   if (!hasPointCoords) {
     // We were asked to check a location but the point has none configured: say so instead of
     // silently passing everyone (the committee can fix the point; the agent can see the flag).
@@ -90,7 +87,7 @@ export function evaluateGps({ mode, point, gps }) {
     hasFix && result.gps_accuracy_m !== null && result.gps_accuracy_m <= GPS_MAX_USABLE_ACCURACY_M
 
   if (!usable) {
-    if (mode === 'required') return { ...result, outcome: 'rejected_no_location' }
+    if (mode === GPS_MODE_REQUIRED) return { ...result, outcome: OUTCOME_REJECTED_NO_LOCATION }
     result.flags.push(FLAG_LOCATION_UNVERIFIED)
     return result
   }
@@ -102,9 +99,9 @@ export function evaluateGps({ mode, point, gps }) {
   // from the lobby to a basement, say), so a stale reading is judged with that much extra room, and is flagged.
   const age = Number.isFinite(gps.age_s) ? Math.max(0, gps.age_s) : 0
   const stale = age > GPS_STALE_AFTER_S
-  const walked = mode === 'optional' && stale ? Math.min(age, GPS_MAX_STALE_AGE_S) * GPS_WALKING_SPEED_MPS : 0
+  const walked = mode === GPS_MODE_OPTIONAL && stale ? Math.min(age, GPS_MAX_STALE_AGE_S) * GPS_WALKING_SPEED_MPS : 0
   const outside = result.distance_m - credit - walked - point.radius_m
-  if (outside > GPS_PIN_TOLERANCE_M) return { ...result, outcome: 'rejected_far' }
+  if (outside > GPS_PIN_TOLERANCE_M) return { ...result, outcome: OUTCOME_REJECTED_FAR }
   if (outside > 0) result.flags.push(FLAG_LOCATION_OUTSIDE_RADIUS)
   if (stale) result.flags.push(FLAG_LOCATION_STALE)
   return result
@@ -120,7 +117,7 @@ export function resolveClock({ source, clientTime, now }) {
   // Also rejects absurd dates (year -271821…) that the database cannot store.
   const clientOk = client && !Number.isNaN(client.getTime()) && client.getUTCFullYear() >= 2000 && client.getUTCFullYear() <= 2100
 
-  if (source === 'offline_sync') {
+  if (source === SOURCE_OFFLINE_SYNC) {
     flags.push(FLAG_OFFLINE_SYNC)
     if (clientOk) {
       const age = now.getTime() - client.getTime()

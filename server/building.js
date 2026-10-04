@@ -2,10 +2,11 @@
 // The public route (provider app header) and the committee routes share these three functions.
 import { query } from './db.js'
 import { bad, str } from './http.js'
+import { ADDRESS_MAX_LENGTH } from '../shared/contract.js'
 
-// Also the limit of the column (char_length(address) <= 200). JavaScript counts UTF-16 units, Postgres counts characters,
-// so whatever passes here also passes the database.
-export const ADDRESS_MAX = 200
+// The longest address, ADDRESS_MAX_LENGTH (shared/contract.js: the committee form checks it too), is also the limit of
+// the column (char_length(address) <= 200). JavaScript counts UTF-16 units, Postgres counts characters, so whatever
+// passes here also passes the database.
 
 // Control characters (tab, line breaks, NUL, ...) and the line and paragraph separators. A line break would split the
 // header of the provider app, and NUL cannot be stored in a text column. Everything else is allowed as typed: any
@@ -14,7 +15,7 @@ const CONTROL = /[\p{Cc}\p{Zl}\p{Zp}]/u
 
 /** The address from a request body, trimmed. Empty is allowed (it means "show nothing"); a missing field is not. */
 export function parseAddress(value) {
-  const address = str(value, { field: 'address', max: ADDRESS_MAX })
+  const address = str(value, { field: 'address', max: ADDRESS_MAX_LENGTH })
   if (address === undefined) throw bad('missing_field', 'address is required (it can be empty)', { field: 'address' })
   if (CONTROL.test(address)) throw bad('invalid_field', 'address must not contain control characters', { field: 'address' })
   return address

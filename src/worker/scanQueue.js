@@ -1,16 +1,18 @@
 import { safeStorage, readJson } from './storage.js'
+import {
+  SYNC_CHUNK_SIZE, SYNC_QUEUE_MAX_ITEMS, SYNC_PERMANENT_ERROR_CODES, OUTCOME_ACCEPTED,
+} from '../../shared/contract.js'
 
 const KEY = 'qr.queue.v1'
-const MAX_ITEMS = 500
+// The queue size, the size of one upload and the codes below are the phone's side of the sync contract with the server,
+// written once in shared/contract.js (tests/contract.test.js keeps the chunk under the server's MAX_SYNC_BATCH).
+const MAX_ITEMS = SYNC_QUEUE_MAX_ITEMS
 // The server handles a batch item by item (about ten database round trips each), so keep batches small
 // enough to finish well inside the request timeout even on a slow connection or a sleeping database.
-const BATCH = 10 // must not exceed the server's MAX_SYNC_BATCH
+const BATCH = SYNC_CHUNK_SIZE // must not exceed the server's MAX_SYNC_BATCH
 
 // The server refuses these for good; retrying would never help, so the item is dropped and counted.
-const PERMANENT = new Set([
-  'invalid_code', 'unknown_code', 'point_inactive', 'not_assigned', 'invalid_scan_id', 'scan_id_conflict',
-  'invalid_item',
-])
+const PERMANENT = new Set(SYNC_PERMANENT_ERROR_CODES)
 
 /**
  * Check-ins saved on the phone while it had no signal. Each item carries the id the server uses for
@@ -67,7 +69,7 @@ export async function flushQueue({ queue, api, token, providerId }) {
     for (const r of res.results) {
       if (!inBatch.has(r.id)) continue // never trust ids we did not send
       if (r.ok) {
-        if (r.scan?.outcome && r.scan.outcome !== 'accepted') rejected++
+        if (r.scan?.outcome && r.scan.outcome !== OUTCOME_ACCEPTED) rejected++
         else sent++
         done.push(r.id)
       } else if (PERMANENT.has(r.error?.code)) {

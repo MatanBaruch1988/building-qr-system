@@ -1,4 +1,5 @@
 import { api } from '../api/client.js'
+import { PASSWORD_MIN_LENGTH } from '../../shared/contract.js'
 
 /**
  * Committee calls: the session travels in an HttpOnly cookie, nothing to attach.
@@ -23,7 +24,7 @@ const MESSAGES = {
   google_not_configured: 'הכניסה עם Google עדיין לא הוגדרה בשרת.',
   too_many_attempts: 'יותר מדי ניסיונות. נסו שוב בעוד כמה דקות.',
   coordinates_required: 'נקודה שמחייבת מיקום צריכה קואורדינטות. סמנו אותה במפה.',
-  password_too_short: 'הסיסמה חייבת להכיל לפחות 8 תווים.',
+  password_too_short: `הסיסמה חייבת להכיל לפחות ${PASSWORD_MIN_LENGTH} תווים.`,
   missing_field: 'חסר שדה חובה.',
   invalid_field: 'אחד הערכים לא תקין.',
   cannot_deactivate_self: 'אי אפשר להסיר את הגישה של עצמכם.',
