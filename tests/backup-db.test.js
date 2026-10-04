@@ -165,7 +165,8 @@ let tmp
 let dir
 
 beforeEach(() => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bqr-backup-test-'))
+  // the real path of the folder of the test (a short 8.3 name on Windows, /var on macOS are links or aliases): the script works on real paths
+  tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'bqr-backup-test-')))
   dir = path.join(tmp, 'backups')
 })
 
@@ -3492,10 +3493,11 @@ describe('a folder that another account can change', () => {
       return { ...r, rec }
     }
 
-    it('refuses a folder above the output folder that others can write in, unless it has the sticky bit', async () => {
+    it('refuses a folder above the output folder that the group or others can write in, unless it has the sticky bit', async () => {
       const { outRoot } = layout()
       seed(oldBackups)
-      for (const mode of [0o040777, 0o040707, 0o040702]) {
+      // others, and the group (a member of the group could rename the whole subtree, and the members are not known)
+      for (const mode of [0o040777, 0o040707, 0o040702, 0o040770, 0o040775, 0o040760, 0o040720, 0o040772]) {
         const r = await runWith([[outRoot, mode]])
         expect(r.exitCode, mode.toString(8)).toBe(1)
         expect(r.message, mode.toString(8)).toBe(refusal('a folder above the backup folder'))
@@ -3508,8 +3510,10 @@ describe('a folder that another account can change', () => {
       // the folder of the test is above the output folder as well
       const high = await runWith([[tmp, 0o040777]])
       expect(high.message).toBe(refusal('a folder above the backup folder'))
-      // sticky (this is /tmp), and a folder that only the group can write in (its members are not known), are accepted
-      for (const mode of [0o041777, 0o041707, 0o040775, 0o040770, 0o040755]) {
+      const high770 = await runWith([[tmp, 0o040770]])
+      expect(high770.message).toBe(refusal('a folder above the backup folder'))
+      // sticky (this is /tmp: nobody can rename or delete what they do not own), and a folder that the group and others can only read
+      for (const mode of [0o041777, 0o041707, 0o041770, 0o041775, 0o040755, 0o040750, 0o040705, 0o040700]) {
         for (const folder of [outRoot, tmp]) {
           const r = await runWith([[folder, mode]])
           expect(r.exitCode, `${mode.toString(8)} on ${path.basename(folder)}`).toBe(0)
@@ -3526,8 +3530,14 @@ describe('a folder that another account can change', () => {
       expect(fs.existsSync(dir)).toBe(false)
       expect(r.errs[0]).toBe(LOG_SKIPPED)
       expect(r.rec.events).toEqual([])
-      const sticky = await runWith([[outRoot, 0o041777]])
-      expect(sticky.exitCode).toBe(0)
+      const group = await runWith([[outRoot, 0o040770]])
+      expect(group.message).toBe(refusal('the backup folder itself'))
+      expect(fs.existsSync(dir)).toBe(false)
+      for (const mode of [0o041777, 0o041770]) {
+        const sticky = await runWith([[outRoot, mode]])
+        expect(sticky.exitCode, mode.toString(8)).toBe(0)
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
     })
 
     it('still refuses the output folder itself when group or others can write in it (the message of the mode check)', async () => {
@@ -3567,6 +3577,229 @@ describe('a folder that another account can change', () => {
       expect(r.exitCode).toBe(0)
       expectWorkCwd(r.runner.of('pg_dump')[0].options.cwd)
       expect(fs.readdirSync(sharedTemp)).toEqual([])
+    })
+  })
+
+  describe('a backup folder that is a link, or is in one', () => {
+    // The folders that count are the real ones. The chain of parents is walked by name, and a link in the path would make the
+    // check judge the folders of the link and not the folders of its target, so --out is resolved first (realpath), and the check,
+    // the work directory, the log and the rename all use the real path.
+    const statting = (modes) => (target, ...rest) => {
+      const key = path.resolve(String(target))
+      for (const [folder, mode] of modes) if (path.resolve(folder) === key) return { mode }
+      return privateStat(target, ...rest)
+    }
+    /**
+     * A file system whose lstat and realpath see `alias` as `target`, as a link would, for a platform where a link needs a privilege.
+     * Everything else is the real one, and `events` records what is made.
+     */
+    function throughAlias(alias, target, { modes = [] } = {}) {
+      const events = []
+      const through = (p) => {
+        const text = String(p)
+        return text === alias || text.startsWith(alias + path.sep) ? path.join(target, text.slice(alias.length)) : text
+      }
+      const resolved = (p, ...rest) => fs.realpathSync(through(p), ...rest)
+      resolved.native = (p, ...rest) => fs.realpathSync.native(through(p), ...rest)
+      return {
+        events,
+        fs: {
+          ...fs,
+          statSync: statting(modes),
+          lstatSync: (p, ...rest) => fs.lstatSync(through(p), ...rest),
+          realpathSync: resolved,
+          mkdirSync: (p, o) => {
+            events.push('mkdir')
+            return fs.mkdirSync(p, o)
+          },
+          mkdtempSync: (prefix, ...rest) => {
+            events.push(`mkdtemp ${path.dirname(String(prefix))}`)
+            return fs.mkdtempSync(prefix, ...rest)
+          },
+        },
+      }
+    }
+    /** The folders of one test: a shared parent with the real backup folder in it, and the name of a link to that parent. */
+    function links() {
+      const shared = path.join(tmp, 'shared')
+      const real = path.join(shared, 'backups')
+      fs.mkdirSync(real, { recursive: true })
+      dir = real // what the helpers look at (the log, the listing): the REAL folder
+      return { shared, real, alias: path.join(tmp, 'via-alias') }
+    }
+
+    it('on macOS and Linux judges the folders of the target: a link into a folder that the group or others can write in is refused, nothing is made', async () => {
+      const { shared, real, alias } = links()
+      for (const mode of [0o040777, 0o040770, 0o040775]) {
+        const spy = throughAlias(alias, shared, { modes: [[shared, mode]] })
+        const r = await go({ options: { out: path.join(alias, 'backups') }, deps: { fs: spy.fs } })
+        expect(r.exitCode, mode.toString(8)).toBe(1)
+        expect(r.message, mode.toString(8)).toBe(refusal('a folder above the backup folder'))
+        expect(r.runner.calls, mode.toString(8)).toEqual([])
+        expect(spy.events, mode.toString(8)).toEqual([]) // nothing made
+        expect(fs.existsSync(alias), mode.toString(8)).toBe(false) // and nothing made at the path of the link, either
+        expect(fs.readdirSync(real), mode.toString(8)).toEqual([])
+        expect(r.log, mode.toString(8)).toBe('')
+        expect(r.errs[0], mode.toString(8)).toBe(LOG_SKIPPED)
+      }
+    })
+
+    it('on macOS and Linux, a link to a private folder passes, and the work directory, the log and the dump are in the real folder', async () => {
+      const { shared, real, alias } = links()
+      const spy = throughAlias(alias, shared, { modes: [[shared, 0o040755]] })
+      const r = await go({ options: { out: path.join(alias, 'backups') }, deps: { fs: spy.fs } })
+      expect(r.exitCode).toBe(0)
+      expect(spy.events).toEqual(['mkdir', `mkdtemp ${real}`]) // the folder, then the work directory, both by the real path
+      expectWorkCwd(r.runner.of('pg_dump')[0].options.cwd) // dir is the real folder here
+      expect(fs.existsSync(path.join(real, FINAL))).toBe(true)
+      expect(r.log).toContain(' ok host=')
+      expect(fs.existsSync(alias)).toBe(false) // nothing went back through the path of the link
+      expect(visible(r)).not.toContain(tmp)
+    })
+
+    it('on Windows, runs the check on the real chain: the access lists that are read are the ones of the target and its parents', async () => {
+      const { shared, real, alias } = links()
+      const spy = throughAlias(alias, shared)
+      const asked = []
+      const runner = where((folder) => {
+        asked.push(folder)
+        return same(folder, shared) ? TEMP_WITH_MODIFY : SAFE_SDDL
+      })
+      const refused = await go({ options: { out: path.join(alias, 'backups') }, runner, deps: fakeWindows({ fs: spy.fs }) })
+      expect(refused.exitCode).toBe(1)
+      expect(refused.message).toBe(refusal('a folder above the backup folder'))
+      expect(spy.events).toEqual([])
+      const paths = refused.runner.of('powershell')[0].options.env.BQR_ACL_PATHS.split('|').map((p) => p.toLowerCase())
+      expect(paths.slice(0, 2)).toEqual([real, shared].map((p) => p.toLowerCase())) // the real folder and its real parent
+      expect(paths.join('|')).not.toContain('via-alias') // the link is never looked at
+      expect(fs.existsSync(alias)).toBe(false)
+      // with a private parent the same link passes, and everything is done in the real folder
+      const spyOk = throughAlias(alias, shared)
+      const ok = await go({ options: { out: path.join(alias, 'backups') }, runner: makeRunner(), deps: fakeWindows({ fs: spyOk.fs }) })
+      expect(ok.exitCode).toBe(0)
+      expect(spyOk.events).toEqual(['mkdir', `mkdtemp ${real}`])
+      expectWorkCwd(ok.runner.of('pg_dump')[0].options.cwd)
+      expect(fs.existsSync(path.join(real, FINAL))).toBe(true)
+      for (const call of ok.runner.of('icacls')) expect(String(call.options.cwd ?? '').toLowerCase()).not.toContain('via-alias')
+    })
+
+    it('resolves a link that is only a part of the path, and a folder that is not made yet below it', async () => {
+      const { shared, alias } = links()
+      const spy = throughAlias(alias, shared, { modes: [[shared, 0o040777]] })
+      const r = await go({ options: { out: path.join(alias, 'not', 'made', 'yet') }, deps: { fs: spy.fs } })
+      expect(r.exitCode).toBe(1)
+      // the nearest folder that exists is the real shared folder, which stands in for the output folder
+      expect(r.message).toBe(refusal('the backup folder itself'))
+      expect(spy.events).toEqual([])
+      expect(fs.existsSync(path.join(shared, 'not'))).toBe(false)
+    })
+
+    it('with a real link (where this platform can make one): a link into a shared folder is refused, a link to a private folder passes and the dump lands in the real folder', async () => {
+      const { shared, real } = links()
+      const link = path.join(tmp, 'via-link-a')
+      try {
+        fs.symlinkSync(real, link, 'junction') // a junction on Windows needs no privilege
+      } catch {
+        return // this platform needs a privilege to make a link: the tests above cover the check through the injected file system
+      }
+      const parentLink = path.join(tmp, 'via-link-b')
+      fs.symlinkSync(shared, parentLink, 'junction')
+      // macOS and Linux: the real parent is writable by others
+      for (const out of [link, path.join(parentLink, 'backups')]) {
+        const refused = await go({ options: { out }, deps: { fs: { ...fs, statSync: statting([[shared, 0o040777]]) } } })
+        expect(refused.exitCode, out).toBe(1)
+        expect(refused.message, out).toBe(refusal('a folder above the backup folder'))
+        expect(fs.readdirSync(real), out).toEqual([])
+      }
+      // Windows (the platform is faked, the links are real): the real parent is shared
+      const asked = []
+      const runner = where((folder) => {
+        asked.push(folder)
+        return same(folder, shared) ? TEMP_WITH_MODIFY : SAFE_SDDL
+      })
+      for (const out of [link, path.join(parentLink, 'backups')]) {
+        const refused = await go({ options: { out }, runner, deps: fakeWindows({ fs: { ...fs, statSync: privateStat } }) })
+        expect(refused.exitCode, out).toBe(1)
+        expect(refused.message, out).toBe(refusal('a folder above the backup folder'))
+      }
+      expect(asked.map((folder) => folder.toLowerCase()).some((folder) => folder.includes('via-link'))).toBe(false)
+      // a private parent: it passes, and the dump is in the real folder
+      const ok = await go({ options: { out: link }, deps: { fs: { ...fs, statSync: statting([[shared, 0o040755]]) } } })
+      expect(ok.exitCode).toBe(0)
+      expect(fs.existsSync(path.join(real, FINAL))).toBe(true)
+      expectWorkCwd(ok.runner.of('pg_dump')[0].options.cwd)
+    })
+
+    it('refuses a link that points at nothing, and a part of the path that cannot be inspected or resolved: not known is not trusted', async () => {
+      const { shared, alias } = links()
+      const broken = {
+        'a link that points at nothing (realpath says it is not there)': (spy) => {
+          spy.fs.realpathSync.native = () => {
+            throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${alias}'`), { code: 'ENOENT' })
+          }
+        },
+        'a part that cannot be read (EACCES)': (spy) => {
+          spy.fs.realpathSync.native = () => {
+            throw Object.assign(new Error(`EACCES: permission denied, lstat '${alias}'`), { code: 'EACCES' })
+          }
+        },
+        'an lstat that is refused for the folder (not for the folders above it)': (spy) => {
+          spy.fs.lstatSync = (p, ...rest) => {
+            if (String(p).startsWith(alias)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+            return fs.lstatSync(p, ...rest)
+          }
+        },
+        'a file system that cannot resolve at all': (spy) => {
+          delete spy.fs.realpathSync
+        },
+      }
+      for (const [what, breakIt] of Object.entries(broken)) {
+        for (const platform of ['linux', 'win32']) {
+          const spy = throughAlias(alias, shared)
+          breakIt(spy)
+          const r = await go({ options: { out: path.join(alias, 'backups') }, deps: platform === 'win32' ? fakeWindows({ fs: spy.fs }) : { fs: spy.fs } })
+          expect(r.exitCode, `${what} on ${platform}`).toBe(1)
+          expect(r.message, what).toBe(SHARED_UNREADABLE_ERROR)
+          expect(r.runner.calls, what).toEqual([]) // not even whoami
+          expect(spy.events, what).toEqual([])
+          expect(r.log, what).toBe('')
+          expect(r.errs, what).toEqual([`backup failed: ${SHARED_UNREADABLE_ERROR}`])
+          expect(r.message, what).not.toContain(tmp)
+        }
+      }
+    })
+
+    it('refuses a real link that points at nothing (where this platform can make one)', async () => {
+      const link = path.join(tmp, 'dangling')
+      try {
+        fs.symlinkSync(path.join(tmp, 'nowhere'), link, 'junction')
+      } catch {
+        return
+      }
+      const r = await go({ options: { out: link } })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(SHARED_UNREADABLE_ERROR)
+      expect(fs.existsSync(path.join(tmp, 'nowhere'))).toBe(false)
+      expect(r.runner.calls).toEqual([])
+    })
+
+    it('measures the limit of Windows on the resolved path, which can be longer than the one that was given', async () => {
+      const { shared, alias } = links()
+      const spy = throughAlias(alias, shared)
+      const longReal = path.join(tmp, 'z'.repeat(WINDOWS_PATH_LIMIT))
+      spy.fs.realpathSync.native = () => longReal
+      const r = await go({ options: { out: path.join(alias, 'backups') }, deps: fakeWindows({ fs: spy.fs }) })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(PATH_TOO_LONG_ERROR)
+      expect(r.runner.calls).toEqual([])
+      expect(spy.events).toEqual([])
+    })
+
+    it('leaves a folder with no link in it as it is: the same real path, so nothing else changes', async () => {
+      const { real } = links()
+      const r = await go({ options: { out: real } })
+      expect(r.exitCode).toBe(0)
+      expect(fs.existsSync(path.join(real, FINAL))).toBe(true)
     })
   })
 

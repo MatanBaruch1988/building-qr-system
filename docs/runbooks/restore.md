@@ -111,10 +111,15 @@ see below). It never holds the connection string, the user or the password.
   of the system drive lets every signed-in account create a folder, and that is fine). An entry that only applies to what is
   made inside (inherit-only) and a deny entry are ignored. A folder owned by another account is refused. An access list that
   cannot be read, or has an entry that is not understood (a conditional one), is refused too: nothing that is not understood
-  is trusted. On macOS and Linux no folder above the backup folder may be writable by others without the sticky bit, and the
-  backup folder itself must not be writable by the group or others (see the next item but one). A folder above that only the
-  group can write in is not refused, because its members are not known. If the backup folder does not exist yet, the nearest
-  folder that exists is judged in its place. The message says whether it is the backup folder itself or a folder above it,
+  is trusted. On macOS and Linux no folder above the backup folder may be writable by the group or by others unless it has the
+  sticky bit (as `/tmp` has: nobody can rename or delete what they do not own), because a member of the group could rename the
+  whole subtree, and the members are not known; and the backup folder itself must not be writable by the group or others (see
+  the next item but one). A home folder with mode 775 (some older Linux setups give every user a private group and that mode)
+  is therefore refused: tighten it with `chmod g-w ~`. If the backup folder does not exist yet, the nearest folder that exists
+  is judged in its place. **The folders that are judged are the real ones**: `--out` is resolved first (symbolic links, on
+  Windows also junctions and short names), and the check, the work directory, `backup.log` and the rename all use the resolved
+  path, so a link cannot make the check look at other folders than the ones that hold the files. A link that points at nothing,
+  or a part of the path that cannot be inspected, is refused. The message says whether it is the backup folder itself or a folder above it,
   never an account or a path, and what to do: use a backup folder in your own profile. When this refuses the run,
   `backup.log` is not written (the screen says so), and `--report-issue` still opens its issue. **The scheduled task needs
   nothing about `TEMP` or `TMPDIR`**: the script does not use the temp folder at all, so a shared temp folder (for example one

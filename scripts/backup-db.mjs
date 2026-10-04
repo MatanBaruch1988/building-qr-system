@@ -18,9 +18,12 @@
 //      write in that folder could rename a directory away and put its own at the same path, swap a file for a link, or add an
 //      access entry of its own; so the races are not won one by one, the folders in which they could happen are refused. On
 //      Windows the access lists are read as SDDL, with one PowerShell call, and only the user, the system, the administrators
-//      and TrustedInstaller may change a folder; elsewhere the modes are read (no folder above may be writable by others
-//      without the sticky bit, and the output folder itself not by group or others). What cannot be read or understood is
-//      refused. This is the only folder rule: nothing depends on the temp folder of the user.
+//      and TrustedInstaller may change a folder; elsewhere the modes are read (no folder above may be writable by the group or
+//      others without the sticky bit, and the output folder itself not by group or others). The folders are the REAL ones: the
+//      output folder is first resolved with realpath (links, junctions, short names), and the check, the work directory, the
+//      log and the rename all use the resolved path, so a link in the path cannot make the check judge other folders than
+//      the ones that hold the files. What cannot be read, resolved or understood is refused. This is the only folder rule:
+//      nothing depends on the temp folder of the user.
 //      The checks of the next steps stay as a second net.
 //   3. Makes this run's private WORK DIRECTORY inside the output folder, with fs.mkdtemp (`.bqr-work-<random>`), after the check
 //      above and after the folder exists: the name is unpredictable, the directory is made with mode 700 in one step on macOS
@@ -143,7 +146,7 @@ export const LOG_NOT_REGULAR_ERROR =
 export const SHARED_FOLDERS_PREFIX = 'nothing was dumped, because another account can change a folder that the backup relies on: '
 export const SHARED_FOLDERS_ADVICE = ' (use a backup folder in your own profile)'
 export const SHARED_UNREADABLE_ERROR =
-  'nothing was dumped, because the access lists of the backup folder and of the folders above it could not be read, and a folder that is not known to be private is not trusted'
+  'nothing was dumped, because the backup folder and the folders above it could not be inspected (their links resolved and their access lists read), and a folder that is not known to be private is not trusted'
 export const LOG_SKIPPED = 'backup: backup.log was not written, because other accounts can change the backup folder or a folder above it'
 
 const NEON_TIMEOUT_MS = 2 * 60_000
@@ -486,6 +489,33 @@ export function sharedAclProblem(sddl, { user, kind }) {
   return null
 }
 
+/**
+ * `dir` with every link in it resolved. The nearest folder that exists is resolved with realpath (which follows symbolic links,
+ * and on Windows junctions and short 8.3 names), and the part that does not exist yet is put back on it. The folder check, the
+ * work directory, the log and the rename all use this path, so nothing goes back through a link, and the folders that are
+ * judged are the ones that hold the files: `folderChain` walks parents by name, and a link in the path would make it judge the
+ * folders of the link and not the folders of its target. Throws when a part cannot be inspected or resolved (a link that points
+ * at nothing, a folder that cannot be read): a folder that is not known is not trusted.
+ */
+function resolveFolder(dir, files) {
+  const real = files.realpathSync?.native ?? files.realpathSync
+  let existing = dir
+  const missing = []
+  for (;;) {
+    try {
+      files.lstatSync(existing) // lstat: a link that points at nothing exists, and realpath then refuses it
+      break
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error
+    }
+    const parent = path.dirname(existing)
+    if (parent === existing) throw new Error('the folder cannot be resolved')
+    missing.unshift(path.basename(existing))
+    existing = parent
+  }
+  return path.join(real(existing), ...missing)
+}
+
 /** The folders that a run relies on, as { path, kind }: the nearest existing one of `base` is a 'folder', each folder above it an 'ancestor'. */
 function folderChain(base, files, pathApi) {
   let first = base // as it is: the callers pass absolute paths, and resolving a Windows path on another system would change it
@@ -538,10 +568,9 @@ async function readSddls({ paths, runner, env }) {
  * 'itself' and 'above') } or { unreadable: true } when the access lists could not be read.
  * On Windows the security descriptors of the output folder (or, for one that is not made yet, the nearest folder that exists:
  * what is made in it inherits from it) and of every folder above it are read with one PowerShell call and judged by
- * sharedAclProblem. On macOS and Linux no folder above the output folder may be writable by others without the sticky bit, and
- * the same holds for the nearest existing folder of an output folder that is not made yet. (A folder above that only a GROUP can
- * write in is not refused: the group is usually the user's own, and its members are not known here. The output folder itself is
- * checked, with group and others, once it exists.)
+ * sharedAclProblem. On macOS and Linux no folder above the output folder may be writable by the group or others without the
+ * sticky bit, and the same holds for the nearest existing folder of an output folder that is not made yet. (The output folder
+ * itself is checked, with group and others, once it exists.) `outDir` is already resolved: see resolveFolder.
  */
 async function checkFoldersNotShared({ platform, outDir, files, runner, env, owner }) {
   const problems = []
@@ -572,11 +601,13 @@ async function checkFoldersNotShared({ platform, outDir, files, runner, env, own
     } catch {
       return { unreadable: true }
     }
-    // For an output folder that is not made yet, the nearest folder that exists stands in for it (the new folder will be made in
-    // it), under the same rule as a folder above: the folder itself is judged by its own mode, with group and others, as soon as
-    // it exists.
+    // A folder above is refused when the GROUP or others can write in it, unless it has the sticky bit (then nobody can rename or
+    // delete what they do not own: this is /tmp). A member of the group could rename the whole subtree, and the group of a folder
+    // is not always the user's own, so the members are not known. For an output folder that is not made yet, the nearest folder
+    // that exists stands in for it (the new folder will be made in it), under the same rule: the folder itself is judged by its
+    // own mode, with group and others, as soon as it exists.
     const standsIn = kind === 'folder' && folder !== outDir
-    if ((kind === 'ancestor' || standsIn) && (mode & 0o002) !== 0 && (mode & 0o1000) === 0) add(standsIn ? 'itself' : 'above')
+    if ((kind === 'ancestor' || standsIn) && (mode & 0o022) !== 0 && (mode & 0o1000) === 0) add(standsIn ? 'itself' : 'above')
   }
   return { problems }
 }
@@ -1118,7 +1149,16 @@ export async function runBackup(options, deps = {}) {
   const posix = platform !== 'win32'
   const windows = !posix
   const started = now()
-  const outDir = path.resolve(options.out)
+  // The output folder with its links resolved (see resolveFolder): everything after this goes through the real path. When it
+  // cannot be resolved the run stops at the first step of the try block, and the lexical path is only used for the messages.
+  const lexicalOut = path.resolve(options.out)
+  let outDir = lexicalOut
+  let outResolved = true
+  try {
+    outDir = resolveFolder(lexicalOut, files)
+  } catch {
+    outResolved = false
+  }
   const finalName = backupFileName(started)
   const partialName = PARTIAL_NAME
   // This run's own private work directory, made by fs.mkdtemp inside the output folder (see the header), and the file in it.
@@ -1143,6 +1183,7 @@ export async function runBackup(options, deps = {}) {
   })
   const hiddenFolders = [
     [outDir, '<out dir>'],
+    [lexicalOut, '<out dir>'],
     [home, '~'],
   ]
   let scrub = makeScrubber(undefined, hiddenFolders)
@@ -1160,6 +1201,10 @@ export async function runBackup(options, deps = {}) {
   const previousMask = posix ? umask(PRIVATE_UMASK) : undefined
 
   try {
+    if (!outResolved) {
+      logSkipped = '' // a folder that cannot be resolved is not known, so no log is written in it, and the message says it all
+      throw new Error(SHARED_UNREADABLE_ERROR)
+    }
     // The longest path of the run, before anything is made: the file in the work directory (in the output folder, whose name
     // mkdtemp will make with six more characters) or the final file (in the output folder).
     const longestInWork = path.join(outDir, `${WORK_PREFIX}xxxxxx`, partialName).length
