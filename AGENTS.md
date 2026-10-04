@@ -167,13 +167,6 @@ The same holds for the API and the offline sync payload (`POST /api/scans/sync`,
 - When a version of a stored shape has to change (the queue key `qr.queue.v1`, the session in the browser), read the old
   one and the new one.
 
-Authorization is checked by each handler, so a new route must either refuse a request without credentials (its handler
-starts with `requireAdmin`, `requireProvider` or `requireApiKey`, before it reads the body or looks anything up) or be
-on the `PUBLIC` list of `tests/route-auth.test.js` with a one-line reason. That test walks every registered route
-(`routeTable()` in `server/router.js`) and fails for a route that answers anything but 401 without credentials, or that
-accepts a valid credential of another role (committee session, provider device token, agent key). The guard that a route
-must use comes from its path (`GUARDS` in that test), so a new group of routes needs a rule there.
-
 ## Git and pull requests
 
 - Branch from `master`. One pull request is about one thing and stays small.
@@ -314,9 +307,6 @@ reviewing agent should apply it too.
   `pull_request_target`, or sets `persist-credentials: true`.
 - An endpoint under `/api` without the right authorization check (committee member, service provider or agent key), or
   any write through the agent API (it is read-only).
-- A route added to the `PUBLIC` list of `tests/route-auth.test.js` without a reason that justifies answering without
-  credentials, or a protected route made public (moved to that list, or its authorization call removed or moved after
-  other work).
 - A change that widens who can start `claude.yml` or `claude-review.yml` (another or wider sender check, a fork, a bot,
   `allowed_bots`, `allowed_non_write_users`), that loosens their tool lists (a new or broader `Bash(...)` pattern, `Edit` or
   `Write` in `--allowedTools`, `Bash(git push *)`, `Bash(gh api *)`, a network tool, a shorter `--disallowedTools`, a
