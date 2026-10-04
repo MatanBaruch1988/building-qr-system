@@ -11,7 +11,9 @@
 //   - A route under an existing rule needs nothing here: it is guarded by the router. Its handler may still call the guard
 //     (`const { admin } = await requireAdmin(req)`) to learn who is signed in; the guard remembers its answer for the
 //     request, so that costs no second lookup. The context of the handler also has the guard's answer as `auth`.
-//   - A route that is meant to answer without credentials gets an entry in PUBLIC, with the reason.
+//   - A route that is meant to answer without credentials gets an entry in PUBLIC, with the reason, and the same route
+//     is added to EXPECTED_PUBLIC in tests/route-auth.test.js (a second list, without reasons, so that making a route
+//     public needs two edits that a reviewer sees).
 //   - A route in a new group of paths needs a rule in RULES (and the same rule in GUARDS of tests/route-auth.test.js, an
 //     independent copy that the test compares with this one).
 //   - A pattern that no rule owns, or that several rules own, throws when it is registered.
@@ -72,7 +74,7 @@ export function makeAccessFor(publicRoutes, rules) {
     if (owners.length !== 1) {
       throw new Error(
         `${method} ${pattern} is owned by ${owners.length === 0 ? 'no access rule' : `several access rules (${owners.map((r) => r.guard).join(', ')})`}. ` +
-          'If the route is meant to answer without credentials, add it to PUBLIC in server/access.js with the reason. ' +
+          'If the route is meant to answer without credentials, add it to PUBLIC in server/access.js with the reason (and to EXPECTED_PUBLIC in tests/route-auth.test.js). ' +
           'Otherwise add or fix the rule that gives its path a guard in RULES in server/access.js, and in GUARDS of tests/route-auth.test.js.',
       )
     }

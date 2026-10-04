@@ -96,6 +96,22 @@ const keyOf = (r) => `${r.method} ${r.path}`
 const publicKeys = new Set(PUBLIC.map(keyOf))
 const PROTECTED = ROUTES.filter((r) => !publicKeys.has(keyOf(r)))
 
+// The routes that answer without credentials, written out a second time on purpose (the reasons live in PUBLIC in
+// server/access.js). The walk below trusts PUBLIC to say which routes are open, so without this list a protected route that
+// is moved to PUBLIC would simply stop being tested. With it, that change fails a test unless the test is changed too,
+// and a reviewer sees both edits.
+const EXPECTED_PUBLIC = [
+  'GET /health',
+  'GET /public/providers',
+  'GET /public/building',
+  'GET /public/points/resolve',
+  'POST /session',
+  'POST /admin/google',
+  'GET /admin/config',
+  'POST /admin/dev-login',
+  'POST /admin/logout',
+]
+
 /**
  * Every route of the table that `lookup` (a function like `accessFor` of server/access.js) does not give the access that
  * this test expects, as sentences: a PUBLIC route must be open, every other route must get the guard that GUARDS says for
@@ -442,8 +458,26 @@ describe('the route table', () => {
 })
 
 describe('the PUBLIC list', () => {
-  it('gives every entry a reason', () => {
-    for (const p of PUBLIC) expect(p.why.trim().length, `${keyOf(p)} needs a reason`).toBeGreaterThanOrEqual(20)
+  it('holds exactly the routes of EXPECTED_PUBLIC', () => {
+    const actual = PUBLIC.map(keyOf).sort()
+    const expected = [...EXPECTED_PUBLIC].sort()
+    const added = actual.filter((k) => !expected.includes(k))
+    const removed = expected.filter((k) => !actual.includes(k))
+    expect(
+      { added, removed },
+      'Making a route public (or protected again) is a security decision: it needs BOTH lists changed, PUBLIC in ' +
+        'server/access.js with the reason, and EXPECTED_PUBLIC in tests/route-auth.test.js, so that a reviewer sees it twice. ' +
+        `Routes on PUBLIC but not expected: ${added.join(', ') || 'none'}. Expected but not on PUBLIC: ${removed.join(', ') || 'none'}.`,
+    ).toEqual({ added: [], removed: [] })
+    expect(new Set(EXPECTED_PUBLIC).size, 'EXPECTED_PUBLIC lists a route twice').toBe(EXPECTED_PUBLIC.length)
+  })
+
+  it('gives every entry a non-empty reason', () => {
+    for (const p of PUBLIC) {
+      expect(typeof p.why, `${keyOf(p)} needs a reason (why)`).toBe('string')
+      expect(p.why.trim(), `${keyOf(p)} needs a reason (why)`).not.toBe('')
+      expect(p.why.trim().length, `${keyOf(p)} needs a real reason, not a word`).toBeGreaterThanOrEqual(20)
+    }
   })
 
   it('names each route once, and only routes that exist (a removed route leaves no stale entry)', () => {
@@ -452,7 +486,7 @@ describe('the PUBLIC list', () => {
     const registered = new Set(ROUTES.map(keyOf))
     expect(
       keys.filter((k) => !registered.has(k)),
-      'on the PUBLIC list but not registered: remove it from PUBLIC (tests/route-auth.test.js)',
+      'on the PUBLIC list but not registered: remove it from PUBLIC (server/access.js) and from EXPECTED_PUBLIC (tests/route-auth.test.js)',
     ).toEqual([])
   })
 
