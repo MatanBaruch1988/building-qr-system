@@ -114,7 +114,7 @@ const PLACES = {
 
 const HOW_TO_FIX =
   'A route that is not on the PUBLIC list of tests/route-auth.test.js must call its guard as the first thing its ' +
-  'handler does (before it reads the body or looks anything up): requireAdmin for /admin/ routes, requireApiKey for ' +
+  'handler does (before it looks anything up or uses the body): requireAdmin for /admin/ routes, requireApiKey for ' +
   '/agent/v1/ routes and /health/db, requireProvider for the provider routes (see GUARDS). Nothing may run before ' +
   'that call: no query, no write, no transaction (a request without credentials must not touch the database at all). ' +
   'If the route is meant to answer without credentials, add it to PUBLIC with the reason.'
