@@ -69,8 +69,14 @@ test.describe('manifest', () => {
 test.describe('service worker', () => {
   test('registers, activates and takes control of the page', async ({ page }) => {
     await page.goto('/')
-    // `ready` resolves as soon as a worker exists, which can still be "activating": wait for the last state
-    await page.waitForFunction(async () => (await navigator.serviceWorker.ready).active?.state === 'activated')
+    // `ready` resolves as soon as a worker exists, which can still be "activating", so read the state until it is
+    // "activated". Not `waitForFunction(async () => ...)`: it takes the promise that an async function returns as a true
+    // value and returns at once, so it never waited (the state was read once, and WebKit often showed "activating").
+    await expect
+      .poll(() => page.evaluate(async () => (await navigator.serviceWorker.ready).active?.state), {
+        message: 'the service worker becomes activated',
+      })
+      .toBe('activated')
     const registration = await page.evaluate(async () => {
       const reg = await navigator.serviceWorker.ready
       return { scope: reg.scope, state: reg.active?.state, script: reg.active?.scriptURL }
