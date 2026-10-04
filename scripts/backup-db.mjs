@@ -39,8 +39,12 @@
 //      private folder on the drive of the output folder). The work directory is removed at the end, whatever happened, and
 //      nothing in it survives: another account can at most replace the FINAL file after the fact, and the data in it was
 //      never readable by that account.
-//   4. Keeps the newest --keep files that match that exact name and deletes the older ones. Any other file in the folder is
-//      left alone, and nothing is rotated after a failed backup.
+//   4. Keeps the newest --keep files that match that exact name and deletes the older ones. ALL of them are sorted together
+//      by the UTC time in their names, so a run that started earlier and finishes later than a newer one never deletes the
+//      newer dump: when its own file is older than the kept ones, its own file is removed (the run still ends with 0, with
+//      the warning `own-dump-older-than-kept`, because a newer verified dump exists). A name with a time in the future (a
+//      clock that was wrong) is not counted and not deleted. Any other file in the folder is left alone, and nothing is
+//      rotated after a failed backup.
 //   5. Appends one line to backup.log in the folder (the time, ok or failed, the masked host, the file and its size, or a
 //      short error) and prints a summary. It never writes the URL, the user or the password, and every message is cleaned
 //      of them first.
@@ -424,30 +428,59 @@ export const WORK_PREFIX = 'bqr-work-'
 export const PARTIAL_NAME = 'partial.dump'
 
 /**
- * Which of `names` to delete so that `keep` backups are left: the file `newName` (the backup that was just made) is always
- * kept, and so are the newest `keep - 1` others. A name that does not match BACKUP_NAME is never picked, whatever it is.
- * The names sort by time because the time is in them.
+ * The UTC time that a backup name says (a Date), or null when `name` is not the name of a backup: it must match BACKUP_NAME
+ * and the time in it must be a real one (month 13 is not).
  */
-export function selectOld(names, keep, newName) {
-  const others = names
-    .filter((name) => BACKUP_NAME.test(name) && name !== newName)
-    .sort()
-    .reverse()
-  return others.slice(Math.max(0, keep - 1))
+export function backupTime(name) {
+  const match = /^building-qr-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})Z\.dump$/.exec(String(name))
+  if (!match) return null
+  const [year, month, day, hour, minute] = match.slice(1).map(Number)
+  const time = new Date(Date.UTC(year, month - 1, day, hour, minute))
+  return backupFileName(time) === name ? time : null
 }
 
 /**
- * Deletes the old backups in `dir`. Returns { removed (names), failed (a number) }. Only plain files are considered.
- * `files` is the file system (a test passes a stub).
+ * Which of `names` to delete so that the newest `keep` backups are left. ALL the backups are sorted together by the time in
+ * their names (the time is in the name, and the names sort by it), and the first `keep` are kept, whichever run made them
+ * and whichever run finishes last: a run that started earlier and finishes after a newer one must not delete the newer dump
+ * (or push it out of the kept ones) because its own file is new on disk. Its own file is just one of the backups: when it is
+ * older than the `keep` newest ones, it goes too.
+ *
+ * A name that is not a backup (it does not match BACKUP_NAME, or its time is not a real one) is never picked, and is not
+ * counted. `latest` (a Date, the time now) is the newest time that a backup can have: a name that says a later time was not
+ * made by a run of this machine's clock, but by a clock that was wrong. Counted, it would take the place of a real backup
+ * for ever (with --keep 1, every new dump would be deleted at once), so it is not counted and not picked either.
+ * Returns { old (the names to delete, newest first), future (how many names were ignored for being later than `latest`) }.
  */
-export function rotate(dir, keep, newName, files = fs) {
+export function selectOld(names, keep, latest) {
+  const backups = []
+  let future = 0
+  for (const name of names) {
+    const time = backupTime(name)
+    if (!time) continue
+    if (latest && time > latest) {
+      future++
+      continue
+    }
+    backups.push(name)
+  }
+  backups.sort().reverse()
+  return { old: backups.slice(Math.max(0, keep)), future }
+}
+
+/**
+ * Deletes the old backups in `dir` (see selectOld). Returns { removed (names), failed (a number), future (a number) }. Only
+ * plain files are considered. `files` is the file system (a test passes a stub).
+ */
+export function rotate(dir, keep, latest, files = fs) {
   const names = files
     .readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
+  const { old, future } = selectOld(names, keep, latest)
   const removed = []
   let failed = 0
-  for (const name of selectOld(names, keep, newName)) {
+  for (const name of old) {
     try {
       files.rmSync(path.join(dir, name), { force: true })
       removed.push(name)
@@ -455,7 +488,7 @@ export function rotate(dir, keep, newName, files = fs) {
       failed++
     }
   }
-  return { removed, failed }
+  return { removed, failed, future }
 }
 
 // ---- cleaning text of secrets ----------------------------------------------------------------------------------------
@@ -753,6 +786,13 @@ export async function runBackup(options, deps = {}) {
   let logSkipped = null
   const logPath = path.join(outDir, LOG_NAME)
   const say = (print, text) => attempt(() => print(text))
+  const clock = () => {
+    try {
+      return now()
+    } catch {
+      return new Date()
+    }
+  }
   // A file system error carries an absolute path, and on most machines that path holds the user's name.
   let home = ''
   attempt(() => {
@@ -902,9 +942,13 @@ export async function runBackup(options, deps = {}) {
 
     let removed = 0
     try {
-      const rotation = rotate(outDir, options.keep, finalName, files)
+      // The time NOW, not the time this run started: a run that was started later, and finished earlier, has a newer name.
+      const rotation = rotate(outDir, options.keep, clock(), files)
       removed = rotation.removed.length
       if (rotation.failed) warnings.push(`${rotation.failed}-old-backups-not-removed`)
+      // A newer verified dump is kept, so this run's own file is among the old ones: it was made and checked, and removed.
+      if (rotation.removed.includes(finalName)) warnings.push('own-dump-older-than-kept')
+      if (rotation.future) warnings.push(`${rotation.future}-backups-dated-in-the-future-ignored`)
     } catch {
       warnings.push('old-backups-not-checked')
     }
@@ -923,12 +967,7 @@ export async function runBackup(options, deps = {}) {
   if (!result.ok && options.reportIssue) {
     issue = await openIssue({ repo: options.reportIssue, runner, now, env, tmpdir, files })
   }
-  let when
-  try {
-    when = now()
-  } catch {
-    when = new Date()
-  }
+  const when = clock()
   const line = logLine({
     when,
     ok: result.ok,

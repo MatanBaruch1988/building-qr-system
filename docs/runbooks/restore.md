@@ -74,7 +74,12 @@ alone (see "Who can read them"), so two runs in the same minute never share a fi
 through every data block and exit with 0. The first check alone is not enough, because the table of contents is at the
 start of the file and a dump that was cut off after it would pass. Only then is the file named
 `building-qr-<UTC date and time>.dump` (a file of the same minute is replaced by it). A failed dump leaves no file behind.
-It keeps the newest 30 dumps (`--keep`) and deletes older ones, and it never touches another file in the folder. One line
+It keeps the newest 30 dumps (`--keep`) and deletes older ones, and it never touches another file in the folder. "Newest"
+is decided by the UTC time in the file names, for all the dumps together, whichever run finishes last: a run that started
+earlier and finishes after a newer one never deletes the newer dump. When its own dump is older than the ones that are
+kept, it removes its own dump instead, ends with 0 and writes `warning=own-dump-older-than-kept` in `backup.log` (a newer
+verified dump exists). A file whose name says a time later than now (a clock that was wrong once) is not counted and not
+deleted, and the log says `backups-dated-in-the-future-ignored`; delete such a file by hand. One line
 per run is added to `backup.log` in the same folder: the time (DD/MM/YYYY HH:MM), ok or failed, the masked host, the file
 and its size, or a short error. It never holds the connection string, the user or the password.
 

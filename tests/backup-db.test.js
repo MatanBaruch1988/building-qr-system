@@ -40,6 +40,7 @@ import {
   resolvePgBin,
   runBackup,
   runProcess,
+  backupTime,
   selectOld,
   windowsTool,
 } from '../scripts/backup-db.mjs'
@@ -456,18 +457,43 @@ describe('the name of a backup', () => {
   })
 })
 
-describe('which old backups to delete', () => {
+describe('which backups to delete', () => {
   const names = [...oldBackups]
+  const picked = (list, keep, latest) => selectOld(list, keep, latest).old
 
-  it('keeps the newest ones, counting the new backup, and picks the rest', () => {
-    expect(selectOld([...names, FINAL], 3, FINAL)).toEqual(['building-qr-20260903T0000Z.dump', 'building-qr-20260902T0000Z.dump', 'building-qr-20260901T0000Z.dump'].slice(0, 3))
-    expect(selectOld([...names, FINAL], 3, FINAL).sort()).toEqual(oldBackups.slice(0, 3))
-    expect(selectOld([...names, FINAL], 1, FINAL).sort()).toEqual(oldBackups)
-    expect(selectOld([...names, FINAL], 30, FINAL)).toEqual([])
-    expect(selectOld([FINAL], 3, FINAL)).toEqual([])
+  it('knows the time that a backup name says, and a name that is not a backup has none', () => {
+    expect(backupTime(FINAL)).toEqual(new Date('2026-10-03T07:15:00Z'))
+    expect(backupTime('building-qr-20260101T2359Z.dump')).toEqual(new Date('2026-01-01T23:59:00Z'))
+    expect(backupFileName(backupTime(FINAL))).toBe(FINAL)
+    for (const bad of [
+      'building-qr-20261301T0000Z.dump', // month 13
+      'building-qr-20260230T0000Z.dump', // 30 February
+      'building-qr-20261003T2460Z.dump', // minute 60, hour 24
+      'building-qr-latest.dump',
+      'building-qr-20261003T0715Z.dump.bak',
+      'notes.txt',
+      '',
+    ]) {
+      expect(backupTime(bad), bad).toBeNull()
+    }
   })
 
-  it('never picks a name that does not match the pattern exactly', () => {
+  it('sorts all the backups together by their time and keeps the newest ones: whichever file is new on disk is just one of them', () => {
+    expect(picked([...names, FINAL], 3)).toEqual(['building-qr-20260903T0000Z.dump', 'building-qr-20260902T0000Z.dump', 'building-qr-20260901T0000Z.dump'])
+    expect(picked([...names, FINAL], 1)).toEqual([...oldBackups].reverse())
+    expect(picked([...names, FINAL], 30)).toEqual([])
+    expect(picked([FINAL], 3)).toEqual([])
+    expect(picked([], 3)).toEqual([])
+  })
+
+  it('picks the file of a run that is older than the ones that are kept, however it came to be there last', () => {
+    const newer = ['building-qr-20261003T0717Z.dump', 'building-qr-20261003T0718Z.dump']
+    expect(picked([FINAL, ...newer], 2)).toEqual([FINAL]) // the run of 07:15, finishing after those of 07:17 and 07:18
+    expect(picked([FINAL, ...newer], 3)).toEqual([])
+    expect(picked([FINAL, newer[1]], 1)).toEqual([FINAL])
+  })
+
+  it('never picks a name that is not a backup, and does not count it', () => {
     const others = [
       'notes.txt',
       'backup.log',
@@ -478,19 +504,24 @@ describe('which old backups to delete', () => {
       'xbuilding-qr-20250101T0000Z.dump',
       'building-qr-20250101T0000Z.partial.dump',
       'my building-qr-20250101T0000Z.dump',
+      'building-qr-20261301T0000Z.dump', // matches the pattern, but its time is not a real one
+      'building-qr-20260230T0000Z.dump',
     ]
-    expect(selectOld([...others, ...names, FINAL], 1, FINAL).sort()).toEqual(oldBackups)
-    expect(selectOld(others, 1, FINAL)).toEqual([])
+    expect(picked([...others, ...names, FINAL], 1)).toEqual([...oldBackups].reverse())
+    expect(picked(others, 1)).toEqual([])
   })
 
-  it('never picks the new backup, even when other files have a later name', () => {
+  it('does not count a name that says a time later than now, and does not pick it: it came from a wrong clock', () => {
     const future = ['building-qr-20990101T0000Z.dump', 'building-qr-20980101T0000Z.dump']
-    const picked = selectOld([...names, ...future, FINAL], 2, FINAL)
-    expect(picked).not.toContain(FINAL)
-    // the new one and the newest other one are kept, so two files are left
-    expect(picked.length).toBe(names.length + future.length - 1)
-    expect(picked).not.toContain('building-qr-20990101T0000Z.dump')
-    expect(selectOld([...future, FINAL], 1, FINAL).sort()).toEqual([...future].sort())
+    const now = new Date('2026-10-03T08:00:00Z')
+    expect(selectOld([...names, ...future, FINAL], 2, now)).toEqual({
+      old: ['building-qr-20260904T0000Z.dump', 'building-qr-20260903T0000Z.dump', 'building-qr-20260902T0000Z.dump', 'building-qr-20260901T0000Z.dump'],
+      future: 2,
+    })
+    // with keep 1 the new backup is the one that stays, not a file from the future
+    expect(selectOld([...future, FINAL], 1, now)).toEqual({ old: [], future: 2 })
+    // without a time for now (a caller that has no clock) the names count like any other
+    expect(selectOld([...future, FINAL], 1).old).toEqual(['building-qr-20980101T0000Z.dump', FINAL])
   })
 })
 
@@ -958,12 +989,16 @@ describe('retention', () => {
     expect(r.out[0]).toMatch(/removed 1 old file$/)
   })
 
-  it('never deletes the new backup, even when older backups have a later name (a clock that went back)', async () => {
+  it('does not count a backup dated in the future, and does not delete it: the new dump is kept, with a warning', async () => {
     seed(['building-qr-20990101T0000Z.dump', 'building-qr-20980101T0000Z.dump', ...oldBackups.slice(0, 2)])
     const r = await go({ options: { keep: 2 } })
-    expect(r.files).toContain(FINAL)
-    expect(r.files.filter((name) => BACKUP_NAME.test(name))).toHaveLength(2)
-    expect(r.files).toContain('building-qr-20990101T0000Z.dump')
+    expect(r.exitCode).toBe(0)
+    // the newest two of [the new dump, 02 September, 01 September] are kept; the two from the future are left as they are
+    expect(r.files).toEqual(
+      ['backup.log', FINAL, 'building-qr-20260902T0000Z.dump', 'building-qr-20980101T0000Z.dump', 'building-qr-20990101T0000Z.dump'].sort(),
+    )
+    expect(r.removed).toBe(1)
+    expect(r.warning).toBe('2-backups-dated-in-the-future-ignored')
   })
 
   it('deletes nothing when there are fewer files than --keep', async () => {
@@ -971,6 +1006,97 @@ describe('retention', () => {
     const r = await go({ options: { keep: 30 } })
     expect(r.files).toEqual([FINAL, 'backup.log', ...oldBackups.slice(0, 2)].sort())
     expect(r.out[0]).toMatch(/removed 0 old files$/)
+  })
+})
+
+// ---- runs that finish in the opposite order of their start --------------------------------------------------------------------------
+
+describe('retention when a run that started earlier finishes later', () => {
+  const T0715 = new Date('2026-10-03T07:15:42Z')
+  const T0716 = new Date('2026-10-03T07:16:10Z')
+  const END = new Date('2026-10-03T07:20:00Z')
+  const A = 'building-qr-20261003T0715Z.dump' // the older run
+  const B = 'building-qr-20261003T0716Z.dump' // the newer run
+  /** The clock of a run: its start the first time it is asked, and a later time (the end of the run) after that. */
+  const clockOf = (start, end = END) => {
+    let first = true
+    return () => {
+      if (!first) return end
+      first = false
+      return start
+    }
+  }
+  const backupsLeft = () => fs.readdirSync(dir).filter((name) => BACKUP_NAME.test(name)).sort()
+
+  /** Two overlapping runs: A starts first and is slow, B starts a minute later and finishes first. */
+  async function overlapping(keep, seeded = []) {
+    seed(seeded)
+    const slowDump = async (call) => {
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      return defaults.pg_dump(call)
+    }
+    const [a, b] = await Promise.all([
+      go({ options: { keep }, runner: makeRunner({ pg_dump: slowDump }), deps: { now: clockOf(T0715) } }),
+      go({ options: { keep }, deps: { now: clockOf(T0716) } }),
+    ])
+    return { a, b }
+  }
+
+  it('with --keep 1 the run that finishes last does not delete the newer dump: it removes its own, and still ends with 0', async () => {
+    const { a, b } = await overlapping(1)
+    expect(b.exitCode).toBe(0)
+    expect(b.removed).toBe(0) // when B finished, A was not there yet
+    expect(a.exitCode).toBe(0) // a newer verified dump exists
+    expect(a.ok).toBe(true)
+    expect(a.removed).toBe(1)
+    expect(a.warning).toBe('own-dump-older-than-kept')
+    expect(backupsLeft()).toEqual([B])
+    expect(a.log.split('\n').filter(Boolean).at(-1)).toContain(`file=${A} size=15 removed=1 warning=own-dump-older-than-kept`)
+    expect(a.out).toEqual([`backup ok: ${A}, 15 B, removed 1 old file`])
+    expect(a.errs).toEqual(['backup: warning, own-dump-older-than-kept'])
+    expect(b.errs).toEqual([])
+  })
+
+  it('with --keep 2 both dumps stay, and the oldest of the older backups goes', async () => {
+    const { a, b } = await overlapping(2, oldBackups.slice(0, 3))
+    expect(a.exitCode).toBe(0)
+    expect(b.exitCode).toBe(0)
+    expect(backupsLeft()).toEqual([A, B])
+    expect(a.warning).toBeUndefined() // its own file is among the newest two
+    expect(a.removed + b.removed).toBe(3) // the three older ones, 03 September and before
+  })
+
+  it('with --keep 2 and two newer dumps already there, a late older run cannot push one of them out', async () => {
+    const newer = ['building-qr-20261003T0717Z.dump', 'building-qr-20261003T0718Z.dump']
+    seed([...newer, ...oldBackups.slice(0, 2)])
+    const r = await go({ options: { keep: 2 }, deps: { now: clockOf(T0715) } })
+    expect(r.exitCode).toBe(0)
+    expect(backupsLeft()).toEqual(newer) // the old rule kept the new file and deleted the 07:17 dump
+    expect(r.removed).toBe(3) // its own file and the two of September
+    expect(r.warning).toBe('own-dump-older-than-kept')
+  })
+
+  it('in the normal case (the new dump is the newest) nothing changes: the newest --keep are kept, no warning', async () => {
+    seed(oldBackups)
+    const r = await go({ options: { keep: 3 } })
+    expect(backupsLeft()).toEqual([FINAL, 'building-qr-20260904T0000Z.dump', 'building-qr-20260905T0000Z.dump'].sort())
+    expect(r.removed).toBe(3)
+    expect(r.warning).toBeUndefined()
+  })
+
+  it('a second run of the same minute replaces the file of the first and removes nothing else that is kept', async () => {
+    const first = await go({ options: { keep: 1 }, deps: { now: clockOf(T0715) } })
+    const second = await go({ options: { keep: 1 }, deps: { now: clockOf(T0715) } })
+    expect(first.warning).toBeUndefined()
+    expect(second.warning).toBeUndefined()
+    expect(backupsLeft()).toEqual([A])
+  })
+
+  it('treats a dump of a later minute than now as a wrong clock, not as a newer dump (a frozen clock makes it one)', async () => {
+    seed([B])
+    const r = await go({ options: { keep: 1 }, deps: { now: () => T0715 } }) // now is 07:15 and 07:16 has not come yet
+    expect(backupsLeft()).toEqual([A, B])
+    expect(r.warning).toBe('1-backups-dated-in-the-future-ignored')
   })
 })
 
