@@ -70,4 +70,9 @@ export default {
   'notice.dismiss': 'סגירה',
   'update.available': 'יש גרסה חדשה של האפליקציה',
   'update.apply': 'עדכון',
+
+  // The screen that replaces a broken one (src/ui/ErrorBoundary.jsx).
+  'crash.title': 'משהו השתבש במסך הזה',
+  'crash.retry': 'נסו שוב',
+  'crash.reload': 'טענו מחדש את האפליקציה',
 }
