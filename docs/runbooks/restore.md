@@ -111,10 +111,12 @@ see below). It never holds the connection string, the user or the password.
   of the system drive lets every signed-in account create a folder, and that is fine). An entry that only applies to what is
   made inside (inherit-only) and a deny entry are ignored. A folder owned by another account is refused. An access list that
   cannot be read, or has an entry that is not understood (a conditional one), is refused too: nothing that is not understood
-  is trusted. On macOS and Linux no folder above the backup folder may be writable by the group or by others unless it has the
-  sticky bit (as `/tmp` has: nobody can rename or delete what they do not own), because a member of the group could rename the
-  whole subtree, and the members are not known; and the backup folder itself must not be writable by the group or others (see
-  the next item but one). A home folder with mode 775 (some older Linux setups give every user a private group and that mode)
+  is trusted. On macOS and Linux every folder of the chain, the backup folder and each folder above it, must be owned by you or
+  by root (an owner can rename or delete anything in a folder, and so can the owner of a sticky folder: the sticky bit only
+  protects a file from the others), and no folder above the backup folder may be writable by the group or by others unless it
+  has the sticky bit and is owned by you or root (as `/tmp` is: nobody can rename or delete what they do not own), because a
+  member of the group could rename the whole subtree, and the members are not known; and the backup folder itself must not be
+  writable by the group or others (see the next item but one). A home folder with mode 775 (some older Linux setups give every user a private group and that mode)
   is therefore refused: tighten it with `chmod g-w ~`. If the backup folder does not exist yet, the nearest folder that exists
   is judged in its place. **The folders that are judged are the real ones**: `--out` is resolved first (symbolic links, on
   Windows also junctions and short names), and the check, the work directory, `backup.log` and the rename all use the resolved
@@ -182,7 +184,13 @@ see below). It never holds the connection string, the user or the password.
   `C:\Program Files\PostgreSQL\18\bin`, then `PATH`.
 - The Neon CLI, signed in (`neon auth`) as a person who can see the project. Any other Postgres works too: set
   `BACKUP_DATABASE_URL` to its direct connection string (a host without `-pooler`, because `pg_dump` needs a session) and
-  leave out `--neon-project`. That database must carry the marker `production` (see "What runs"); a database that was never
+  leave out `--neon-project`. Never type the string in a command (`export BACKUP_DATABASE_URL=postgres://...`, or the
+  variable in front of `node`): the shell history keeps it (see "Why no secret is typed in a command" below). Put it in the
+  variable from a prompt that is not recorded. In bash:
+  `read -rs -p 'Connection string: ' BACKUP_DATABASE_URL; export BACKUP_DATABASE_URL`. In zsh:
+  `read -rs 'BACKUP_DATABASE_URL?Connection string: '; export BACKUP_DATABASE_URL`. In PowerShell:
+  `$env:BACKUP_DATABASE_URL = [System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Connection string')).Password`.
+  A scheduled task cannot answer a prompt, so for the daily task use the Neon CLI, which needs no string. That database must carry the marker `production` (see "What runs"); a database that was never
   deployed to production by this project has none, and the backup refuses it until the table
   `public.environment_marker (environment text)` holds a row `production`. Use one of the two, never both: when both are given the run stops (exit code 1, nothing is
   dumped) instead of letting one of them win, because a backup of the wrong database is worse than none.
@@ -205,44 +213,76 @@ see below). It never holds the connection string, the user or the password.
 - A run by hand is the same command as the task (below). It prints one line with the file, its size and how many old files
   it removed, and exits with 1 on a failure.
 
-**How to restore from a dump.** The dump is a copy of the whole database at one moment. Do it the careful way:
+**How to restore from a dump.** The dump is a copy of the whole database at one moment. Do it the careful way.
+
+**Why no secret is typed in a command.** Whatever is typed in a command is recorded: in the history file of bash or zsh, and in
+the history file of PowerShell (PSReadLine, `ConsoleHost_history.txt`), where it stays after the window is closed, unprotected,
+and in a backup of the profile; and while a program runs, its arguments are visible to the other users of the machine. The
+steps below therefore never type a password. The Neon CLI prints the connection string, and the lines below take it into
+variables without showing it; the history keeps only the lines themselves, which hold no secret. Where a password has to be
+typed (a Postgres that is not on Neon), it goes into a prompt that is not recorded.
+
+The steps:
 
 1. Make an empty target that is not production: a new empty database on a check branch (section 1 above), or in a new Neon
    project. With the Neon CLI:
 
    ```
    neon databases create --project-id <project id> --branch <check branch> --name restore_check
-   neon connection-string <check branch> --project-id <project id> --database-name restore_check
    ```
 
-   The second command prints the direct connection string of the empty database (the host, the role, the password and the
-   database name are the parts of it). It is a secret: keep it in memory or in a file outside the repository, and never in a
-   chat, an issue or a pull request. The database is empty on purpose: `pg_restore` makes the tables itself.
-2. Restore the dump into it with the same version of the tools (18 or newer). Put the values of the target in the
-   environment of this one terminal window, and give `pg_restore` only the name of the database (this is how the drill below
-   ran, and it keeps the password out of the arguments of the program, which other users of a machine can see):
+   The database is empty on purpose: `pg_restore` makes the tables itself.
+2. Put the connection of that database in the environment of this one terminal window. The direct connection string of the
+   empty database holds the host, the role, the password and the database name. It is a secret: it goes into variables in
+   memory (never into a command you type, a file in the repository, a chat, an issue or a pull request).
+
+   In bash or zsh:
 
    ```
-   export PGHOST=<host> PGPORT=5432 PGUSER=<role> PGPASSWORD=<password> PGSSLMODE=require
+   url=$(neon connection-string <check branch> --project-id <project id> --database-name restore_check)
+   rest=${url#*://}; auth=${rest%%@*}; hostdb=${rest#*@}
+   export PGUSER=${auth%%:*} PGPASSWORD=${auth#*:} PGHOST=${hostdb%%/*} PGPORT=5432 PGSSLMODE=require
+   unset url rest auth hostdb
+   ```
+
+   In PowerShell (`neon.cmd` and not `neon`: the `.ps1` shim that npm makes can be blocked by the execution policy):
+
+   ```
+   $url = neon.cmd connection-string <check branch> --project-id <project id> --database-name restore_check
+   $u = [Uri]$url
+   $login = $u.UserInfo.Split(':', 2)
+   $env:PGUSER = [Uri]::UnescapeDataString($login[0])
+   $env:PGPASSWORD = [Uri]::UnescapeDataString($login[1])
+   $env:PGHOST = $u.Host; $env:PGPORT = '5432'; $env:PGSSLMODE = 'require'
+   Remove-Variable url, u, login
+   ```
+
+   A generated Neon password is made of letters and digits, so the bash lines need no decoding (the PowerShell lines decode it
+   anyway, which does no harm). If you must type a password (a Postgres that is not on Neon), set the other variables with ordinary commands, they
+   are not secrets (`PGHOST`, `PGPORT`, `PGUSER`, `PGSSLMODE`), and take the password at a prompt that is not recorded: in
+   bash `read -rs -p 'Password: ' PGPASSWORD; export PGPASSWORD` (in zsh `read -rs 'PGPASSWORD?Password: '; export PGPASSWORD`),
+   in PowerShell `$env:PGPASSWORD = [System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Password')).Password`.
+   The secure string is turned into text only in memory, for the variable.
+3. Restore the dump into it with the same version of the tools (18 or newer), giving `pg_restore` only the name of the
+   database (this is how the drill below ran, and it keeps the password out of the arguments of the program):
+
+   ```
    pg_restore --no-owner --no-privileges --exit-on-error --dbname restore_check <file>
    ```
 
-   In PowerShell set each variable the same way, `$env:PGHOST = '<host>'`, `$env:PGPORT = '5432'` and so on, then run the
-   same `pg_restore` line. Close the window afterwards.
-
-   `--exit-on-error` stops at the first error instead of leaving a half restored copy. `--no-owner` and `--no-privileges`
-   make the tables belong to the role you connect with. `--dbname` is required: without it `pg_restore` prints the SQL to
-   the screen and restores nothing. When all is well it prints nothing and exits with 0 (the drill below took about 16
-   seconds for a small database, most of it the network). For a one-off by hand `--dbname` also accepts the whole
-   connection string, but then the password is part of the command line.
-3. Check the copy with the queries of step 2 above (the counts of `scans`, `points` and `providers`, and `max(received_at)` of
+   Close the window afterwards: the variables go with it. `--exit-on-error` stops at the first error instead of leaving a half
+   restored copy. `--no-owner` and `--no-privileges` make the tables belong to the role you connect with. `--dbname` is
+   required: without it `pg_restore` prints the SQL to the screen and restores nothing. When all is well it prints nothing and
+   exits with 0 (the drill below took about 16 seconds for a small database, most of it the network). Do not pass the whole
+   connection string to `--dbname`: it would be a command with the password in it, in the history and in the arguments.
+4. Check the copy with the queries of step 2 above (the counts of `scans`, `points` and `providers`, and `max(received_at)` of
    `scans`, which tells you how far the dump goes). Compare them with what you expect and with production now. The copy
    carries the marker of `public.environment_marker` with it (`production` for a dump of production), so the local tools of
    this repository refuse to run against a copy of production, on purpose.
-4. Only then recover: copy the rows that are missing from the checked copy into production (step 3 above, "Copy rows back").
-   Never restore a dump over production without first restoring it to a separate database and checking it (steps 1 to 3):
+5. Only then recover: copy the rows that are missing from the checked copy into production (step 3 above, "Copy rows back").
+   Never restore a dump over production without first restoring it to a separate database and checking it (steps 1 to 4):
    a restore replaces data, and the wrong dump cannot be undone.
-5. Delete the check database when you are done (it holds personal data):
+6. Delete the check database when you are done (it holds personal data):
    `neon databases delete restore_check --project-id <project id> --branch <check branch>`, and the check branch or project
    with it.
 

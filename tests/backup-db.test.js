@@ -68,6 +68,10 @@ const MASKED_HOST = 'ep-tes****.eu-central-1.aws.neon.tech'
 const URL_FAKE = `postgresql://${USER}:${ENCODED}@${HOST}/appdb?sslmode=require`
 const POOLED = `postgresql://${USER}:${ENCODED}@ep-test-cool-123456-pooler.eu-central-1.aws.neon.tech/appdb?sslmode=require`
 const SID = 'S-1-5-21-111-222-333-1001' // a fake SID
+// macOS and Linux: the uid of the (fake) user, that of another account, and root. Every folder of a test is owned by UID, unless a test says not.
+const UID = 1000
+const OTHER_UID = 1001
+const ROOT_UID = 0
 const NOW = new Date('2026-10-03T07:15:42Z')
 const FINAL = 'building-qr-20261003T0715Z.dump'
 // the temporary file, inside the private work directory (.bqr-work-<random>) that each run makes inside the output folder
@@ -181,7 +185,7 @@ afterEach(() => {
  */
 function privateStat(...args) {
   const [target, ...rest] = args
-  if (path.resolve(String(target)) === path.resolve(dir) || isWorkDir(target)) return { mode: 0o040700 }
+  if (path.resolve(String(target)) === path.resolve(dir) || isWorkDir(target)) return { mode: 0o040700, uid: UID }
   return fileStat(target, ...rest)
 }
 
@@ -213,7 +217,7 @@ function expectWorkCwd(cwd) {
 function fileStat(target, ...rest) {
   const real = fs.statSync(target, ...rest)
   // a folder (the temp folder, the folders above the backup folder) is an ordinary one that others cannot write in
-  return { size: real.size, mode: real.isDirectory() ? 0o040755 : 0o100600 }
+  return { size: real.size, mode: real.isDirectory() ? 0o040755 : 0o100600, uid: UID }
 }
 
 /** Runs one backup into `dir` with the stub, and collects the two kinds of output line. */
@@ -234,6 +238,7 @@ async function go({ options = {}, deps = {}, runner = makeRunner() } = {}) {
         masks.push(mask)
         return 0o022
       },
+      getuid: () => UID,
       out: (line) => out.push(line),
       err: (line) => errs.push(line),
       ...Object.fromEntries(Object.entries(deps).filter(([key]) => key !== 'env')),
@@ -1672,7 +1677,7 @@ function recordingFs({ folderMode = 0o040700, workMode = 0o040700, fileMode = 0o
           return fs.mkdtempSync(prefix, ...rest)
         },
         statSync: (p, ...rest) =>
-          same(p) ? { mode: folderMode } : isWorkDir(p) ? { mode: workMode } : fileStat(p, ...rest).mode === 0o040755 ? fileStat(p, ...rest) : { ...fileStat(p, ...rest), mode: fileMode },
+          same(p) ? { mode: folderMode, uid: UID } : isWorkDir(p) ? { mode: workMode, uid: UID } : fileStat(p, ...rest).mode === 0o040755 ? fileStat(p, ...rest) : { ...fileStat(p, ...rest), mode: fileMode },
         chmodSync: (p, mode) => {
           self.chmods.push({ name: path.basename(String(p)), folder: same(p), mode })
           if (failChmod) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
@@ -3477,12 +3482,13 @@ describe('a folder that another account can change', () => {
   })
 
   describe('on macOS and Linux', () => {
+    // modes: [folder, mode, owner uid (UID when left out)]; a mode of null makes the stat fail
     const modeOf = (modes) => (target, ...rest) => {
       const key = path.resolve(String(target))
-      for (const [folder, mode] of modes) {
+      for (const [folder, mode, uid = UID] of modes) {
         if (path.resolve(folder) !== key) continue
         if (mode === null) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
-        return { mode }
+        return { mode, uid }
       }
       return privateStat(target, ...rest)
     }
@@ -3540,6 +3546,109 @@ describe('a folder that another account can change', () => {
       }
     })
 
+    it('refuses a folder above that another account owns, even with the sticky bit (the owner can rename or delete any child), and accepts one that root owns', async () => {
+      const { outRoot } = layout()
+      seed(oldBackups)
+      // owned by another uid: refused whatever the mode is, sticky or not
+      for (const mode of [0o041777, 0o041770, 0o041755, 0o040755, 0o040700, 0o040777]) {
+        for (const folder of [outRoot, tmp]) {
+          const r = await runWith([[folder, mode, OTHER_UID]])
+          expect(r.exitCode, `${mode.toString(8)} on ${path.basename(folder)}`).toBe(1)
+          expect(r.message, mode.toString(8)).toBe(refusal('a folder above the backup folder'))
+          expect(r.runner.calls).toEqual([])
+          expect(r.rec.events).toEqual([])
+          expect(r.log).toBe('')
+          expect(r.errs[0]).toBe(LOG_SKIPPED)
+          expect(r.files).toEqual(oldBackups)
+        }
+      }
+      // any other uid is another account, a system account (such as 33) as well as one above the user's own
+      for (const uid of [33, 999, 1002, 65534]) {
+        const r = await runWith([[outRoot, 0o041777, uid]])
+        expect(r.message, String(uid)).toBe(refusal('a folder above the backup folder'))
+      }
+      // owned by root: accepted, sticky (like /tmp, or /private/tmp on macOS) or plain (like /home or /)
+      for (const mode of [0o041777, 0o041770, 0o040755, 0o040750]) {
+        for (const folder of [outRoot, tmp]) {
+          const r = await runWith([[folder, mode, ROOT_UID]])
+          expect(r.exitCode, `${mode.toString(8)} root on ${path.basename(folder)}`).toBe(0)
+          seed([])
+        }
+      }
+      // owned by the user: the sticky exception holds (a world-writable sticky folder of the user's own)
+      const own = await runWith([[outRoot, 0o041777, UID]])
+      expect(own.exitCode).toBe(0)
+      // and a folder that root owns but that is writable by others WITHOUT the sticky bit is still refused
+      const open = await runWith([[outRoot, 0o040777, ROOT_UID]])
+      expect(open.message).toBe(refusal('a folder above the backup folder'))
+    })
+
+    it('refuses a backup folder that another account owns, whatever its mode, and accepts one that root owns', async () => {
+      layout()
+      for (const mode of [0o040700, 0o040755, 0o041777]) {
+        const r = await runWith([[dir, mode, OTHER_UID]])
+        expect(r.exitCode, mode.toString(8)).toBe(1)
+        expect(r.message, mode.toString(8)).toBe(refusal('the backup folder itself'))
+        expect(r.runner.calls).toEqual([])
+        expect(r.rec.events).toEqual([])
+        expect(r.errs[0]).toBe(LOG_SKIPPED)
+        expect(r.log).toBe('')
+      }
+      // root's own folder passes this check (the mode check of the folder itself, and the permissions, then decide)
+      const root = await runWith([[dir, 0o040700, ROOT_UID]])
+      expect(root.exitCode).toBe(0)
+    })
+
+    it('refuses the nearest folder that exists, for a backup folder that is not made yet, when another account owns it', async () => {
+      const { outRoot } = layout({ outExists: false })
+      const r = await runWith([[outRoot, 0o040755, OTHER_UID]])
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(refusal('the backup folder itself'))
+      expect(fs.existsSync(dir)).toBe(false)
+      expect(r.rec.events).toEqual([])
+      const root = await runWith([[outRoot, 0o040755, ROOT_UID]])
+      expect(root.exitCode).toBe(0)
+    })
+
+    it('names both when the backup folder is owned by another account and a folder above it is open', async () => {
+      const { outRoot } = layout()
+      const r = await runWith([[dir, 0o040700, OTHER_UID], [outRoot, 0o040777]])
+      expect(r.message).toBe(refusal('the backup folder itself, a folder above the backup folder'))
+    })
+
+    it('refuses when the owner cannot be read or the user is not known: not known is not trusted', async () => {
+      layout()
+      const noOwner = (target, ...rest) => {
+        const info = privateStat(target, ...rest)
+        return path.resolve(String(target)) === path.resolve(tmp) ? { mode: info.mode } : info
+      }
+      for (const [what, deps] of Object.entries({
+        'a stat with no uid': { fs: { ...fs, statSync: noOwner } },
+        'no getuid': { getuid: null },
+        'a getuid that gives nothing': { getuid: () => undefined },
+      })) {
+        const r = await go({ deps })
+        expect(r.exitCode, what).toBe(1)
+        expect(r.message, what).toBe(SHARED_UNREADABLE_ERROR)
+        expect(r.runner.calls, what).toEqual([])
+        expect(r.errs, what).toEqual([`backup failed: ${SHARED_UNREADABLE_ERROR}`])
+      }
+    })
+
+    it('asks the system for the user by default (process.getuid), and does not need it on Windows', async () => {
+      layout()
+      if (typeof process.getuid === 'function') {
+        // the real uid with files that really belong to this account: the whole chain of the real folder of the test passes
+        const real = await runBackup(
+          { out: dir, keep: 30, neonProject: null, neonBranch: 'main', reportIssue: null, pgBin: null },
+          { env: { BACKUP_DATABASE_URL: URL_FAKE, PATH: '/usr/bin' }, platform: 'linux', exists: () => false, runner: makeRunner(), now: () => NOW, out: () => {}, err: () => {} },
+        )
+        expect(real.exitCode).toBe(0)
+      }
+      const win = await go({ deps: fakeWindows({ getuid: undefined }) })
+      expect(win.exitCode).toBe(0)
+    })
+
     it('still refuses the output folder itself when group or others can write in it (the message of the mode check)', async () => {
       layout()
       const r = await runWith([[dir, 0o040777]])
@@ -3586,7 +3695,7 @@ describe('a folder that another account can change', () => {
     // the work directory, the log and the rename all use the real path.
     const statting = (modes) => (target, ...rest) => {
       const key = path.resolve(String(target))
-      for (const [folder, mode] of modes) if (path.resolve(folder) === key) return { mode }
+      for (const [folder, mode, uid = UID] of modes) if (path.resolve(folder) === key) return { mode, uid }
       return privateStat(target, ...rest)
     }
     /**

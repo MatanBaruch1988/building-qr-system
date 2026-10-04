@@ -3,7 +3,8 @@
 // Usage:
 //   npm run db:backup -- --out <dir> --neon-project <project id> [--neon-branch main] [--keep 30]
 //                        [--report-issue <owner/repo>] [--pg-bin <dir>]
-//   BACKUP_DATABASE_URL=<direct connection string> npm run db:backup -- --out <dir>
+//   npm run db:backup -- --out <dir>   (with BACKUP_DATABASE_URL set from a prompt that is not recorded, not typed in the
+//                                        command: see "Daily backups" in docs/runbooks/restore.md)
 //
 // Why this exists: on the free Neon plan the database can only be restored to a point in the last 6 hours. A dump on the
 // owner's own computer reaches back as far as the files are kept, and it holds personal data, so it never goes to GitHub:
@@ -18,8 +19,9 @@
 //      write in that folder could rename a directory away and put its own at the same path, swap a file for a link, or add an
 //      access entry of its own; so the races are not won one by one, the folders in which they could happen are refused. On
 //      Windows the access lists are read as SDDL, with one PowerShell call, and only the user, the system, the administrators
-//      and TrustedInstaller may change a folder; elsewhere the modes are read (no folder above may be writable by the group or
-//      others without the sticky bit, and the output folder itself not by group or others). The folders are the REAL ones: the
+//      and TrustedInstaller may change a folder; elsewhere the modes and the owners are read (every folder must be owned by the
+//      user or by root, since an owner can rename anything in a folder even with the sticky bit; no folder above may be writable
+//      by the group or others without the sticky bit; and the output folder itself not by group or others). The folders are the REAL ones: the
 //      output folder is first resolved with realpath (links, junctions, short names), and the check, the work directory, the
 //      log and the rename all use the resolved path, so a link in the path cannot make the check judge other folders than
 //      the ones that hold the files. What cannot be read, resolved or understood is refused. This is the only folder rule:
@@ -568,11 +570,14 @@ async function readSddls({ paths, runner, env }) {
  * 'itself' and 'above') } or { unreadable: true } when the access lists could not be read.
  * On Windows the security descriptors of the output folder (or, for one that is not made yet, the nearest folder that exists:
  * what is made in it inherits from it) and of every folder above it are read with one PowerShell call and judged by
- * sharedAclProblem. On macOS and Linux no folder above the output folder may be writable by the group or others without the
- * sticky bit, and the same holds for the nearest existing folder of an output folder that is not made yet. (The output folder
- * itself is checked, with group and others, once it exists.) `outDir` is already resolved: see resolveFolder.
+ * sharedAclProblem. On macOS and Linux every folder of the chain (the output folder, or the nearest existing one, and each folder
+ * above) must be owned by the current user (`uid`) or by root: the owner of a folder can rename or delete anything in it, whatever
+ * its mode says, and so can the owner of a sticky folder (the sticky bit only protects a child from the others). The same rule as
+ * Windows has for an owner that is not trusted. And no folder above the output folder may be writable by the group or others
+ * without the sticky bit; the same holds for the nearest existing folder of an output folder that is not made yet. (The output
+ * folder itself is checked, with group and others, once it exists.) `outDir` is already resolved: see resolveFolder.
  */
-async function checkFoldersNotShared({ platform, outDir, files, runner, env, owner }) {
+async function checkFoldersNotShared({ platform, outDir, files, runner, env, owner, uid }) {
   const problems = []
   const add = (level) => {
     if (!problems.includes(level)) problems.push(level)
@@ -594,12 +599,22 @@ async function checkFoldersNotShared({ platform, outDir, files, runner, env, own
     }
     return { problems }
   }
+  if (!Number.isInteger(uid)) return { unreadable: true } // the user is not known (no getuid): the owners cannot be judged
   for (const { path: folder, kind } of folderChain(outDir, files, path)) {
-    let mode
+    let info
     try {
-      mode = files.statSync(folder).mode
+      info = files.statSync(folder)
     } catch {
       return { unreadable: true }
+    }
+    if (!Number.isInteger(info?.uid) || !Number.isInteger(info?.mode)) return { unreadable: true }
+    const level = kind === 'ancestor' ? 'above' : 'itself'
+    // The owner must be the user or root, for the folder itself too: an owner can rename or delete what is in the folder (the sticky
+    // bit does not stop the owner of the folder), and can change its mode. This comes before the sticky exception below, which is
+    // only for a folder that the user or root owns.
+    if (info.uid !== uid && info.uid !== 0) {
+      add(level)
+      continue
     }
     // A folder above is refused when the GROUP or others can write in it, unless it has the sticky bit (then nobody can rename or
     // delete what they do not own: this is /tmp). A member of the group could rename the whole subtree, and the group of a folder
@@ -607,7 +622,7 @@ async function checkFoldersNotShared({ platform, outDir, files, runner, env, own
     // that exists stands in for it (the new folder will be made in it), under the same rule: the folder itself is judged by its
     // own mode, with group and others, as soon as it exists.
     const standsIn = kind === 'folder' && folder !== outDir
-    if ((kind === 'ancestor' || standsIn) && (mode & 0o022) !== 0 && (mode & 0o1000) === 0) add(standsIn ? 'itself' : 'above')
+    if ((kind === 'ancestor' || standsIn) && (info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0) add(level)
   }
   return { problems }
 }
@@ -1143,6 +1158,7 @@ export async function runBackup(options, deps = {}) {
     exists = fs.existsSync,
     fs: files = fs,
     umask = setProcessUmask,
+    getuid = process.getuid?.bind(process),
     out = console.log,
     err = console.error,
   } = deps
@@ -1223,7 +1239,7 @@ export async function runBackup(options, deps = {}) {
         throw error
       }
     }
-    const shared = await checkFoldersNotShared({ platform, outDir, files, runner, env, owner: early })
+    const shared = await checkFoldersNotShared({ platform, outDir, files, runner, env, owner: early, uid: posix ? getuid?.() : undefined })
     if (shared.unreadable) {
       logSkipped = '' // the output folder is not known to be private, so no log is written in it, and the message says it all
       throw new Error(SHARED_UNREADABLE_ERROR)
