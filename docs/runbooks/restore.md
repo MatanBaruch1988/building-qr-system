@@ -121,7 +121,13 @@ see below). It never holds the connection string, the user or the password.
   is judged in its place, and the check is made again, on the real chain, right after the run has made the new folders and
   before it does anything else: a new folder can inherit an entry for another account (or a default ACL can widen its mode) that
   the parent's own list does not show. A new folder that is refused is removed again (only the folders that this run made, and
-  only while they are empty). **The folders that are judged are the real ones**: `--out` is resolved first (symbolic links, on
+  only while they are empty). The run never makes a folder inside a folder that other accounts can write in (on Linux the group
+  or others, sticky or not, so not directly in `/tmp`; on Windows the nearest existing folder must pass the rights of the folder
+  itself): another account could put a link at that name between the look and the mkdir, and `mkdir -p` says nothing about an
+  existing link. Make the backup folder in your own home folder or profile. After the mkdir the run looks at what it made once
+  more (each new folder is a real directory and not a link, and the folder resolves to the same path as before) and refuses
+  anything else, removing only what it made. An existing folder of yours under `/tmp` is not affected: nothing is made there.
+  **The folders that are judged are the real ones**: `--out` is resolved first (symbolic links, on
   Windows also junctions and short names), and the check, the work directory, `backup.log` and the rename all use the resolved
   path, so a link cannot make the check look at other folders than the ones that hold the files. A link that points at nothing,
   or a part of the path that cannot be inspected, is refused. The message says whether it is the backup folder itself or a folder above it,

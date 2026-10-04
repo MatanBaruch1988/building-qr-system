@@ -20,10 +20,12 @@ import {
   formatSize,
   FOLDER_UNKNOWN_ERROR,
   FOLDER_WARNING,
+  FOLDER_SWAPPED_ERROR,
   FOLDER_WRITABLE_ERROR,
   icaclsArgs,
   issueBody,
   LOG_SKIPPED,
+  NEW_FOLDER_IN_SHARED_ERROR,
   main,
   makeScrubber,
   neonCommand,
@@ -3675,11 +3677,196 @@ describe('a folder that another account can change', () => {
       const group = await runWith([[outRoot, 0o040770]])
       expect(group.message).toBe(refusal('the backup folder itself'))
       expect(fs.existsSync(dir)).toBe(false)
+      // a sticky folder that the others can write in (this is /tmp) passes the check of the folders above, but the run makes no folder
+      // in it: see the next test
       for (const mode of [0o041777, 0o041770]) {
         const sticky = await runWith([[outRoot, mode]])
-        expect(sticky.exitCode, mode.toString(8)).toBe(0)
-        fs.rmSync(dir, { recursive: true, force: true })
+        expect(sticky.exitCode, mode.toString(8)).toBe(1)
+        expect(sticky.message, mode.toString(8)).toBe(NEW_FOLDER_IN_SHARED_ERROR)
+        expect(fs.existsSync(dir)).toBe(false)
       }
+      const fine = await runWith([[outRoot, 0o040755]])
+      expect(fine.exitCode).toBe(0)
+    })
+
+    it('never makes a folder inside a folder that others can write in, sticky or not: it asks for a backup folder in the home, before any mkdir', async () => {
+      const { outRoot } = layout({ outExists: false })
+      for (const [mode, uid] of [[0o041777, UID], [0o041777, ROOT_UID], [0o041770, UID], [0o041775, ROOT_UID], [0o041707, UID], [0o041702, UID], [0o041720, ROOT_UID]]) {
+        const r = await runWith([[outRoot, mode, uid]])
+        const what = `${mode.toString(8)} owned by ${uid}`
+        expect(r.exitCode, what).toBe(1)
+        expect(r.message, what).toBe(NEW_FOLDER_IN_SHARED_ERROR)
+        expect(r.runner.calls, what).toEqual([])
+        expect(r.rec.events, what).toEqual([]) // no mkdir, no mkdtemp
+        expect(fs.existsSync(dir), what).toBe(false)
+        expect(r.log, what).toBe('')
+        expect(r.errs, what).toEqual([`backup failed: ${NEW_FOLDER_IN_SHARED_ERROR}`])
+      }
+      expect(NEW_FOLDER_IN_SHARED_ERROR).toMatch(/your own home folder/)
+      expect(NEW_FOLDER_IN_SHARED_ERROR).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\//)
+      // several folders to make: the nearest folder that exists is the one that counts
+      dir = path.join(outRoot, 'a', 'b')
+      const deep = await runWith([[outRoot, 0o041777, ROOT_UID]])
+      expect(deep.message).toBe(NEW_FOLDER_IN_SHARED_ERROR)
+      expect(fs.existsSync(path.join(outRoot, 'a'))).toBe(false)
+      // a parent that others cannot write in (the home folder) is fine, with one extra check of the folders
+      for (const mode of [0o040755, 0o040750, 0o040700, 0o040705]) {
+        const ok = await runWith([[outRoot, mode]])
+        expect(ok.exitCode, mode.toString(8)).toBe(0)
+        fs.rmSync(path.join(outRoot, 'a'), { recursive: true, force: true })
+      }
+    })
+
+    it('refuses when the folder that it would make a folder in cannot be inspected for that: not known is not trusted, and nothing is made', async () => {
+      const { outRoot } = layout({ outExists: false })
+      let looks = 0
+      const files = {
+        ...fs,
+        statSync: (target, ...rest) => {
+          if (path.resolve(String(target)) === path.resolve(outRoot) && ++looks === 2) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+          return privateStat(target, ...rest)
+        },
+      }
+      const r = await go({ deps: { fs: files } })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(SHARED_UNREADABLE_ERROR)
+      expect(fs.existsSync(dir)).toBe(false)
+      expect(r.log).toBe('')
+    })
+
+    it('still accepts an output folder that exists, is the user own, and is under a root-owned sticky 1777 folder like /tmp: nothing is made there', async () => {
+      layout() // the output folder exists
+      for (const mode of [0o041777, 0o041770]) {
+        const r = await runWith([[path.dirname(dir), mode, ROOT_UID]])
+        expect(r.exitCode, mode.toString(8)).toBe(0)
+      }
+    })
+
+    describe('a link that appears at the new path between the look and the mkdir', () => {
+      // mkdir -p succeeds silently on a path that exists, also on a link that another account put there. After the mkdir the run looks
+      // at what it made again: lstat of each (a real directory) and realpath of the folder (the path that was resolved before).
+      function swapped(how, { windows = false } = {}) {
+        const state = { made: false, removed: [], mkdtemp: false }
+        const elsewhere = path.join(tmp, 'elsewhere')
+        fs.mkdirSync(elsewhere, { recursive: true })
+        const high = path.dirname(dir) // the folder above the backup folder, that this run made too
+        const isLink = { isDirectory: () => false, isSymbolicLink: () => true }
+        const at = (target, folder) => path.resolve(String(target)) === path.resolve(folder)
+        const files = {
+          ...fs,
+          statSync: privateStat,
+          mkdirSync: (target, options) => {
+            state.made = true
+            return fs.mkdirSync(target, options)
+          },
+          rmdirSync: (target, ...rest) => {
+            state.removed.push(path.basename(String(target)))
+            return fs.rmdirSync(target, ...rest)
+          },
+          mkdtempSync: (prefix, ...rest) => {
+            state.mkdtemp = true
+            return fs.mkdtempSync(prefix, ...rest)
+          },
+          lstatSync: (target, ...rest) => {
+            if (state.made && how === 'link' && at(target, dir)) return isLink
+            if (state.made && how === 'parent-link' && at(target, high)) return isLink
+            return fs.lstatSync(target, ...rest)
+          },
+          realpathSync: Object.assign((target, ...rest) => fs.realpathSync(target, ...rest), {
+            native: (target, ...rest) => {
+              if (state.made && how === 'moved' && at(target, dir)) return path.join(elsewhere, 'backups')
+              if (state.made && how === 'case' && at(target, dir)) return dir.toUpperCase() // the same path, in other letters
+              if (state.made && how === 'fails' && at(target, dir)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+              return fs.realpathSync.native(target, ...rest)
+            },
+          }),
+        }
+        return { state, files, elsewhere, high, deps: windows ? fakeWindows({ fs: files }) : { fs: files } }
+      }
+
+      for (const platform of ['linux', 'win32']) {
+        it(`is refused on ${platform}: the link, a link above, a path that leads elsewhere now, and a path that cannot be resolved; nothing else is made`, async () => {
+          const windows = platform === 'win32'
+          const cases = {
+            'a link at the path of the backup folder': 'link',
+            'a link at a folder above, that this run made': 'parent-link',
+            'a path that leads somewhere else after the mkdir': 'moved',
+            'a path that cannot be resolved after the mkdir': 'fails',
+          }
+          for (const [what, how] of Object.entries(cases)) {
+            const { outRoot } = layout({ outExists: false })
+            dir = path.join(outRoot, 'a', 'backups')
+            const spy = swapped(how, { windows })
+            const r = await go({ deps: spy.deps })
+            expect(r.exitCode, what).toBe(1)
+            expect(r.message, what).toBe(FOLDER_SWAPPED_ERROR)
+            expect(spy.state.mkdtemp, what).toBe(false) // no work directory
+            expect(r.runner.of('pg_dump'), what).toEqual([])
+            expect(r.runner.of('icacls'), what).toEqual([])
+            expect(r.runner.of('powershell').length, what).toBe(windows ? 1 : 0) // the first check only: the second one is not reached
+            expect(r.log, what).toBe('')
+            expect(r.errs, what).toEqual([`backup failed: ${FOLDER_SWAPPED_ERROR}`])
+            expect(r.message, what).not.toContain(tmp)
+            // only what this run made is removed, and only a real directory: what lstat says is a link is left where it is
+            if (how === 'link') expect(spy.state.removed, what).toEqual([])
+            if (how === 'parent-link') expect(spy.state.removed, what).toEqual(['backups'])
+            if (how === 'moved' || how === 'fails') expect(spy.state.removed, what).toEqual(['backups', 'a'])
+            expect(fs.existsSync(outRoot), what).toBe(true) // the folder that was there before is not touched
+            fs.rmSync(path.join(outRoot, 'a'), { recursive: true, force: true })
+          }
+        })
+
+        it(`is refused on ${platform} with a real link planted at the new path (where this platform can make one), and nothing is made through it`, async () => {
+          const windows = platform === 'win32'
+          const { outRoot } = layout({ outExists: false })
+          const elsewhere = path.join(tmp, 'elsewhere')
+          fs.mkdirSync(elsewhere, { recursive: true })
+          let planted = true
+          const files = {
+            ...fs,
+            statSync: privateStat,
+            mkdirSync: (target) => {
+              try {
+                fs.symlinkSync(elsewhere, target, 'junction') // the other account's link, and mkdir -p says nothing about it
+              } catch {
+                planted = false
+              }
+            },
+          }
+          const r = await go({ deps: windows ? fakeWindows({ fs: files }) : { fs: files } })
+          if (!planted) return // this platform needs a privilege to make a link: the stubbed cases above cover the check
+          expect(r.exitCode).toBe(1)
+          expect(r.message).toBe(FOLDER_SWAPPED_ERROR)
+          expect(fs.lstatSync(dir).isSymbolicLink()).toBe(true) // the link is not ours: it is left
+          expect(fs.readdirSync(elsewhere)).toEqual([]) // and nothing was made through it
+          expect(r.runner.of('pg_dump')).toEqual([])
+          expect(fs.existsSync(outRoot)).toBe(true)
+        })
+      }
+
+      it('compares the path without regard to the case on Windows, and exactly on Linux', async () => {
+        const { outRoot } = layout({ outExists: false })
+        dir = path.join(outRoot, 'a', 'backups')
+        const onWindows = swapped('case', { windows: true })
+        const win = await go({ deps: onWindows.deps })
+        expect(win.exitCode).toBe(0) // C:\Backups and c:\backups are the same folder there
+        fs.rmSync(path.join(outRoot, 'a'), { recursive: true, force: true })
+        const onLinux = swapped('case')
+        const linux = await go({ deps: onLinux.deps })
+        expect(linux.exitCode).toBe(1)
+        expect(linux.message).toBe(FOLDER_SWAPPED_ERROR)
+      })
+
+      it('does not refuse a folder that was made as it should be: real directories, and the same path after the mkdir', async () => {
+        const { outRoot } = layout({ outExists: false })
+        dir = path.join(outRoot, 'a', 'b')
+        for (const platform of ['linux', 'win32']) {
+          const files = { ...fs, statSync: privateStat }
+          const r = await go({ deps: platform === 'win32' ? fakeWindows({ fs: files }) : { fs: files } })
+          expect(r.exitCode, platform).toBe(0)
+          fs.rmSync(path.join(outRoot, 'a'), { recursive: true, force: true })
+        }
+      })
     })
 
     it('refuses a folder above that another account owns, even with the sticky bit (the owner can rename or delete any child), and accepts one that root owns', async () => {

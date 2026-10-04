@@ -29,6 +29,11 @@
 //      check is made AGAIN right after the folders are made, on the real chain that exists then: an entry that is inherit-only
 //      on the nearest existing folder does not apply to it, but the new folder inherits it, and its list is the only exact
 //      answer. A refused new folder is removed again (only the folders that this run made, and only while they are empty).
+//      The run never makes a folder inside a folder that other accounts can write in (on Linux: the group or others, sticky or
+//      not; on Windows the nearest existing folder has to pass the rights of the folder itself): in such a folder another account
+//      could put a link at the name between the look and the mkdir, and mkdir -p succeeds silently on a link. So it asks for a
+//      backup folder in the user's own home, and after the mkdir it looks at what it made once more (lstat: a real directory,
+//      not a link; realpath: the same path as before), and refuses anything else.
 //      The checks of the next steps stay as a second net.
 //   3. Makes this run's private WORK DIRECTORY inside the output folder, with fs.mkdtemp (`.bqr-work-<random>`), after the check
 //      above and after the folder exists: the name is unpredictable, the directory is made with mode 700 in one step on Linux,
@@ -168,6 +173,13 @@ export const SHARED_UNREADABLE_ERROR =
 const SUPPORTED_PLATFORMS = new Set(['win32', 'linux'])
 export const UNSUPPORTED_PLATFORM_ERROR =
   'the backup runs on Windows and Linux; on this system its folder checks cannot see every way another account could change the folder'
+// The backup folder is not there yet and the folder that it would be made in can be written by other accounts: the run never makes a
+// folder there (see runBackup), because another account could put a link at that name between the look and the mkdir.
+export const NEW_FOLDER_IN_SHARED_ERROR =
+  'nothing was made, because the backup folder does not exist yet and the folder it would be made in can be written by other accounts: make the backup folder in your own home folder (or profile)'
+// The folders that the run made are not what it made (a link or another folder is at their path now): see verifyMadeFolders.
+export const FOLDER_SWAPPED_ERROR =
+  'nothing was dumped, because the backup folder was changed while it was being made (a link or another folder is at its path now): nothing was kept, run it again'
 export const LOG_SKIPPED = 'backup: backup.log was not written, because other accounts can change the backup folder or a folder above it'
 
 const NEON_TIMEOUT_MS = 2 * 60_000
@@ -562,7 +574,34 @@ function foldersToMake(dir, files) {
  */
 function removeMadeFolders(made, files) {
   for (const folder of made) {
-    if (!attempt(() => files.rmdirSync(folder))) return
+    // A link at that path was not made by this run, and is not removed (on Windows rmdir would remove a junction).
+    let plain = false
+    attempt(() => {
+      const info = files.lstatSync(folder)
+      plain = info.isDirectory() && !info.isSymbolicLink()
+    })
+    if (!plain || !attempt(() => files.rmdirSync(folder))) return
+  }
+}
+
+/**
+ * Right after the folders were made: are they what the run made? mkdir -p succeeds silently on a path that exists already, also on a
+ * link that another account put there between the moment `outDir` was resolved and the mkdir. So each folder that this run made is
+ * looked at again with lstat (a real directory, not a link), and the output folder is resolved again with realpath, which must be
+ * the path that the run resolved before (so that no part of the path leads somewhere else now). Anything else, or anything that
+ * cannot be read, is a refusal (false).
+ */
+function verifyMadeFolders({ made, outDir, files, windows }) {
+  try {
+    for (const folder of made) {
+      const info = files.lstatSync(folder)
+      if (!info.isDirectory() || info.isSymbolicLink()) return false
+    }
+    const real = files.realpathSync?.native ?? files.realpathSync
+    const now = real(outDir)
+    return windows ? now.toLowerCase() === outDir.toLowerCase() : now === outDir
+  } catch {
+    return false
   }
 }
 
@@ -1294,7 +1333,30 @@ export async function runBackup(options, deps = {}) {
     // ignores it, but the new folder gets it. So the check is made again, on the real chain that exists now, right after the folders
     // are made and before anything else is (the clean-up, the work directory, the log). A refused folder is removed again.
     const made = foldersToMake(outDir, files)
+    if (posix && made.length) {
+      // The run never makes a folder inside a folder that other accounts can write in, sticky or not (/tmp itself is fine as a folder
+      // above an output folder that exists and is the user's own: nothing is made there). In such a folder another account can put a
+      // link at the name between the look and the mkdir. (On Windows the nearest existing folder had to pass the rights of the
+      // folder itself, which nobody else has.)
+      let parentMode
+      attempt(() => {
+        parentMode = files.statSync(path.dirname(made.at(-1))).mode
+      })
+      if (parentMode === undefined) {
+        logSkipped = ''
+        throw new Error(SHARED_UNREADABLE_ERROR)
+      }
+      if ((parentMode & 0o022) !== 0) {
+        logSkipped = '' // nothing is made, and the message says it all
+        throw new Error(NEW_FOLDER_IN_SHARED_ERROR)
+      }
+    }
     files.mkdirSync(outDir, { recursive: true, mode: PRIVATE_FOLDER })
+    if (made.length && !verifyMadeFolders({ made, outDir, files, windows })) {
+      removeMadeFolders(made, files)
+      logSkipped = '' // the folder is not what the run made, so nothing is written in it, and the message says it all
+      throw new Error(FOLDER_SWAPPED_ERROR)
+    }
     if (made.length) {
       const again = await checkFoldersNotShared({ platform, outDir, files, runner, env, owner: early, uid: posix ? getuid?.() : undefined })
       if (again.unreadable) {
