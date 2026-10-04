@@ -4,6 +4,7 @@ import { api } from '../api/client.js'
 import { applyUpdate, isUpdateReady, subscribeUpdate } from './update.js'
 import { errorMessageKey, isKnownError } from './errors.js'
 import { providerLabel } from './checkIn.js'
+import { DEVICE_LABEL_MAX_LENGTH } from '../../shared/contract.js'
 import ThemeSwitch from '../ui/ThemeSwitch.jsx'
 import {
   IconAlert, IconChevron, IconCheck, IconCloudOff, IconEye, IconEyeOff, IconGlobe, IconInfo, IconLock, IconPin,
@@ -80,7 +81,7 @@ export function LoginView({ providers, pointName, notice, onSignedIn }) {
     try {
       const res = await api('/session', {
         method: 'POST',
-        body: { provider_id: selected.id, password, device_label: navigator.userAgent.slice(0, 80) },
+        body: { provider_id: selected.id, password, device_label: navigator.userAgent.slice(0, DEVICE_LABEL_MAX_LENGTH) },
       })
       onSignedIn({ token: res.token, provider: res.provider }, remember)
     } catch (err) {

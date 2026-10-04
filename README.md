@@ -86,7 +86,7 @@ The move was completed on 01/10/2026. What is left of it:
 ```
 api/index.js           the Vercel entry point (every /api/* is routed to it in vercel.json)
 server/                the API: routes/, access (who may call what, enforced by the router), auth, scans (the rules), google (verification), db, migrate
-shared/                code that runs in both the browser and the server: shared/datetime.js writes every date and time a person sees, always DD/MM/YYYY and HH:MM
+shared/                code that runs in both the browser and the server: shared/datetime.js writes every date and time a person sees, always DD/MM/YYYY and HH:MM; shared/contract.js holds the values that the phone and the server must agree on (the offline sync limits, the GPS limits, the words of a scan, the form limits, the QR token)
 db/migrations/         the DB schema
 scripts/               migration, creating an admin, the development seed, import from Firestore, the CI guards
 src/worker, src/i18n   the service provider app

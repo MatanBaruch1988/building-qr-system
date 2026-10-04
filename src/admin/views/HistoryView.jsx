@@ -4,6 +4,9 @@ import { useLoad } from '../hooks.js'
 import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, DateInput, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconList, IconDownload, IconRefresh, IconBan, IconUndo, IconAlert, IconTrash } from '../icons.jsx'
 import { formatDay, formatDateTime, formatTime, isoDay } from '../../../shared/datetime.js'
+import {
+  OUTCOME_ACCEPTED, OUTCOME_REJECTED_FAR, OUTCOME_REJECTED_NO_LOCATION, VOID_REASON_MAX_LENGTH,
+} from '../../../shared/contract.js'
 
 const daysAgo = (n) => isoDay(new Date(Date.now() - n * 86_400_000))
 const dayLabel = formatDay // the heading of a day: DD/MM/YYYY
@@ -18,9 +21,9 @@ const FLAGS = {
   demo: { label: 'דמו', tone: 'neutral' },
   legacy_import: { label: 'מהמערכת הישנה', tone: 'neutral' },
 }
-const OUTCOMES = { rejected_far: 'נדחתה: רחוק מהנקודה', rejected_no_location: 'נדחתה: חסר מיקום' }
+const OUTCOMES = { [OUTCOME_REJECTED_FAR]: 'נדחתה: רחוק מהנקודה', [OUTCOME_REJECTED_NO_LOCATION]: 'נדחתה: חסר מיקום' }
 
-const DEFAULTS = () => ({ from: daysAgo(6), to: isoDay(new Date()), point_id: '', provider_id: '', outcome: 'accepted', include_voided: false, include_demo: false })
+const DEFAULTS = () => ({ from: daysAgo(6), to: isoDay(new Date()), point_id: '', provider_id: '', outcome: OUTCOME_ACCEPTED, include_voided: false, include_demo: false })
 const PAGE = 100
 
 // A date typed digit by digit passes through nonsense ("0002-…"); only complete, sensible dates are sent.
@@ -56,7 +59,7 @@ function VoidDialog({ scan, onClose, onDone }) {
       <p className="w-lead">{scan.point_name} · {scan.provider_name} · {formatDateTime(scan.checked_in_at)}</p>
       <form id="void-form" className="a-form" onSubmit={submit}>
         <Field label="סיבה (לא חובה)" hint="הרשומה לא נמחקת: היא נשארת בהיסטוריה מסומנת כמבוטלת ואפשר לשחזר אותה.">
-          <textarea className="a-input" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} placeholder="לדוגמה: נסרק בטעות" />
+          <textarea className="a-input" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={VOID_REASON_MAX_LENGTH} placeholder="לדוגמה: נסרק בטעות" />
         </Field>
       </form>
     </Modal>
@@ -170,7 +173,7 @@ export default function HistoryView() {
         </Field>
         <Field label="סוג">
           <select className="a-input" value={filters.outcome} onChange={(e) => set('outcome', e.target.value)}>
-            <option value="accepted">נוכחויות שנרשמו</option>
+            <option value={OUTCOME_ACCEPTED}>נוכחויות שנרשמו</option>
             <option value="rejected">ניסיונות שנדחו</option>
             <option value="all">הכול</option>
           </select>
@@ -201,13 +204,13 @@ export default function HistoryView() {
                   <div className="a-scan__who">{s.provider_name}</div>
                 </div>
                 <div className="a-scan__flags">
-                  {s.outcome !== 'accepted' && <Badge tone="danger">{OUTCOMES[s.outcome] ?? s.outcome}</Badge>}
+                  {s.outcome !== OUTCOME_ACCEPTED && <Badge tone="danger">{OUTCOMES[s.outcome] ?? s.outcome}</Badge>}
                   {s.voided && <Badge tone="danger">מבוטלת{s.void_reason ? `: ${s.void_reason}` : ''}</Badge>}
                   {s.distance_m != null && <Badge>{s.distance_m} מ׳ מהנקודה</Badge>}
                   {s.flags.map((f) => <Badge key={f} tone={FLAGS[f]?.tone}>{FLAGS[f]?.label ?? f}</Badge>)}
                 </div>
                 <div className="a-scan__tools">
-                  {s.outcome === 'accepted' && (s.voided
+                  {s.outcome === OUTCOME_ACCEPTED && (s.voided
                     ? <IconButton icon={IconUndo} label="שחזור הנוכחות" onClick={() => restore(s)} disabled={busy} />
                     : <IconButton icon={IconBan} label="ביטול הנוכחות" onClick={() => setVoiding(s)} />)}
                   <IconButton icon={IconTrash} label="מחיקת הנוכחות לצמיתות" tone="danger" onClick={() => remove(s)} disabled={busy} />

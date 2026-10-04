@@ -171,7 +171,8 @@ The same holds for the API and the offline sync payload (`POST /api/scans/sync`,
 Authorization is enforced by the router, before any code of the handler runs, so a route is protected by default.
 `server/access.js` holds the policy: the `PUBLIC` list (the routes that answer without credentials, each with a one-line
 reason) and the rules that give every other route the guard of its role by its path (`/admin/` the committee, the
-provider routes the provider, `/agent/v1/` and `/health/db` the agent key). `route()` in `server/router.js` refuses to
+provider routes the provider, `/agent/v1/` and `/health/db` the agent key, `/cron/` the scheduled jobs that Vercel Cron
+calls with the `CRON_SECRET` of the deployment). `route()` in `server/router.js` refuses to
 register a route that is not public and that no rule, or more than one rule, owns, so the server cannot start with an
 unguarded route, and a new group of routes needs a rule in that file. For each request the router runs the same-origin
 check, then the guard, and only then reads the body and builds the query and the parameters for the handler, so nothing
@@ -289,6 +290,11 @@ of the three is enough: the loop narrows all of them, and the strongest cut is t
   string) is the owner's step too.
 - Backups hold personal data: they stay on the owner's machine, never in the repository, a pull request, an issue or a log
   (`*.dump` is in `.gitignore`; `npm run db:backup` prints no connection string and its issue says nothing but "failed").
+- Personal data is kept only as long as `docs/privacy.md` says (owner decision of 04/10/2026). A daily job
+  (`GET /api/cron/retention`, called by Vercel Cron with `CRON_SECRET`) deletes committee sessions 30 days after they
+  expired or were revoked and login attempts after 1 day, and clears the label of a phone 90 days after it was revoked;
+  the periods are constants in `server/config.js`. It never deletes or changes a scan, the audit log, an active session or
+  an active phone: their retention waits for a legal decision. The job logs counts only.
 - Tests and fixtures use only fake data (the dev seed). Never real names, phone numbers, e-mails, coordinates or
   attendance rows. Put nothing personal in a log or an error message.
 - An unhandled API error is logged only through `describeUnhandled` in `server/router.js` (method, the route as it is
@@ -345,8 +351,11 @@ reviewing agent should apply it too.
   check that every pending migration is byte-identical to the file on GitHub master, or migrates a database outside it.
 - A GitHub Actions change that uses an action not pinned to a full commit SHA, widens `permissions`, adds
   `pull_request_target`, or sets `persist-credentials: true`.
-- An endpoint under `/api` without the right authorization check (committee member, service provider or agent key), or
-  any write through the agent API (it is read-only).
+- An endpoint under `/api` without the right authorization check (committee member, service provider, agent key, or the
+  cron secret for `/cron/`), or any write through the agent API (it is read-only).
+- A change to the retention job that deletes or changes anything beyond what the Safety rules list (a scan, the audit log,
+  an active session or phone), changes a retention period without the owner's decision, or answers a `/cron/` request
+  without checking `CRON_SECRET` (a missing secret must refuse, never allow).
 - A route added to the `PUBLIC` list of `server/access.js` without a reason that justifies answering without
   credentials, a protected route made public (moved to that list, or a path rule changed so that it no longer owns the
   route), a change to `server/router.js` that runs any code of a handler (or reads the body, the query or the parameters

@@ -1,13 +1,23 @@
 // Tunable rules in one place. Kept as plain constants: this is a one-building app.
+//
+// A value that the phone must agree on is NOT written here but in shared/contract.js, and re-exported below so that the
+// server code keeps importing it from here: MAX_SYNC_BATCH, GPS_MAX_USABLE_ACCURACY_M, GPS_MAX_STALE_AGE_S and
+// PASSWORD_MIN_LENGTH. This file holds what only the server uses.
+export {
+  MAX_SYNC_BATCH,
+  GPS_MAX_USABLE_ACCURACY_M,
+  GPS_MAX_STALE_AGE_S,
+  PASSWORD_MIN_LENGTH,
+} from '../shared/contract.js'
 
 export const TIMEZONE = 'Asia/Jerusalem'
 
 // Same provider + same point within this window is treated as one visit, not two.
 export const SCAN_COOLDOWN_MINUTES = 10
 
-// "Soft GPS" (see docs): a reading counts only when the phone says it is accurate to within this many metres.
+// "Soft GPS" (see docs): a reading counts only when the phone says it is accurate to within GPS_MAX_USABLE_ACCURACY_M
+// metres (150, shared/contract.js: the phone stops asking for a better fix at the same number).
 // A vaguer one (or none) cannot be judged: 'required' points refuse it, 'optional' points accept and flag it.
-export const GPS_MAX_USABLE_ACCURACY_M = 150
 
 // When a reading counts, the phone has to be inside the point's circle, with two allowances (every judged mode):
 //  - a few metres for a pin that was placed by hand on a map,
@@ -19,14 +29,13 @@ export const GPS_MAX_ACCURACY_CREDIT_M = 50
 
 // A remembered position is where the phone WAS. On 'optional' points (reception comes and goes) a reading older than
 // GPS_STALE_AFTER_S is flagged `location_stale`, and the person may have walked since: that far (at a brisk walk,
-// for at most GPS_MAX_STALE_AGE_S) is added to the allowed distance. 'required' points ask for a fresh reading and
-// get no such allowance.
+// for at most GPS_MAX_STALE_AGE_S, 300 seconds, shared/contract.js: the oldest position the phone accepts) is added to
+// the allowed distance. 'required' points ask for a fresh reading and get no such allowance.
 export const GPS_STALE_AFTER_S = 60
-export const GPS_MAX_STALE_AGE_S = 300
 export const GPS_WALKING_SPEED_MPS = 2
 
-// Offline scans keep the phone's clock only if it is plausible.
-export const MAX_SYNC_BATCH = 20
+// Offline scans keep the phone's clock only if it is plausible. (The size of a sync batch, MAX_SYNC_BATCH, is in
+// shared/contract.js with the phone's chunk, which has to stay below it.)
 export const CLOCK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 export const CLOCK_MAX_FUTURE_MS = 5 * 60 * 1000
 export const CLOCK_SKEW_FLAG_MS = 5 * 60 * 1000
@@ -65,7 +74,7 @@ export const API_KEY_PREFIX = 'qrk_' // a read-only agent key (Authorization: Be
 // a request that wants us to hash something huge.
 export const MAX_TOKEN_LENGTH = 200
 
-export const PASSWORD_MIN_LENGTH = 8
+// The shortest password of a service provider, PASSWORD_MIN_LENGTH (8), is in shared/contract.js: the committee form checks it too.
 
 // What the database itself enforces on the app's work (server/db.js sets both on every transaction): a statement that
 // runs longer than the first is cut off (SQLSTATE 57014), and a transaction that sits idle longer than the second ends

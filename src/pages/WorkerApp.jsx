@@ -6,6 +6,7 @@ import { createQueue } from '../worker/scanQueue.js'
 import { getFix } from '../worker/geo.js'
 import { performCheckIn, withScanContext } from '../worker/checkIn.js'
 import { uuid } from '../worker/uuid.js'
+import { SCAN_ERROR_POINT_INACTIVE } from '../../shared/contract.js'
 import { useProviders, useBuildingAddress, usePoint, useTodayVisits, useQueueSync } from '../worker/hooks.js'
 import { TopBar, LoginView, HomeView, WorkingView, ResultView } from '../worker/components.jsx'
 import '../ui/ui.css'
@@ -132,7 +133,7 @@ function WorkerShell({ session, setSession }) {
     } else if (pointState.point?.is_active === false) {
       stripCodeFromUrl()
       setCode(null)
-      setResult({ kind: 'error', code: 'point_inactive' })
+      setResult({ kind: 'error', code: SCAN_ERROR_POINT_INACTIVE })
       setView('result')
     } else {
       runCheckIn(code)
