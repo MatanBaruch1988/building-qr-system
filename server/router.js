@@ -1,4 +1,5 @@
-import { ApiError, assertSafeWrite, bad } from './http.js'
+import { Answer, ApiError, assertSafeWrite, bad } from './http.js'
+import { accessFor } from './access.js'
 
 const routes = []
 
@@ -6,8 +7,17 @@ function compile(pattern) {
   return pattern.split('/').filter(Boolean)
 }
 
+/**
+ * Registers a route. Its access (public, or the guard of its role) comes from the policy in server/access.js and is fixed
+ * here, so this throws for a route that the policy does not cover and the server cannot start with an unguarded route.
+ * There is deliberately nothing else to pass and no other way to register a route.
+ */
 export function route(method, pattern, handler) {
-  routes.push({ method, pattern, segments: compile(pattern), handler })
+  const access = accessFor(method, pattern)
+  if (access.public !== true && typeof access.check !== 'function') {
+    throw new Error(`${method} ${pattern} has no guard: the access policy (server/access.js) gave it neither public nor a check`)
+  }
+  routes.push({ method, pattern, segments: compile(pattern), handler, access })
 }
 
 /**
@@ -19,18 +29,36 @@ export function routeTable() {
   return Object.freeze(routes.map((r) => Object.freeze({ method: r.method, path: r.pattern })))
 }
 
-function match(segments, path) {
+function decode(part) {
+  try {
+    return decodeURIComponent(part)
+  } catch {
+    throw bad('bad_request', 'Malformed URL')
+  }
+}
+
+/**
+ * Whether the path is this route's: the same number of segments and the same text in every fixed one. A parameter segment
+ * that is not valid percent-encoding is a malformed URL for every route and every method (the 400 it always was), found
+ * while looking for the route, so it still comes before the guard. No value is kept: the parameters of a handler are built
+ * after its guard (paramsOf).
+ */
+function matches(segments, path) {
   const parts = path.split('/').filter(Boolean)
-  if (parts.length !== segments.length) return null
+  if (parts.length !== segments.length) return false
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i].startsWith(':')) decode(parts[i])
+    else if (segments[i] !== parts[i]) return false
+  }
+  return true
+}
+
+/** The values of the `:name` parameters of a path that `matches`. Handed to a handler, so built only after its guard has let the request in. */
+function paramsOf(segments, path) {
+  const parts = path.split('/').filter(Boolean)
   const params = {}
   for (let i = 0; i < segments.length; i++) {
-    if (segments[i].startsWith(':')) {
-      try {
-        params[segments[i].slice(1)] = decodeURIComponent(parts[i])
-      } catch {
-        throw bad('bad_request', 'Malformed URL')
-      }
-    } else if (segments[i] !== parts[i]) return null
+    if (segments[i].startsWith(':')) params[segments[i].slice(1)] = decode(parts[i])
   }
   return params
 }
@@ -125,19 +153,22 @@ export async function handle(req, res) {
 
     let allowed = false
     for (const r of routes) {
-      const params = match(r.segments, path)
-      if (!params) continue
+      if (!matches(r.segments, path)) continue
       allowed = true
       if (r.method !== req.method) continue
       matched = r
       assertSafeWrite(req)
+      // The guard of the route runs before anything else: no code of the handler, and nothing of the request that is made
+      // for it (the body, the query, the parameters), until the guard has let the request in. A refusal ends the request.
+      const auth = r.access.public === true ? undefined : await r.access.check(req)
       const out = await r.handler({
         req,
         res,
         url,
-        params,
+        params: paramsOf(r.segments, path),
         query: Object.fromEntries(url.searchParams),
         body: readBody(req),
+        auth,
       })
       const shaped = out && (out.json !== undefined || out.text !== undefined || out.status) ? out : { json: out }
       return send(res, shaped)
@@ -146,6 +177,7 @@ export async function handle(req, res) {
       ? new ApiError(405, 'method_not_allowed', 'Method not allowed')
       : new ApiError(404, 'not_found', 'Unknown endpoint')
   } catch (raw) {
+    if (raw instanceof Answer) return send(res, raw.out)
     const err = raw instanceof ApiError ? raw : fromDatabaseError(raw)
     if (err) {
       return send(res, {

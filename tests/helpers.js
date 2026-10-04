@@ -59,8 +59,12 @@ function mockRes() {
 
 const randomIp = () => `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`
 
-/** Calls the API handler directly (no network). Each call comes from a fresh address unless `ip` is given. */
-export async function call(method, path, { body, token, cookie, headers = {}, ip = randomIp(), badJsonBody = false } = {}) {
+/**
+ * Calls the API handler directly (no network). Each call comes from a fresh address unless `ip` is given.
+ * `onBodyRead` is called each time something reads `req.body` (the router does, once, when it builds the context of a
+ * handler), so a test can tell whether a request got that far.
+ */
+export async function call(method, path, { body, token, cookie, headers = {}, ip = randomIp(), badJsonBody = false, onBodyRead } = {}) {
   const { handle } = await import('../server/index.js')
   const req = {
     method,
@@ -77,7 +81,14 @@ export async function call(method, path, { body, token, cookie, headers = {}, ip
   }
   // On Vercel `req.body` is a getter that throws when the JSON is malformed.
   if (badJsonBody) Object.defineProperty(req, 'body', { get() { throw new SyntaxError('Unexpected token') } })
-  else req.body = body
+  else if (onBodyRead) {
+    Object.defineProperty(req, 'body', {
+      get() {
+        onBodyRead()
+        return body
+      },
+    })
+  } else req.body = body
   const res = mockRes()
   await handle(req, res)
   await res.done
