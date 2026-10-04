@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import { query, tx } from './db.js'
 import { sha256 } from './crypto.js'
 import { bearerToken, getCookie, unauthorized, ApiError } from './http.js'
@@ -93,6 +94,29 @@ export const requireApiKey = oncePerRequest(async function requireApiKey(req) {
   if (!rows.length) throw unauthorized('api_key_invalid', 'API key is invalid or revoked')
   query('update api_keys set last_used_at = now() where id = $1', [rows[0].id]).catch(() => {})
   return { apiKeyId: rows[0].id }
+})
+
+/**
+ * A scheduled job (the routes under /cron/): `Authorization: Bearer <CRON_SECRET>`, which is what Vercel Cron sends when the
+ * project has the environment variable CRON_SECRET (Production only, docs/runbooks/secrets.md).
+ *  - It decides from the request and the environment alone: no database statement, so a refused request costs nothing and
+ *    cannot wake the database.
+ *  - A missing or empty CRON_SECRET refuses EVERY request, with or without a header. There is no mode in which the route is
+ *    open (a deployment that was never given the secret is closed, not open).
+ *  - The secret is read on each request, not when the module loads, so a change of the variable takes effect with the next
+ *    request and a test can set it.
+ *  - Both values are hashed first, so the two buffers that timingSafeEqual compares always have the same length: the time it
+ *    takes says nothing about the secret, and a header of a different length is a plain refusal.
+ * One code for every refusal (`cron_required`), so the answer does not tell a missing header from a wrong one, nor a
+ * deployment without a secret from one with it.
+ */
+export const requireCron = oncePerRequest(async function requireCron(req) {
+  const expected = process.env.CRON_SECRET
+  const given = bearerToken(req)
+  if (typeof expected !== 'string' || expected === '' || !given) throw unauthorized('cron_required', 'Cron secret required')
+  const same = timingSafeEqual(Buffer.from(sha256(given)), Buffer.from(sha256(expected)))
+  if (!same) throw unauthorized('cron_required', 'Cron secret required')
+  return { cron: true }
 })
 
 // --- Login throttling, stored in the database so it works across serverless instances.
