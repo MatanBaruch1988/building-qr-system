@@ -2157,7 +2157,7 @@ describe('owner-only files on Windows', () => {
         return defaults.whoami(call)
       },
       powershell: (call) => {
-        events.push(`folders checked (${where()})`)
+        events.push(`folders checked${call.n > 1 ? ' again' : ''} (${where()})`)
         return defaults.powershell(call)
       },
       icacls: (call) => {
@@ -2178,6 +2178,7 @@ describe('owner-only files on Windows', () => {
     expect(events).toEqual([
       'whoami (out: -, work: -)', // before anything is made: the output folder does not exist yet
       'folders checked (out: -, work: -)', // the access lists of the folders of the run are read before anything is made
+      'folders checked again (out: empty, work: -)', // and again right after the output folder is made, on the real chain: it is new
       'icacls <work> (out: empty, work: )', // the directory exists and is empty when its list is set, and the output folder is empty
       'icacls <work> read back (out: empty, work: )', // and its list is read back before anything is written into it
       `icacls ${PARTIAL} (out: empty, work: ${PARTIAL})`,
@@ -2724,15 +2725,30 @@ describe('a folder that other users can write in', () => {
   })
 
   it('is refused when the folder cannot be inspected: a folder that is not known is not trusted', async () => {
+    // a folder that cannot be inspected at all: the check of the folders refuses, and the folder that this run made is removed again
     const dirStatFails = (target, ...rest) => {
       if (path.resolve(String(target)) === path.resolve(dir)) throw new Error('EACCES')
       return privateStat(target, ...rest)
     }
     const r = await go({ deps: { fs: { ...fs, statSync: dirStatFails } } })
     expect(r.exitCode).toBe(1)
-    expect(r.message).toBe(FOLDER_UNKNOWN_ERROR)
+    expect(r.message).toBe(SHARED_UNREADABLE_ERROR)
     expect(r.runner.calls).toEqual([])
-    expect(r.errs).toEqual([LOG_SKIPPED, `backup failed: ${FOLDER_UNKNOWN_ERROR}`])
+    expect(r.errs).toEqual([`backup failed: ${SHARED_UNREADABLE_ERROR}`])
+    expect(fs.existsSync(dir)).toBe(false)
+    // a folder that can be inspected for the check but not when its mode is read after that: the message of the mode check
+    seed([])
+    let calls = 0
+    const failsLater = (target, ...rest) => {
+      if (path.resolve(String(target)) === path.resolve(dir) && ++calls > 1) throw new Error('EACCES')
+      return privateStat(target, ...rest)
+    }
+    const later = await go({ deps: { fs: { ...fs, statSync: failsLater } } })
+    expect(later.exitCode).toBe(1)
+    expect(later.message).toBe(FOLDER_UNKNOWN_ERROR)
+    expect(later.runner.calls).toEqual([])
+    expect(later.errs).toEqual([LOG_SKIPPED, `backup failed: ${FOLDER_UNKNOWN_ERROR}`])
+    expect(fs.existsSync(dir)).toBe(true) // it was there before the run: not removed
   })
 
   it('is not refused on Windows: the access list of a folder is not read there, the work directory is what protects', async () => {
@@ -3406,6 +3422,122 @@ describe('a folder that another account can change', () => {
       }
     })
 
+    describe('a folder that the run makes is checked again, on the real chain', () => {
+      // The nearest folder that exists can have an entry that is inherit-only (it does not apply to it, so the first check rightly
+      // ignores it) and that the new folder inherits. The new folder's own list, read after it is made, is the exact answer.
+      const INHERIT_ONLY = `${SAFE_SDDL}(A;OICIIO;FA;;;${OTHER})`
+      const INHERITED = `O:BAG:SYD:AI(A;OICIID;FA;;;${OTHER})(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;${SID})`
+      /** A PowerShell that answers by the number of its call: the first (nothing is made yet), then the others (after the folders are made). */
+      const byCall = (first, later) =>
+        makeRunner({
+          powershell: ({ options, n }) => ({
+            status: 0,
+            stdout: sddlLines(options.env.BQR_ACL_PATHS.split('|').map((folder) => (n === 1 ? first : later)(folder))),
+            stderr: '#< CLIXML\r\n',
+          }),
+        })
+      const tools = (r) => r.runner.calls.map((call) => call.tool)
+
+      it('refuses a new folder that inherits an entry for another account from a parent where it was inherit-only, and removes it again', async () => {
+        const { outRoot } = layout({ outExists: false })
+        const runner = byCall(
+          (folder) => (same(folder, outRoot) ? INHERIT_ONLY : SAFE_SDDL), // the parent: the entry does not apply to it
+          (folder) => (same(folder, dir) ? INHERITED : same(folder, outRoot) ? INHERIT_ONLY : SAFE_SDDL), // the new folder has it, as inherited
+        )
+        const r = await runWith(runner)
+        expect(r.exitCode).toBe(1)
+        expect(r.message).toBe(refusal('the backup folder itself'))
+        expect(tools(r)).toEqual(['whoami', 'powershell', 'powershell']) // one more check, and nothing else: no icacls, no pg_dump
+        expect(r.rec.events).toEqual(['mkdir']) // the folder was made, and then nothing: no work directory
+        expect(fs.existsSync(dir)).toBe(false) // removed again
+        expect(fs.existsSync(outRoot)).toBe(true) // the folder that was there before is not touched
+        expect(r.log).toBe('')
+        expect(r.errs).toEqual([LOG_SKIPPED, `backup failed: ${refusal('the backup folder itself')}`])
+        expect(r.message).not.toContain(OTHER)
+      })
+
+      it('removes every folder that it made, when several are missing, and says "above" when one of the new folders above is the problem', async () => {
+        const { outRoot } = layout({ outExists: false })
+        dir = path.join(outRoot, 'a', 'b', 'c')
+        const high = path.join(outRoot, 'a')
+        const above = await runWith(byCall(() => SAFE_SDDL, (folder) => (same(folder, high) ? INHERITED : SAFE_SDDL)))
+        expect(above.message).toBe(refusal('a folder above the backup folder'))
+        expect(fs.existsSync(high)).toBe(false) // a, b and c are all gone
+        expect(fs.existsSync(outRoot)).toBe(true)
+        const itself = await runWith(byCall(() => SAFE_SDDL, (folder) => (same(folder, dir) ? INHERITED : SAFE_SDDL)))
+        expect(itself.message).toBe(refusal('the backup folder itself'))
+        expect(fs.existsSync(high)).toBe(false)
+        expect(tools(itself)).toEqual(['whoami', 'powershell', 'powershell'])
+      })
+
+      it('removes only the folders that it made, and only while they are empty: a folder that holds something stays, and so do the ones above it', async () => {
+        const { outRoot } = layout({ outExists: false })
+        dir = path.join(outRoot, 'a', 'b', 'c')
+        const middle = path.join(outRoot, 'a', 'b')
+        const files = {
+          ...fs,
+          statSync: privateStat,
+          mkdirSync: (target, options) => {
+            const made = fs.mkdirSync(target, options)
+            fs.writeFileSync(path.join(middle, 'not-ours.txt'), 'put there by somebody else')
+            return made
+          },
+        }
+        const r = await go({ runner: byCall(() => SAFE_SDDL, (folder) => (same(folder, dir) ? INHERITED : SAFE_SDDL)), deps: fakeWindows({ fs: files }) })
+        expect(r.exitCode).toBe(1)
+        expect(r.message).toBe(refusal('the backup folder itself'))
+        expect(fs.existsSync(dir)).toBe(false) // c was empty, and is removed
+        expect(fs.readFileSync(path.join(middle, 'not-ours.txt'), 'utf8')).toBe('put there by somebody else') // b holds a file: it stays
+        expect(fs.existsSync(path.join(outRoot, 'a'))).toBe(true) // and so does a, which is above it
+      })
+
+      it('does not remove a folder that was there before the run, and makes no second check for it', async () => {
+        const { outRoot } = layout()
+        seed(oldBackups)
+        const r = await runWith(byCall(() => SAFE_SDDL, () => SAFE_SDDL))
+        expect(r.exitCode).toBe(0)
+        expect(r.runner.of('powershell')).toHaveLength(1)
+        expect(fs.existsSync(outRoot)).toBe(true)
+        // and a shared folder that was there is refused by the first check, without a folder being made or removed
+        const shared = await runWith(sharing(dir))
+        expect(shared.exitCode).toBe(1)
+        expect(shared.rec.events).toEqual([])
+        expect(fs.existsSync(dir)).toBe(true)
+      })
+
+      it('passes a clean parent and a clean new folder, with exactly one extra check', async () => {
+        const { outRoot } = layout({ outExists: false })
+        const r = await runWith(byCall(() => SAFE_SDDL, () => SAFE_SDDL))
+        expect(r.exitCode).toBe(0)
+        expect(tools(r).filter((tool) => tool === 'powershell')).toHaveLength(2)
+        expect(r.log).toContain(' ok host=')
+        expect(fs.existsSync(path.join(dir, FINAL))).toBe(true)
+        // the second check comes before anything else is made: the stale clean-up, the work directory and the log
+        const order = tools(r)
+        expect(order.slice(0, 3)).toEqual(['whoami', 'powershell', 'powershell'])
+        expect(order.indexOf('icacls')).toBeGreaterThan(2)
+        expect(fs.existsSync(outRoot)).toBe(true)
+      })
+
+      it('refuses, and removes the folder, when the second check cannot read the lists, or when it reads a descriptor that it does not understand', async () => {
+        for (const [what, later] of Object.entries({
+          'a PowerShell that fails': () => ({ status: 1, stdout: '', stderr: 'boom' }),
+          'a descriptor that cannot be read': ({ options }) => ({ status: 0, stdout: sddlLines(options.env.BQR_ACL_PATHS.split('|').map(() => 'not an sddl')), stderr: '' }),
+        })) {
+          const { outRoot } = layout({ outExists: false })
+          const runner = makeRunner({ powershell: (call) => (call.n === 1 ? defaults.powershell(call) : later(call)) })
+          const r = await runWith(runner)
+          expect(r.exitCode, what).toBe(1)
+          expect(r.message, what).toBe(SHARED_UNREADABLE_ERROR)
+          expect(fs.existsSync(dir), what).toBe(false)
+          expect(fs.existsSync(outRoot), what).toBe(true)
+          expect(r.log, what).toBe('')
+          expect(r.errs, what).toEqual([`backup failed: ${SHARED_UNREADABLE_ERROR}`])
+          expect(r.rec.events, what).toEqual(['mkdir'])
+        }
+      })
+    })
+
     it('refuses a descriptor with no access list at all (a NULL DACL)', async () => {
       layout()
       const r = await runWith(where((folder) => (same(folder, dir) ? 'O:BAG:SYD:NO_ACCESS_CONTROL' : SAFE_SDDL)))
@@ -3441,14 +3573,15 @@ describe('a folder that another account can change', () => {
       expect(JSON.stringify(call.args)).not.toContain(PASSWORD)
     })
 
-    it('reads for the nearest existing folder when the output folder is not made yet, and does not make it first', async () => {
+    it('reads for the nearest existing folder when the output folder is not made yet, and does not make it first; then again for the real chain', async () => {
       const { outRoot } = layout({ outExists: false })
       const r = await runWith(makeRunner())
       expect(r.exitCode).toBe(0)
-      expect(r.runner.of('powershell')).toHaveLength(1)
-      const paths = r.runner.of('powershell')[0].options.env.BQR_ACL_PATHS.split('|')
-      expect(paths[0].toLowerCase()).toBe(path.resolve(outRoot).toLowerCase())
-      expect(paths.map((p) => p.toLowerCase())).not.toContain(path.resolve(dir).toLowerCase())
+      expect(r.runner.of('powershell')).toHaveLength(2)
+      const [before, after] = r.runner.of('powershell').map((call) => call.options.env.BQR_ACL_PATHS.split('|').map((p) => p.toLowerCase()))
+      expect(before[0]).toBe(path.resolve(outRoot).toLowerCase())
+      expect(before).not.toContain(path.resolve(dir).toLowerCase()) // it was not made yet
+      expect(after.slice(0, 2)).toEqual([dir, outRoot].map((p) => path.resolve(p).toLowerCase())) // the new folder, then its parent
     })
 
     it('does the check once per run, before the connection string is asked for and before anything is dumped', async () => {
@@ -3650,6 +3783,110 @@ describe('a folder that another account can change', () => {
       }
       const win = await go({ deps: fakeWindows({ getuid: undefined }) })
       expect(win.exitCode).toBe(0)
+    })
+
+    describe('a folder that the run makes is checked again', () => {
+      // A default ACL can widen the mask of a folder that was just made (the group bits of the mode are the mask), and a new folder
+      // can have another owner: the modes and the owners are read again right after the folders are made.
+      /** A file system that says what a folder is like only after the run made it. */
+      function afterMaking(changes) {
+        const state = { made: false, mkdirs: [], rmdirs: [], statsOfTmp: 0 }
+        const files = {
+          ...fs,
+          mkdirSync: (target, options) => {
+            state.mkdirs.push(path.basename(String(target)))
+            state.made = true
+            return fs.mkdirSync(target, options)
+          },
+          rmdirSync: (target, ...rest) => {
+            state.rmdirs.push(path.basename(String(target)))
+            return fs.rmdirSync(target, ...rest)
+          },
+          mkdtempSync: (prefix, ...rest) => {
+            state.mkdtemp = true
+            return fs.mkdtempSync(prefix, ...rest)
+          },
+          statSync: (target, ...rest) => {
+            const key = path.resolve(String(target))
+            if (key === path.resolve(tmp)) state.statsOfTmp++
+            if (state.made) for (const [folder, info] of changes) if (path.resolve(folder) === key) return info
+            return privateStat(target, ...rest)
+          },
+        }
+        return { state, files }
+      }
+
+      it('refuses a new folder above the backup folder that a default ACL made group-writable, and removes the folders that it made', async () => {
+        const { outRoot } = layout({ outExists: false })
+        dir = path.join(outRoot, 'a', 'b')
+        const high = path.join(outRoot, 'a')
+        const { state, files } = afterMaking([[high, { mode: 0o040770, uid: UID }]])
+        const r = await go({ deps: { fs: files } })
+        expect(r.exitCode).toBe(1)
+        expect(r.message).toBe(refusal('a folder above the backup folder'))
+        expect(r.runner.calls).toEqual([])
+        expect(state.mkdtemp).toBeUndefined()
+        expect(state.rmdirs).toEqual(['b', 'a']) // the deepest first, only the ones that this run made
+        expect(fs.existsSync(high)).toBe(false)
+        expect(fs.existsSync(outRoot)).toBe(true)
+        expect(r.log).toBe('')
+        expect(r.errs).toEqual([LOG_SKIPPED, `backup failed: ${refusal('a folder above the backup folder')}`])
+      })
+
+      it('refuses a new backup folder whose mask a default ACL widened (the mode check), and removes it', async () => {
+        const { outRoot } = layout({ outExists: false })
+        const { state, files } = afterMaking([[dir, { mode: 0o040770, uid: UID }]])
+        const r = await go({ deps: { fs: files } })
+        expect(r.exitCode).toBe(1)
+        expect(r.message).toBe(FOLDER_WRITABLE_ERROR)
+        expect(state.mkdtemp).toBeUndefined()
+        expect(fs.existsSync(dir)).toBe(false)
+        expect(fs.existsSync(outRoot)).toBe(true)
+        expect(r.errs).toEqual([LOG_SKIPPED, `backup failed: ${FOLDER_WRITABLE_ERROR}`])
+      })
+
+      it('refuses a new folder that another account owns, and removes it', async () => {
+        const { outRoot } = layout({ outExists: false })
+        const { state, files } = afterMaking([[dir, { mode: 0o040700, uid: OTHER_UID }]])
+        const r = await go({ deps: { fs: files } })
+        expect(r.exitCode).toBe(1)
+        expect(r.message).toBe(refusal('the backup folder itself'))
+        expect(state.mkdtemp).toBeUndefined()
+        expect(fs.existsSync(dir)).toBe(false)
+        expect(fs.existsSync(outRoot)).toBe(true)
+      })
+
+      it('removes only while empty: a folder that holds something stays, and so does what is above it', async () => {
+        const { outRoot } = layout({ outExists: false })
+        dir = path.join(outRoot, 'a', 'b')
+        const high = path.join(outRoot, 'a')
+        const { files } = afterMaking([[high, { mode: 0o040770, uid: UID }]])
+        const original = files.mkdirSync
+        files.mkdirSync = (target, options) => {
+          const made = original(target, options)
+          fs.writeFileSync(path.join(high, 'not-ours.txt'), 'put there by somebody else')
+          return made
+        }
+        const r = await go({ deps: { fs: files } })
+        expect(r.exitCode).toBe(1)
+        expect(fs.existsSync(dir)).toBe(false) // b was empty
+        expect(fs.readFileSync(path.join(high, 'not-ours.txt'), 'utf8')).toBe('put there by somebody else') // a holds a file: it stays
+      })
+
+      it('passes when the new folders are as they should be, with exactly one more look at the folders above, and none when the folder was there', async () => {
+        layout({ outExists: false })
+        const fresh = afterMaking([])
+        const r = await go({ deps: { fs: fresh.files } })
+        expect(r.exitCode).toBe(0)
+        expect(fresh.state.statsOfTmp).toBe(2) // before and after the folder was made
+        fs.rmSync(dir, { recursive: true, force: true })
+        seed([])
+        const there = afterMaking([])
+        const again = await go({ deps: { fs: there.files } })
+        expect(again.exitCode).toBe(0)
+        expect(there.state.statsOfTmp).toBe(1) // the folder was there: no second look
+        expect(there.state.rmdirs).toEqual([])
+      })
     })
 
     it('still refuses the output folder itself when group or others can write in it (the message of the mode check)', async () => {

@@ -25,7 +25,10 @@
 //      output folder is first resolved with realpath (links, junctions, short names), and the check, the work directory, the
 //      log and the rename all use the resolved path, so a link in the path cannot make the check judge other folders than
 //      the ones that hold the files. What cannot be read, resolved or understood is refused. This is the only folder rule:
-//      nothing depends on the temp folder of the user.
+//      nothing depends on the temp folder of the user. When the output folder (or a folder above it) is not there yet, the
+//      check is made AGAIN right after the folders are made, on the real chain that exists then: an entry that is inherit-only
+//      on the nearest existing folder does not apply to it, but the new folder inherits it, and its list is the only exact
+//      answer. A refused new folder is removed again (only the folders that this run made, and only while they are empty).
 //      The checks of the next steps stay as a second net.
 //   3. Makes this run's private WORK DIRECTORY inside the output folder, with fs.mkdtemp (`.bqr-work-<random>`), after the check
 //      above and after the folder exists: the name is unpredictable, the directory is made with mode 700 in one step on Linux,
@@ -544,6 +547,23 @@ function folderChain(base, files, pathApi) {
     chain.push({ path: cur, kind: 'ancestor' })
   }
   return chain
+}
+
+/** The folders that mkdir -p of `dir` will make, the deepest first: `dir` and each folder above it that is not there yet. */
+function foldersToMake(dir, files) {
+  const missing = []
+  for (let cur = dir; !files.existsSync(cur) && path.dirname(cur) !== cur; cur = path.dirname(cur)) missing.push(cur)
+  return missing
+}
+
+/**
+ * Removes the folders that this run has just made (see foldersToMake), the deepest first, and only while they are empty: rmdir
+ * refuses a folder that holds anything, and then nothing above it is tried. Never throws.
+ */
+function removeMadeFolders(made, files) {
+  for (const folder of made) {
+    if (!attempt(() => files.rmdirSync(folder))) return
+  }
 }
 
 /** The message of a refusal: is it the backup folder itself, or a folder above it, and what to do. No account and no path. */
@@ -1269,7 +1289,25 @@ export async function runBackup(options, deps = {}) {
       logSkipped = LOG_SKIPPED // the log lives in the output folder, which is not private: nothing is written there
       throw new Error(sharedFoldersMessage(shared.problems))
     }
+    // The folders that this run is about to make (none when the output folder is there already). What a new folder inherits cannot be
+    // read from its parent: an entry that is inherit-only on the parent does not apply to the parent, so the check above rightly
+    // ignores it, but the new folder gets it. So the check is made again, on the real chain that exists now, right after the folders
+    // are made and before anything else is (the clean-up, the work directory, the log). A refused folder is removed again.
+    const made = foldersToMake(outDir, files)
     files.mkdirSync(outDir, { recursive: true, mode: PRIVATE_FOLDER })
+    if (made.length) {
+      const again = await checkFoldersNotShared({ platform, outDir, files, runner, env, owner: early, uid: posix ? getuid?.() : undefined })
+      if (again.unreadable) {
+        removeMadeFolders(made, files)
+        logSkipped = '' // the new folder is not known to be private, so no log is written in it, and the message says it all
+        throw new Error(SHARED_UNREADABLE_ERROR)
+      }
+      if (again.problems.length) {
+        removeMadeFolders(made, files)
+        logSkipped = LOG_SKIPPED
+        throw new Error(sharedFoldersMessage(again.problems))
+      }
+    }
     if (posix) {
       // The folder is the user's choice and is never changed. But when GROUP OR OTHERS can write in it, another account can
       // replace the finished file, or turn backup.log into a link to another file of the owner, so the run refuses to start.
@@ -1281,6 +1319,7 @@ export async function runBackup(options, deps = {}) {
         mode = files.statSync(outDir).mode
       })
       if (mode === undefined || (mode & 0o022) !== 0) {
+        removeMadeFolders(made, files) // (a default ACL can widen the mode of a folder that was just made)
         logSkipped = LOG_SKIPPED
         throw new Error(mode === undefined ? FOLDER_UNKNOWN_ERROR : FOLDER_WRITABLE_ERROR)
       }

@@ -118,7 +118,10 @@ see below). It never holds the connection string, the user or the password.
   member of the group could rename the whole subtree, and the members are not known; and the backup folder itself must not be
   writable by the group or others (see the next item but one). A home folder with mode 775 (some older Linux setups give every user a private group and that mode)
   is therefore refused: tighten it with `chmod g-w ~`. If the backup folder does not exist yet, the nearest folder that exists
-  is judged in its place. **The folders that are judged are the real ones**: `--out` is resolved first (symbolic links, on
+  is judged in its place, and the check is made again, on the real chain, right after the run has made the new folders and
+  before it does anything else: a new folder can inherit an entry for another account (or a default ACL can widen its mode) that
+  the parent's own list does not show. A new folder that is refused is removed again (only the folders that this run made, and
+  only while they are empty). **The folders that are judged are the real ones**: `--out` is resolved first (symbolic links, on
   Windows also junctions and short names), and the check, the work directory, `backup.log` and the rename all use the resolved
   path, so a link cannot make the check look at other folders than the ones that hold the files. A link that points at nothing,
   or a part of the path that cannot be inspected, is refused. The message says whether it is the backup folder itself or a folder above it,
