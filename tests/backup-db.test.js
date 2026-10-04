@@ -4898,7 +4898,7 @@ describe('the heartbeat', () => {
 
     it('comes before the issue, so that the alert does not wait for gh', async () => {
       const events = []
-      const fetcher = async (url) => {
+      const fetcher = async () => {
         events.push('ping')
         return ok()
       }

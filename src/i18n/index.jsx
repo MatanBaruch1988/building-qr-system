@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useLayoutEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useState } from 'react'
 import { LANGS, translate, pickLang, dirOf, makeFormatters, isLang } from './core.js'
 
 const STORAGE_KEY = 'qr.lang'

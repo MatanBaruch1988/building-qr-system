@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { qrDataUrl } from './qr.js'
 import { useToast } from './ui.jsx'
@@ -34,8 +34,7 @@ export default function PrintSheet({ points, layout, onDone }) {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [points])
+  }, [points, toast, onDone])
 
   // Print only once every QR image has been decoded: a fixed delay could print blank squares on a slow phone.
   useEffect(() => {
