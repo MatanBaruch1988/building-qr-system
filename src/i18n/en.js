@@ -68,4 +68,9 @@ export default {
   'notice.dismiss': 'Dismiss',
   'update.available': 'A new version of the app is available',
   'update.apply': 'Update',
+
+  // The screen that replaces a broken one (src/ui/ErrorBoundary.jsx).
+  'crash.title': 'Something went wrong on this screen',
+  'crash.retry': 'Try again',
+  'crash.reload': 'Reload the app',
 }

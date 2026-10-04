@@ -1,16 +1,7 @@
 import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useState } from 'react'
-import { LANGS, translate, pickLang, dirOf, makeFormatters, isLang } from './core.js'
+import { LANGS, LANG_STORAGE_KEY, readStoredLang, translate, pickLang, dirOf, makeFormatters, isLang } from './core.js'
 
-const STORAGE_KEY = 'qr.lang'
 const I18nContext = createContext(null)
-
-const readStored = () => {
-  try {
-    return localStorage.getItem(STORAGE_KEY)
-  } catch {
-    return null
-  }
-}
 
 /**
  * Provides t(), formatters and language switching. The language is the person's own choice: it is saved on this phone
@@ -18,7 +9,7 @@ const readStored = () => {
  * app is in Hebrew.
  */
 export function I18nProvider({ children }) {
-  const [stored, setStored] = useState(readStored)
+  const [stored, setStored] = useState(readStoredLang)
   const lang = pickLang({ stored })
   const dir = dirOf(lang)
 
@@ -37,7 +28,7 @@ export function I18nProvider({ children }) {
   const setLang = useCallback((code) => {
     if (!isLang(code)) return
     try {
-      localStorage.setItem(STORAGE_KEY, code)
+      localStorage.setItem(LANG_STORAGE_KEY, code)
     } catch {
       /* private mode: the choice just won't persist */
     }
