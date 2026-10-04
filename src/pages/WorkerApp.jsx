@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { I18nProvider, useI18n } from '../i18n/index.jsx'
 import { api } from '../api/client.js'
 import { loadSession, saveSession, clearSession } from '../worker/session.js'
@@ -93,7 +93,7 @@ function WorkerShell({ session, setSession }) {
     api('/session', { token, timeoutMs: 8000 })
       .then((res) => setSession((s) => (s && s.token === token ? { ...s, provider: res.provider } : s)))
       .catch((err) => err.status === 401 && handleSignedOut())
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- check the stored session once, at app start: a later `session` is a new sign-in, and `handleSignedOut` changes with the language
   }, [])
   // (A slow answer that arrives after "Switch person" and a new sign-in must not touch the new session:
   //  the token comparison above covers the 200 case; `switchWorker` clears the verify via the token check below.)

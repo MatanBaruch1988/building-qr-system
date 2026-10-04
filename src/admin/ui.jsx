@@ -1,4 +1,4 @@
-import React, {
+import {
   cloneElement, createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
 } from 'react'
 import { createPortal } from 'react-dom'
@@ -45,9 +45,11 @@ export function DateInput({ value, onChange, onPendingChange, 'aria-invalid': in
   // The value can also change from outside (a reset): then the field follows it.
   useEffect(() => {
     if (parseDay(text) !== (value || null)) setText(value ? formatDay(value) : '')
-  }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run when `value` changes from outside, never when `text` changes (the person typing)
+  }, [value])
   const pending = text !== '' && !parseDay(text)
-  useEffect(() => { onPendingChange?.(pending) }, [pending]) // eslint-disable-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fires when `pending` changes; the callers pass a new function on every render, so listing it would loop
+  useEffect(() => { onPendingChange?.(pending) }, [pending])
   // After the text is re-written (slashes added or taken away) the cursor goes back by the digit it was at.
   useLayoutEffect(() => {
     const input = inputRef.current

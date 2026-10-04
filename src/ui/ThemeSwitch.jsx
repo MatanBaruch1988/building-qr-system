@@ -1,4 +1,3 @@
-import React from 'react'
 import { THEMES, useTheme } from './theme.js'
 import { translate } from '../i18n/core.js'
 

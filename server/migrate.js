@@ -85,6 +85,7 @@ export async function migrate(pool, dir = DEFAULT_DIR, { lockWaitMs = LOCK_WAIT_
         await client.query('rollback').catch(() => {
           broken = true
         })
+        // eslint-disable-next-line preserve-caught-error -- no `cause` on purpose: a Postgres error carries `detail`, `where`, `table`, `column` and `parameters` (row values), and a logged error prints its cause
         throw new Error(`Migration ${file} failed: ${err.message}`)
       }
     }

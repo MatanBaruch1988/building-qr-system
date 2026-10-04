@@ -13,7 +13,7 @@ export function useLoad(fn, deps = []) {
       setState((s) => ({ status: 'error', data: s.data, error }))
     }
   }, [])
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the caller's `deps` decide when to load again; `load` never changes
   useEffect(() => { load() }, deps)
   return { ...state, reload: load }
 }

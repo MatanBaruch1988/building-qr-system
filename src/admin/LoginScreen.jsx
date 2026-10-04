@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { adminApi, errorText } from './api.js'
 import { IconAlert, IconLock, IconShield } from './icons.jsx'
 import ThemeSwitch, { HEBREW_THEME_LABELS } from '../ui/ThemeSwitch.jsx'

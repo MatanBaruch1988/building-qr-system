@@ -840,6 +840,7 @@ describe('the checks themselves, on routes that are open on purpose (the mock at
   // Use of the body before the guard. The body of every request here is empty, so a handler that looks at a field gets
   // `undefined`, does not act on it, and still refuses with the guard's own 401 and its own statements: only the body
   // check can show it, and it must show it for every variant, no credentials included, and for every cross-role credential.
+  // (The canary handlers below only touch the body: `void` runs the read and leaves no unused variable for the linter.)
   async function expectCaughtByTheBodyCheckAlone(r, guard, touchedPattern) {
     const problems = await authProblems(r, guard)
     expect(problems.length).toBe(CREDENTIALS.length)
@@ -856,7 +857,7 @@ describe('the checks themselves, on routes that are open on purpose (the mock at
 
   it('catch a route that reads a field of the body before it checks authorization, without acting on it', async () => {
     route('POST', '/canary-open/body-field-read', async ({ req, body }) => {
-      const name = body.name
+      void body.name
       await requireAdmin(req)
       return { ok: true }
     })
@@ -874,7 +875,7 @@ describe('the checks themselves, on routes that are open on purpose (the mock at
 
   it('catch a route that checks the body with the in operator before it checks authorization', async () => {
     route('DELETE', '/canary-open/body-in', async ({ req, body }) => {
-      const confirmed = 'confirm' in body
+      void ('confirm' in body)
       await requireApiKey(req)
       return { ok: true }
     })
@@ -883,7 +884,7 @@ describe('the checks themselves, on routes that are open on purpose (the mock at
 
   it('catch a route that lists the keys of the body before it checks authorization', async () => {
     route('PUT', '/canary-open/body-keys', async ({ req, body }) => {
-      const keys = Object.keys(body)
+      void Object.keys(body)
       await requireAdmin(req)
       return { ok: true }
     })

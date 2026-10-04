@@ -1,4 +1,4 @@
-import React, { lazy, Suspense } from 'react'
+import { lazy, Suspense } from 'react'
 import WorkerApp from './pages/WorkerApp'
 
 // The committee app (map, QR tools) is only downloaded by people who open /admin.

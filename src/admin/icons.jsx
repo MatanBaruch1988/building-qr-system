@@ -1,4 +1,3 @@
-import React from 'react'
 export {
   IconAlert, IconCheck, IconChevron, IconCloudOff, IconEye, IconEyeOff, IconGlobe, IconInfo, IconLock, IconPin,
   IconPinOff, IconQr, IconSend,

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css' // bundled with the committee app only (the provider app never loads it)
 import { POINT_RADIUS_DEFAULT_M } from '../../shared/contract.js'
@@ -50,7 +50,7 @@ export default function MapPicker({ lat, lng, radius, onPick, hint }) {
       map.remove()
       state.current = {}
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the map is made once: lat and lng only set its first view, the next effect follows them
   }, [])
 
   useEffect(() => {
