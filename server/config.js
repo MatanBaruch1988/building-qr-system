@@ -57,6 +57,13 @@ export const MAX_TOKEN_LENGTH = 200
 
 export const PASSWORD_MIN_LENGTH = 8
 
+// What the database itself enforces on the app's work (server/db.js sets both on every transaction): a statement that
+// runs longer than the first is cut off (SQLSTATE 57014), and a transaction that sits idle longer than the second ends
+// its connection (25P03). They keep a slow query from running until the 30 s limit of the Vercel function. A migration
+// sets its own, longer, statement limit (server/migrate.js).
+export const STATEMENT_TIMEOUT_MS = 15_000
+export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 20_000
+
 export const DEFAULT_PAGE_SIZE = 100
 export const MAX_PAGE_SIZE = 500
 
