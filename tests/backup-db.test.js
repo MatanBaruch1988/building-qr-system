@@ -7,8 +7,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  AMBIGUOUS_SOURCE_ERROR,
   BACKUP_NAME,
   DEFAULT_KEEP,
+  EXDEV_ERROR,
   ISSUE_TITLE,
   WINDOWS_PG_BIN,
   backupFileName,
@@ -32,7 +34,7 @@ import {
   PARTIAL_NAME,
   PATH_TOO_LONG_ERROR,
   WINDOWS_PATH_LIMIT,
-  workDirName,
+  WORK_PREFIX,
   pgTool,
   READ_ONLY_OPTION,
   resolvePgBin,
@@ -52,12 +54,8 @@ const POOLED = `postgresql://${USER}:${ENCODED}@ep-test-cool-123456-pooler.eu-ce
 const SID = 'S-1-5-21-111-222-333-1001' // a fake SID
 const NOW = new Date('2026-10-03T07:15:42Z')
 const FINAL = 'building-qr-20261003T0715Z.dump'
-// this run's own temporary file: the final name, then the process id and the random characters that go() injects
-const PID = 4242
-const RANDOM = 'a1b2c3'
-const PARTIAL = 'partial.dump' // inside the work directory, which is what is unique to a run
-// the private work directory of the run, inside the output folder, where the temporary file is made and checked
-const WORK = `.bqr-${PID}-${RANDOM}`
+// the temporary file, inside the private work directory (bqr-work-<random>) that each run makes in the temp folder
+const PARTIAL = 'partial.dump'
 const LISTING = [
   ';',
   '; Archive created at 2026-10-03 10:15:40',
@@ -128,7 +126,18 @@ function privateStat(...args) {
 
 /** True for the work directory of a run (the stub says it is private, like a real one made with mode 700). */
 function isWorkDir(target) {
-  return path.basename(String(target)).startsWith('.bqr-')
+  return path.basename(String(target)).startsWith('bqr-work-')
+}
+
+/** The work directories of runs that are in the temp folder of the test now: a run makes its own with mkdtemp. */
+function workDirsNow() {
+  return fs.readdirSync(tmp).filter((name) => name.startsWith('bqr-work-'))
+}
+
+/** The working directory of a tool is this run's own work directory: a bqr-work-<random> directory in the temp folder. */
+function expectWorkCwd(cwd) {
+  expect(path.dirname(cwd)).toBe(path.resolve(tmp))
+  expect(path.basename(cwd)).toMatch(/^bqr-work-[A-Za-z0-9]{6}$/)
 }
 
 /**
@@ -155,8 +164,6 @@ async function go({ options = {}, deps = {}, runner = makeRunner() } = {}) {
       now: () => NOW,
       tmpdir: tmp,
       fs: { ...fs, statSync: privateStat },
-      pid: PID,
-      random: () => RANDOM,
       umask: (mask) => {
         masks.push(mask)
         return 0o022
@@ -497,14 +504,14 @@ describe('a good backup', () => {
       pg_dump: (call) => {
         const answer = defaults.pg_dump(call)
         during = fs.readdirSync(dir)
-        inside = fs.readdirSync(path.join(dir, WORK))
+        inside = fs.readdirSync(call.options.cwd)
         return answer
       },
     })
     const r = await go({ runner })
     expect(r.exitCode).toBe(0)
     expect(r.ok).toBe(true)
-    expect(during).toEqual([WORK]) // the only thing in the folder is this run's work directory
+    expect(during).toEqual([]) // nothing is in the output folder while the dump is made: the work directory is in the temp folder
     expect(inside).toEqual([PARTIAL]) // and the temporary file is in it
     expect(r.files).toEqual(['backup.log', FINAL])
     expect(fs.readFileSync(path.join(dir, FINAL), 'utf8')).toBe('PGDMP fake dump')
@@ -519,7 +526,7 @@ describe('a good backup', () => {
     const [dump] = r.runner.of('pg_dump')
     expect(dump.command).toBe('pg_dump')
     expect(dump.args).toEqual(['--format=custom', '--no-owner', '--no-privileges', '--no-password', '--file', PARTIAL])
-    expect(dump.options.cwd).toBe(path.join(path.resolve(dir), WORK))
+    expectWorkCwd(dump.options.cwd)
   })
 
   it('reads the dump back with pg_restore --list, in the same folder', async () => {
@@ -527,7 +534,7 @@ describe('a good backup', () => {
     const [list] = r.runner.of('pg_restore')
     expect(list.command).toBe('pg_restore')
     expect(list.args).toEqual(['--list', PARTIAL])
-    expect(list.options.cwd).toBe(path.join(path.resolve(dir), WORK))
+    expectWorkCwd(list.options.cwd)
     expect(r.runner.calls.map((c) => c.tool)).toEqual(['pg_dump', 'pg_restore', 'pg_restore'])
   })
 
@@ -543,7 +550,7 @@ describe('a good backup', () => {
     process.chdir(tmp)
     try {
       const r = await go({ options: { out: 'rel-backups' } })
-      expect(r.runner.of('pg_dump')[0].options.cwd).toBe(path.join(path.resolve(tmp, 'rel-backups'), WORK))
+      expectWorkCwd(r.runner.of('pg_dump')[0].options.cwd) // the temp folder, not the folder of the backups
       expect(fs.existsSync(path.join(tmp, 'rel-backups', FINAL))).toBe(true)
     } finally {
       process.chdir(before)
@@ -705,10 +712,33 @@ describe('cleaning a text', () => {
 // ---- where the address comes from ----------------------------------------------------------------------------------------------------
 
 describe('where the connection string comes from', () => {
-  it('BACKUP_DATABASE_URL first: then the Neon CLI is not called at all', async () => {
-    const r = await go({ options: { neonProject: 'square-term-1' } })
+  it('BACKUP_DATABASE_URL alone: the Neon CLI is not called at all', async () => {
+    const r = await go()
     expect(r.exitCode).toBe(0)
     expect(r.runner.of('neon')).toEqual([])
+  })
+
+  it('both BACKUP_DATABASE_URL and --neon-project is refused: nothing is dumped, and neither source wins', async () => {
+    seed(oldBackups)
+    const r = await go({ options: { neonProject: 'square-term-1', keep: 1 } })
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe(AMBIGUOUS_SOURCE_ERROR)
+    expect(r.runner.calls).toEqual([]) // not the Neon CLI, not pg_dump
+    expect(workDirsNow()).toEqual([])
+    expect(r.files).toEqual(['backup.log', ...oldBackups]) // nothing was rotated
+    expect(r.log).toBe(`03/10/2026 10:15 failed host=- error=${AMBIGUOUS_SOURCE_ERROR}\n`)
+    expect(AMBIGUOUS_SOURCE_ERROR).toMatch(/use only one of them/)
+    for (const secret of [PASSWORD, ENCODED, USER, HOST, 'postgresql://']) expect(visible(r)).not.toContain(secret)
+  })
+
+  it('refuses the two sources whatever the order, and takes a blank BACKUP_DATABASE_URL as not given', async () => {
+    const blank = await go({ options: { neonProject: 'square-term-1' }, deps: { env: { BACKUP_DATABASE_URL: '   ' } } })
+    expect(blank.exitCode).toBe(0)
+    expect(blank.runner.of('neon')).toHaveLength(1)
+    fs.rmSync(dir, { recursive: true, force: true })
+    const both = await go({ options: { neonProject: 'square-term-1', neonBranch: 'release' } })
+    expect(both.exitCode).toBe(1)
+    expect(both.message).toBe(AMBIGUOUS_SOURCE_ERROR)
   })
 
   it('the Neon CLI otherwise, with the project and the branch, and the string stays in memory', async () => {
@@ -1258,6 +1288,7 @@ function recordingFs({ folderMode = 0o040700, workMode = 0o040700, fileMode = 0o
     chmods: [],
     appends: [],
     mkdirs: [],
+    mkdtemps: [],
     get fs() {
       const self = this
       return {
@@ -1266,6 +1297,11 @@ function recordingFs({ folderMode = 0o040700, workMode = 0o040700, fileMode = 0o
           events.push('mkdir')
           self.mkdirs.push({ folder: same(p), options: o })
           return fs.mkdirSync(p, o)
+        },
+        mkdtempSync: (prefix, ...rest) => {
+          events.push('mkdtemp')
+          self.mkdtemps.push(String(prefix))
+          return fs.mkdtempSync(prefix, ...rest)
         },
         statSync: (p, ...rest) =>
           same(p) ? { mode: folderMode } : isWorkDir(p) ? { mode: workMode } : { ...fileStat(p, ...rest), mode: fileMode },
@@ -1305,7 +1341,7 @@ describe('the full read of the dump', () => {
     expect(list.args).toEqual(['--list', PARTIAL])
     expect(full.command).toBe('pg_restore')
     expect(full.args).toEqual(['--file=/dev/null', PARTIAL])
-    expect(full.options.cwd).toBe(path.join(path.resolve(dir), WORK))
+    expectWorkCwd(full.options.cwd)
     expect(Object.keys(full.options.env).filter((key) => /^PG[A-Z]/.test(key))).toEqual([])
     expect('BACKUP_DATABASE_URL' in full.options.env).toBe(false)
     expect(r.runner.calls.map((c) => `${c.tool}${c.tool === 'pg_restore' ? ` ${c.args[0].split('=')[0]}` : ''}`)).toEqual([
@@ -1329,7 +1365,7 @@ describe('the full read of the dump', () => {
       return { status: 0, stdout: '', stderr: '' }
     })
     const r = await go({ runner })
-    expect(during).toEqual([WORK]) // no final file yet
+    expect(during).toEqual([]) // no final file yet
     expect(r.exitCode).toBe(0)
     expect(r.files).toEqual(['backup.log', FINAL])
   })
@@ -1403,16 +1439,14 @@ describe('files for the owner only', () => {
       },
     })
     expect(r.exitCode).toBe(0)
-    expect(events).toEqual(['umask 077', 'mkdir', 'mkdir', 'pg_dump', 'umask 022']) // the folder, then the work directory
+    expect(events).toEqual(['umask 077', 'mkdir', 'mkdtemp', 'pg_dump', 'umask 022']) // the output folder, then the work directory
   })
 
-  it('makes the folder with mode 700 (every folder on the way too) and the work directory with mode 700, exclusively', async () => {
+  it('makes the output folder with mode 700 (every folder on the way too), and the work directory with mkdtemp in the temp folder', async () => {
     const rec = recordingFs()
     await go({ deps: { fs: rec.fs } })
-    expect(rec.mkdirs).toEqual([
-      { folder: true, options: { recursive: true, mode: 0o700 } },
-      { folder: false, options: { mode: 0o700 } }, // no `recursive`: a directory that exists is an error
-    ])
+    expect(rec.mkdirs).toEqual([{ folder: true, options: { recursive: true, mode: 0o700 } }])
+    expect(rec.mkdtemps).toEqual([path.join(tmp, 'bqr-work-')]) // mkdtemp itself makes it with mode 700, with a name nobody can guess
   })
 
   it('sets mode 600 on the dump (in the work directory, before it moves) and on backup.log, and creates the log with mode 600', async () => {
@@ -1694,38 +1728,39 @@ describe('owner-only files on Windows', () => {
     expect(r.runner.of('whoami')).toHaveLength(1) // for the dump and for the log
   })
 
-  it('closes the work directory, then the empty temporary file in it, with icacls before pg_dump writes anything: SID, no inheritance', async () => {
+  it('closes the work directory in the temp folder, then the empty temporary file in it, with icacls before pg_dump writes anything: SID, no inheritance', async () => {
     const seen = {}
     const ls = (target) => (fs.existsSync(target) ? fs.readdirSync(target) : null)
     const runner = makeRunner({
       icacls: (call) => {
-        if (call.args[0] === WORK) seen.atWorkDir = { out: ls(dir), inside: ls(path.join(dir, WORK)) }
+        if (call.args[0].startsWith('bqr-work-')) seen.atWorkDir = { out: ls(dir), inside: ls(path.join(tmp, call.args[0])) }
         if (call.args[0] === PARTIAL) {
-          seen.atFile = { inside: ls(path.join(dir, WORK)), size: fs.statSync(path.join(dir, WORK, PARTIAL)).size, final: fs.existsSync(path.join(dir, FINAL)) }
+          seen.atFile = { inside: ls(call.options.cwd), size: fs.statSync(path.join(call.options.cwd, PARTIAL)).size, final: fs.existsSync(path.join(dir, FINAL)) }
         }
         return defaults.icacls(call)
       },
       pg_dump: (call) => {
-        seen.beforeDump = { out: ls(dir), inside: ls(path.join(dir, WORK)) }
+        seen.beforeDump = { out: ls(dir), inside: ls(call.options.cwd) }
         return defaults.pg_dump(call)
       },
     })
     const r = await go({ deps: win(), runner })
     const [dirCall, fileCall] = r.runner.of('icacls')
-    // the directory: found by a relative name in the output folder, with the rights that what is made inside inherits
+    // the directory: found by a relative name in the temp folder, with the rights that what is made inside inherits
     expect(dirCall.command).toBe(ICACLS)
-    expect(dirCall.args).toEqual([WORK, '/inheritance:r', '/grant:r', `*${SID}:(OI)(CI)F`])
-    expect(dirCall.options.cwd).toBe(path.resolve(dir))
+    expect(dirCall.args).toEqual([expect.stringMatching(/^bqr-work-[A-Za-z0-9]{6}$/), '/inheritance:r', '/grant:r', `*${SID}:(OI)(CI)F`])
+    expect(dirCall.options.cwd).toBe(path.resolve(tmp))
     // the file: by a relative name in the work directory
     expect(fileCall.args).toEqual([PARTIAL, '/inheritance:r', '/grant:r', `*${SID}:F`])
-    expect(fileCall.options.cwd).toBe(path.join(path.resolve(dir), WORK))
+    expectWorkCwd(fileCall.options.cwd)
+    expect(path.basename(fileCall.options.cwd)).toBe(dirCall.args[0])
     for (const call of [dirCall, fileCall]) {
       expect(Object.keys(call.options.env).filter((key) => /^PG[A-Z]/.test(key))).toEqual([])
     }
     expect(seen).toEqual({
-      atWorkDir: { out: [WORK], inside: [] }, // nothing is in the directory when its list is set
+      atWorkDir: { out: [], inside: [] }, // nothing is in the directory when its list is set, and nothing is in the output folder
       atFile: { inside: [PARTIAL], size: 0, final: false },
-      beforeDump: { out: [WORK], inside: [PARTIAL] },
+      beforeDump: { out: [], inside: [PARTIAL] },
     })
     // nothing in the command lines names a folder, a user or the connection
     const commandLines = JSON.stringify([dirCall.args, fileCall.args])
@@ -1734,15 +1769,16 @@ describe('owner-only files on Windows', () => {
 
   it('goes in this order: whoami, the work directory, icacls on it, the empty file, icacls, pg_dump, the list, the full read, the rename, the new log', async () => {
     const events = []
-    const ls = (target) => (fs.existsSync(target) ? fs.readdirSync(target).join(' ') : '-')
-    const where = () => `out: ${ls(dir) || 'empty'}, work: ${ls(path.join(dir, WORK))}`
+    const ls = (target) => (target && fs.existsSync(target) ? fs.readdirSync(target).join(' ') : '-')
+    const where = () => `out: ${ls(dir) || 'empty'}, work: ${ls(workDirsNow().map((name) => path.join(tmp, name))[0])}`
+    const named = (name) => name.replace(/^bqr-work-.*$/, '<work>')
     const runner = makeRunner({
       whoami: (call) => {
         events.push(`whoami (${where()})`)
         return defaults.whoami(call)
       },
       icacls: (call) => {
-        events.push(`icacls ${call.args[0]} (${where()})`)
+        events.push(`icacls ${named(call.args[0])} (${where()})`)
         return defaults.icacls(call)
       },
       pg_dump: (call) => {
@@ -1758,12 +1794,12 @@ describe('owner-only files on Windows', () => {
     expect(r.exitCode).toBe(0)
     expect(events).toEqual([
       'whoami (out: empty, work: -)',
-      `icacls ${WORK} (out: ${WORK}, work: )`, // the directory exists and is empty when its list is set
-      `icacls ${PARTIAL} (out: ${WORK}, work: ${PARTIAL})`,
+      'icacls <work> (out: empty, work: )', // the directory exists and is empty when its list is set, and the output folder is empty
+      `icacls ${PARTIAL} (out: empty, work: ${PARTIAL})`,
       'pg_dump',
       'list',
       'full read',
-      // the file was renamed out of the work directory, which is removed: the log is made last
+      // the file was renamed into the output folder and the work directory is removed: the log is made last
       `icacls backup.log (out: backup.log ${FINAL}, work: -)`,
     ])
   })
@@ -1840,12 +1876,12 @@ describe('owner-only files on Windows', () => {
   it('closes a new backup.log the same way, and does not touch a log that exists', async () => {
     const first = await go({ deps: win() })
     expect(first.runner.of('icacls').map((c) => c.args)).toEqual([
-      [WORK, '/inheritance:r', '/grant:r', `*${SID}:(OI)(CI)F`],
+      [expect.stringMatching(/^bqr-work-/), '/inheritance:r', '/grant:r', `*${SID}:(OI)(CI)F`],
       [PARTIAL, '/inheritance:r', '/grant:r', `*${SID}:F`],
       ['backup.log', '/inheritance:r', '/grant:r', `*${SID}:F`],
     ])
     const second = await go({ deps: win() })
-    expect(second.runner.of('icacls').map((c) => c.args[0])).toEqual([WORK, PARTIAL]) // the log was there already
+    expect(second.runner.of('icacls').map((c) => c.args[0])).toEqual([expect.stringMatching(/^bqr-work-/), PARTIAL]) // the log was there already
     expect(second.log.split('\n').filter(Boolean)).toHaveLength(2)
   })
 
@@ -1904,29 +1940,20 @@ describe('the session of pg_dump is read-only', () => {
 describe('one work directory and one temporary file per run', () => {
   const workOf = (r) => path.basename(r.runner.of('pg_dump')[0].options.cwd)
 
-  it('has a work directory named with the process id and random characters, which is not a backup name', () => {
-    expect(workDirName(PID, RANDOM)).toBe(WORK)
-    expect(workDirName(7, 'ffffff')).toBe('.bqr-7-ffffff')
-    expect(WORK.startsWith('.')).toBe(true)
-    expect(BACKUP_NAME.test(WORK)).toBe(false)
+  it('has a prefix that is not a backup name, and a path inside the work directory that is not longer than the final file\'s', () => {
+    expect(WORK_PREFIX).toBe('bqr-work-')
+    expect(BACKUP_NAME.test(`${WORK_PREFIX}abc123`)).toBe(false)
+    // mkdtemp adds six characters; the path inside is at most one character longer than the name of the final file
+    expect(WORK_PREFIX.length + 6 + 1 + PARTIAL_NAME.length).toBeLessThanOrEqual(FINAL.length + 1)
   })
 
-  it('never makes a path inside the work directory much longer than the final file: Windows tools cannot open a long one', () => {
-    for (const pid of [1, 4242, 9999999]) {
-      const inside = workDirName(pid, 'ffffff').length + 1 + PARTIAL_NAME.length
-      expect(inside, String(pid)).toBeLessThanOrEqual(FINAL.length + 1)
-    }
-  })
-
-  it('differs between two runs with the same clock, with the real process id and random characters too', async () => {
-    const first = await go({ deps: { pid: undefined, random: undefined } })
+  it('differs between two runs with the same clock: mkdtemp gives each an unpredictable name of its own', async () => {
+    const first = await go()
     fs.rmSync(dir, { recursive: true, force: true })
-    const second = await go({ deps: { pid: undefined, random: undefined } })
-    const pattern = new RegExp(`^\\.bqr-${process.pid}-[0-9a-f]{6}$`)
-    expect(workOf(first)).toMatch(pattern)
-    expect(workOf(second)).toMatch(pattern)
+    const second = await go()
+    expect(workOf(first)).toMatch(/^bqr-work-[A-Za-z0-9]{6}$/)
+    expect(workOf(second)).toMatch(/^bqr-work-[A-Za-z0-9]{6}$/)
     expect(workOf(first)).not.toBe(workOf(second))
-    expect(BACKUP_NAME.test(workOf(first))).toBe(false)
   })
 
   it('is made empty and exclusively (wx) before pg_dump starts, with mode 600', async () => {
@@ -1944,74 +1971,50 @@ describe('one work directory and one temporary file per run', () => {
     expect(made).toEqual([{ name: PARTIAL, data: '', options: { flag: 'wx', mode: 0o600 } }])
   })
 
-  it('never reuses a work directory that is there already: the run fails before pg_dump, and it is left as it was', async () => {
-    seed([])
-    fs.mkdirSync(path.join(dir, WORK))
-    fs.writeFileSync(path.join(dir, WORK, PARTIAL), 'the data of another run')
-    const r = await go()
-    expect(r.exitCode).toBe(1)
-    expect(r.message).toMatch(/EEXIST/)
-    expect(r.runner.of('pg_dump')).toEqual([])
-    expect(fs.readFileSync(path.join(dir, WORK, PARTIAL), 'utf8')).toBe('the data of another run')
-    expect(r.files).toEqual([WORK, 'backup.log'])
-    expect(visible(r)).not.toContain(tmp)
-  })
-
   it('never reuses a temporary file that is there already, even inside a work directory that it made', async () => {
-    const made = fs.mkdirSync
     const files = {
       ...fs,
       statSync: privateStat,
-      mkdirSync: (target, options) => {
-        const result = made(target, options)
-        if (isWorkDir(target)) fs.writeFileSync(path.join(String(target), PARTIAL), 'planted by another account')
-        return result
+      mkdtempSync: (prefix, ...rest) => {
+        const made = fs.mkdtempSync(prefix, ...rest)
+        fs.writeFileSync(path.join(made, PARTIAL), 'planted by another account')
+        return made
       },
     }
     const r = await go({ deps: { fs: files } })
     expect(r.exitCode).toBe(1)
     expect(r.message).toMatch(/EEXIST/)
     expect(r.runner.of('pg_dump')).toEqual([])
-    expect(r.files).toEqual(['backup.log']) // the work directory is this run's own, so it is removed with what was planted
+    expect(workDirsNow()).toEqual([]) // the work directory is this run's own, so it is removed with what was planted
+    expect(r.files).toEqual(['backup.log'])
   })
 
-  it('leaves a work directory of another run alone, on success too', async () => {
-    for (const other of ['.bqr-1-000000', '.bqr-9-ffffff']) {
-      fs.mkdirSync(path.join(dir, other), { recursive: true })
-      fs.writeFileSync(path.join(dir, other, 'partial.dump'), 'another run is working here')
-    }
-    const r = await go({ options: { keep: 1 } })
-    expect(r.exitCode).toBe(0)
-    expect(r.files).toEqual(['.bqr-1-000000', '.bqr-9-ffffff', 'backup.log', FINAL])
-    expect(fs.readFileSync(path.join(dir, '.bqr-9-ffffff', 'partial.dump'), 'utf8')).toBe('another run is working here')
+  it('leaves the work directory of another run alone, on success and on failure', async () => {
+    const other = path.join(tmp, 'bqr-work-OTHER1')
+    fs.mkdirSync(other)
+    fs.writeFileSync(path.join(other, PARTIAL), 'another run is working here')
+    const good = await go({ options: { keep: 1 } })
+    expect(good.exitCode).toBe(0)
+    fs.rmSync(dir, { recursive: true, force: true })
+    const bad = await go({ runner: makeRunner({ pg_dump: () => ({ status: 1, stdout: '', stderr: 'nope' }) }) })
+    expect(bad.exitCode).toBe(1)
+    expect(workDirsNow()).toEqual(['bqr-work-OTHER1'])
+    expect(fs.readFileSync(path.join(other, PARTIAL), 'utf8')).toBe('another run is working here')
   })
 
-  it('lets two runs of the same minute work at the same time: each has its own file, and the later rename replaces the final one', async () => {
+  it('lets two runs of the same minute work at the same time: each has its own directory, and the later rename replaces the final one', async () => {
     const names = []
-    let which = 0
     const slowDump = async (call) => {
       names.push(path.basename(call.options.cwd))
       await new Promise((resolve) => setTimeout(resolve, 30))
       return defaults.pg_dump(call)
     }
-    const randoms = ['aaaaaa', 'bbbbbb']
-    const two = await Promise.all([
-      go({ runner: makeRunner({ pg_dump: slowDump }), deps: { random: () => randoms[which++] } }),
-      go({ runner: makeRunner({ pg_dump: slowDump }), deps: { random: () => randoms[which++] } }),
-    ])
+    const two = await Promise.all([go({ runner: makeRunner({ pg_dump: slowDump }) }), go({ runner: makeRunner({ pg_dump: slowDump }) })])
     expect(two.map((r) => r.exitCode)).toEqual([0, 0])
-    expect(new Set(names).size).toBe(2)
-    expect(names.sort()).toEqual(['.bqr-4242-aaaaaa', '.bqr-4242-bbbbbb']) // each run dumped in its own directory
-    const left = fs.readdirSync(dir).sort()
-    expect(left).toEqual(['backup.log', FINAL]) // both temporary files are gone, one final file is left
+    expect(new Set(names).size).toBe(2) // each run dumped in its own directory
+    expect(fs.readdirSync(dir).sort()).toEqual(['backup.log', FINAL]) // one final file is left
+    expect(workDirsNow()).toEqual([]) // and both work directories are gone
     expect(fs.readFileSync(path.join(dir, FINAL), 'utf8')).toBe('PGDMP fake dump')
-  })
-
-  it('deletes only the work directory that this run made when it fails', async () => {
-    fs.mkdirSync(path.join(dir, '.bqr-1-000000'), { recursive: true })
-    const r = await go({ runner: makeRunner({ pg_dump: () => ({ status: 1, stdout: '', stderr: 'nope' }) }) })
-    expect(r.exitCode).toBe(1)
-    expect(r.files).toEqual(['.bqr-1-000000', 'backup.log'])
   })
 })
 
@@ -2119,37 +2122,50 @@ describe('a dump that is still readable by others', () => {
 // ---- the private work directory ------------------------------------------------------------------------------------------------------
 
 describe('the private work directory', () => {
-  const workDirsIn = (r) => r.files.filter((name) => name.startsWith('.bqr-'))
-
-  it('is made exclusively (no recursive), after the folder and before the temporary file, which is made inside it', async () => {
+  it('is made by mkdtemp in the temp folder, never in the output folder, after the folder and before the temporary file', async () => {
     const events = []
+    let outFolderDuringDump
     const files = {
       ...fs,
       statSync: privateStat,
       mkdirSync: (target, options) => {
-        events.push(`mkdir ${isWorkDir(target) ? 'work' : 'folder'} ${JSON.stringify(options)}`)
+        events.push(`mkdir folder ${JSON.stringify(options)}`)
         return fs.mkdirSync(target, options)
       },
+      mkdtempSync: (prefix, ...rest) => {
+        events.push(`mkdtemp ${path.dirname(String(prefix)) === path.resolve(tmp) ? 'in the temp folder' : 'ELSEWHERE'} ${path.basename(String(prefix))}`)
+        return fs.mkdtempSync(prefix, ...rest)
+      },
       writeFileSync: (target, data, options) => {
-        events.push(`write ${path.basename(path.dirname(String(target)))}/${path.basename(String(target))} ${JSON.stringify(options)}`)
+        const inside = path.basename(path.dirname(String(target))).replace(/[A-Za-z0-9]{6}$/, 'XXXXXX')
+        events.push(`write ${inside}/${path.basename(String(target))} ${JSON.stringify(options)}`)
         return fs.writeFileSync(target, data, options)
       },
     }
-    const r = await go({ deps: { fs: files } })
+    const runner = makeRunner({
+      pg_dump: (call) => {
+        outFolderDuringDump = fs.readdirSync(dir)
+        return defaults.pg_dump(call)
+      },
+    })
+    const r = await go({ deps: { fs: files }, runner })
     expect(r.exitCode).toBe(0)
     expect(events).toEqual([
       'mkdir folder {"recursive":true,"mode":448}',
-      'mkdir work {"mode":448}',
-      `write ${WORK}/${PARTIAL} {"flag":"wx","mode":384}`,
+      'mkdtemp in the temp folder bqr-work-',
+      'write bqr-work-XXXXXX/partial.dump {"flag":"wx","mode":384}',
     ])
+    expect(outFolderDuringDump).toEqual([]) // nothing but the finished file ever goes into the output folder
   })
 
-  it('is where pg_dump, the list and the full read run, and the finished file is moved out of it into the folder', async () => {
+  it('is where pg_dump, the list and the full read run, and the finished file is moved out of it into the output folder', async () => {
     const r = await go()
-    const work = path.join(path.resolve(dir), WORK)
-    expect(r.runner.calls.map((c) => c.options.cwd)).toEqual([work, work, work])
+    const cwds = r.runner.calls.map((c) => c.options.cwd)
+    expect(cwds).toHaveLength(3)
+    expect(new Set(cwds).size).toBe(1)
+    expectWorkCwd(cwds[0])
     expect(fs.existsSync(path.join(dir, FINAL))).toBe(true)
-    expect(workDirsIn(r)).toEqual([])
+    expect(workDirsNow()).toEqual([])
   })
 
   it('is removed after a good backup and after every kind of failure, with whatever a failed run left in it', async () => {
@@ -2170,16 +2186,16 @@ describe('the private work directory', () => {
       fs.rmSync(dir, { recursive: true, force: true })
       const r = await go({ runner, deps })
       expect(r.exitCode, what).toBe(1)
-      expect(workDirsIn(r), what).toEqual([])
+      expect(workDirsNow(), what).toEqual([])
       expect(r.files, what).toEqual(['backup.log'])
     }
     fs.rmSync(dir, { recursive: true, force: true })
     const good = await go()
     expect(good.exitCode).toBe(0)
-    expect(workDirsIn(good)).toEqual([])
+    expect(workDirsNow()).toEqual([])
   })
 
-  it('that cannot be removed is a warning that says so: a good backup stays good, and the temporary file is not kept', async () => {
+  it('that cannot be removed is a warning that says so: a good backup stays good, and the dump itself was moved out', async () => {
     const files = {
       ...fs,
       statSync: privateStat,
@@ -2195,8 +2211,9 @@ describe('the private work directory', () => {
     expect(r.warning).toBe('work-directory-not-removed')
     expect(r.log).toBe(`03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0 warning=work-directory-not-removed\n`)
     expect(r.errs).toEqual(['backup: warning, work-directory-not-removed'])
-    expect(r.files).toEqual([WORK, 'backup.log', FINAL])
-    expect(fs.readdirSync(path.join(dir, WORK))).toEqual([]) // the dump itself was moved out, so nothing is left in it
+    expect(r.files).toEqual(['backup.log', FINAL]) // nothing of it is in the output folder
+    const [left] = workDirsNow()
+    expect(fs.readdirSync(path.join(tmp, left))).toEqual([]) // the dump was moved out, so nothing is left in it
     expect(visible(r)).not.toContain(tmp)
   })
 
@@ -2205,15 +2222,75 @@ describe('the private work directory', () => {
     expect(r.exitCode).toBe(1)
     expect(r.message).toBe('the work directory could not be made owner-only (does this file system ignore modes?), so nothing was dumped')
     expect(r.runner.of('pg_dump')).toEqual([])
-    expect(workDirsIn(r)).toEqual([])
+    expect(workDirsNow()).toEqual([])
+  })
+
+  it('on Windows, an icacls that fails on the work directory stops the run before anything is written into it', async () => {
+    seed(oldBackups)
+    const written = []
+    const files = {
+      ...fs,
+      statSync: privateStat,
+      writeFileSync: (target, data, options) => {
+        written.push(path.basename(String(target)))
+        return fs.writeFileSync(target, data, options)
+      },
+    }
+    const runner = makeRunner({
+      icacls: (call) => (call.args[0].startsWith('bqr-work-') ? { status: 5, stdout: '', stderr: '' } : defaults.icacls(call)),
+    })
+    const r = await go({
+      options: { keep: 1 },
+      runner,
+      deps: { fs: files, platform: 'win32', exists: () => false, userName: () => 'Test User', env: { SystemRoot: 'C:\\Windows' } },
+    })
+    expect(r.exitCode).toBe(1)
+    expect(r.message).toBe('icacls failed (exit code 5), so a dump cannot be made owner-only')
+    expect(written).not.toContain(PARTIAL) // the temporary file was never made
+    expect(r.runner.of('pg_dump')).toEqual([])
+    expect(workDirsNow()).toEqual([])
+    expect(r.files.filter((name) => BACKUP_NAME.test(name))).toEqual(oldBackups) // nothing was rotated
+  })
+
+  describe('when the output folder is on another drive than the temp folder', () => {
+    const crossDrive = (code = 'EXDEV') => ({
+      ...fs,
+      statSync: privateStat,
+      renameSync: () => {
+        throw Object.assign(new Error(`${code}: cross-device link not permitted, rename '${tmp}/x' -> '${dir}/y'`), { code })
+      },
+    })
+
+    it('fails with a message that says what to do, deletes the dump, and rotates nothing', async () => {
+      seed(oldBackups)
+      const r = await go({ options: { keep: 1 }, deps: { fs: crossDrive() } })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(EXDEV_ERROR)
+      expect(EXDEV_ERROR).toMatch(/same drive/)
+      expect(EXDEV_ERROR).toMatch(/TEMP/)
+      expect(r.files).toEqual(['backup.log', ...oldBackups]) // no final file, nothing rotated
+      expect(workDirsNow()).toEqual([]) // the verified dump in the work directory is removed with it
+      expect(r.log).toBe(`03/10/2026 10:15 failed host=${MASKED_HOST} error=${EXDEV_ERROR}\n`)
+      expect(visible(r)).not.toContain(tmp)
+    })
+
+    it('does not hide another reason why a rename failed, and still cleans its message of paths', async () => {
+      const r = await go({ deps: { fs: crossDrive('EPERM') } })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toMatch(/^EPERM: /)
+      expect(r.message).not.toContain(tmp)
+      expect(workDirsNow()).toEqual([])
+    })
   })
 
   describe('on Windows, with the limit of 260 characters of its tools', () => {
     const win = { platform: 'win32', exists: () => false, userName: () => 'Test User', env: { SystemRoot: 'C:\\Windows' } }
-    /** A folder whose longest path (the final file) is exactly `length` characters. */
+    /** An output folder whose longest path (the final file) is exactly `length` characters. */
     const folderFor = (length) => path.join(tmp, 'x'.repeat(length - FINAL.length - 1 - tmp.length - 1))
+    /** A temp folder whose longest path (the file in the work directory) is exactly `length` characters. */
+    const tempFor = (length) => path.join(tmp, 'y'.repeat(length - (WORK_PREFIX.length + 6) - PARTIAL_NAME.length - 2 - tmp.length - 1))
 
-    it('allows a folder whose longest path is the limit, and refuses one character more, before anything is made', async () => {
+    it('allows an output folder whose longest path is the limit, and refuses one character more, before anything is made', async () => {
       const exact = folderFor(WINDOWS_PATH_LIMIT)
       expect(path.join(exact, FINAL).length).toBe(WINDOWS_PATH_LIMIT)
       const fine = await go({ options: { out: exact }, deps: win })
@@ -2228,8 +2305,25 @@ describe('the private work directory', () => {
       expect(fs.existsSync(tooLong)).toBe(false) // nothing was made
     })
 
+    it('does the same for the temp folder, which is where the work directory is', async () => {
+      const exact = tempFor(WINDOWS_PATH_LIMIT)
+      fs.mkdirSync(exact, { recursive: true })
+      expect(path.join(exact, `${WORK_PREFIX}xxxxxx`, PARTIAL_NAME).length).toBe(WINDOWS_PATH_LIMIT)
+      const fine = await go({ deps: { ...win, tmpdir: exact } })
+      expect(fine.exitCode).toBe(0)
+      fs.rmSync(dir, { recursive: true, force: true })
+      const tooLong = tempFor(WINDOWS_PATH_LIMIT + 1)
+      fs.mkdirSync(tooLong, { recursive: true })
+      const r = await go({ deps: { ...win, tmpdir: tooLong } })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(PATH_TOO_LONG_ERROR)
+      expect(r.runner.calls).toEqual([])
+      expect(fs.existsSync(dir)).toBe(false) // the output folder was not made either
+      expect(fs.readdirSync(tooLong)).toEqual([]) // and no work directory
+    })
+
     it('has a message that says what to do and holds no path, and the limit leaves room below 260', () => {
-      expect(PATH_TOO_LONG_ERROR).toMatch(/use a shorter folder/)
+      expect(PATH_TOO_LONG_ERROR).toMatch(/shorter backup folder, or a shorter TEMP folder/)
       expect(PATH_TOO_LONG_ERROR).not.toMatch(/[A-Za-z]:\\/)
       expect(WINDOWS_PATH_LIMIT).toBeLessThan(260 - 10)
     })
@@ -2246,31 +2340,6 @@ describe('the private work directory', () => {
       expect(r.message).toBe('icacls failed (exit code 3, path not found: a very long backup folder path is the usual cause), so a dump cannot be made owner-only')
       expect(r.runner.of('pg_dump')).toEqual([])
     })
-  })
-
-  it('on Windows, an icacls that fails on the work directory stops the run before anything is written into it', async () => {
-    seed(oldBackups)
-    const written = []
-    const files = {
-      ...fs,
-      statSync: privateStat,
-      writeFileSync: (target, data, options) => {
-        written.push(path.basename(String(target)))
-        return fs.writeFileSync(target, data, options)
-      },
-    }
-    const runner = makeRunner({ icacls: (call) => (call.args[0] === WORK ? { status: 5, stdout: '', stderr: '' } : defaults.icacls(call)) })
-    const r = await go({
-      options: { keep: 1 },
-      runner,
-      deps: { fs: files, platform: 'win32', exists: () => false, userName: () => 'Test User', env: { SystemRoot: 'C:\\Windows' } },
-    })
-    expect(r.exitCode).toBe(1)
-    expect(r.message).toBe('icacls failed (exit code 5), so a dump cannot be made owner-only')
-    expect(written).not.toContain(PARTIAL) // the temporary file was never made
-    expect(r.runner.of('pg_dump')).toEqual([])
-    expect(workDirsIn(r)).toEqual([])
-    expect(r.files.filter((name) => BACKUP_NAME.test(name))).toEqual(oldBackups) // nothing was rotated
   })
 })
 

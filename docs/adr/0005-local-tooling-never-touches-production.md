@@ -68,5 +68,12 @@ decision. It is written down here so that it stays narrow:
 - The dump never leaves the owner's machine: a folder outside the repository, files that only the owner can read (the
   umask and the modes on macOS and Linux, an owner-only access list on Windows), `*.dump` in `.gitignore`, and no
   connection string or personal data in a log, an issue or a pull request.
+- It works in a private directory in the owner's own temp folder (`fs.mkdtemp`: an unpredictable name, mode 700 in one step,
+  inside the owner's profile on Windows), never in the output folder, and moves the verified file into the output folder
+  only at the end. Somebody who can write in the output folder could otherwise add an access entry to a directory made
+  there, or swap the path of a file that `pg_dump` is about to open, before the directory or file is closed. That is why the
+  output folder must be on the same drive as the temp folder (a rename keeps the mode and the access list).
+- It reads one database, chosen in one place: `BACKUP_DATABASE_URL` or `--neon-project`, and giving both is an error, so that
+  the environment never silently wins over the command line.
 - A change that lets the backup write, or run without the read-only session, is P1 in the code review rules of
   `AGENTS.md`.

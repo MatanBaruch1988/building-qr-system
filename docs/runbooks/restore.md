@@ -68,8 +68,8 @@ check-ins, the e-mail addresses of the committee), so they never go to GitHub, i
 **What runs.** `scripts/backup-db.mjs` (`npm run db:backup`), once a day. It asks the Neon CLI for the direct connection
 string of the production branch (kept in memory, never written down) and runs `pg_dump` in a read-only session: the server
 refuses any write in it, so the backup cannot change production. This is the one sanctioned local read of production (see
-ADR 0005). The dump goes into a temporary file in a private work directory that belongs to this run alone (see "Who can
-read them"), so two runs in the same minute never share a file. Then the file is checked twice: the table of contents (`pg_restore --list`) must name the data of `scans` and
+ADR 0005). The dump goes into a temporary file in a private work directory in your own temp folder that belongs to this run
+alone (see "Who can read them"), so two runs in the same minute never share a file. Then the file is checked twice: the table of contents (`pg_restore --list`) must name the data of `scans` and
 `points`, and then a full read (`pg_restore --file=` to the null device, `NUL` on Windows and `/dev/null` elsewhere) must get
 through every data block and exit with 0. The first check alone is not enough, because the table of contents is at the
 start of the file and a dump that was cut off after it would pass. Only then is the file named
@@ -82,40 +82,47 @@ and its size, or a short error. It never holds the connection string, the user o
 
 **Who can read them.** Only the owner, because the dump holds attendance data.
 
-- **A private work directory.** Every run makes its own directory inside the backup folder
-  (`.bqr-<process id>-<random>`), closed to everybody but you before anything is written into it, and does all
-  of its work there: the dump is written there, both checks run there, and the mode or access list is set and checked
-  there. Only then is the verified file moved (a rename on the same disk, which keeps its mode and access list) into the
-  backup folder, and the work directory is removed, whatever happened. This matters when somebody else can write in the
-  backup folder: the program that dumps (`pg_dump`) opens a file by its path, so closing the file alone would let that
-  person swap the path for a file of their own between two steps. Inside a directory that only you can enter, they cannot.
-  At most they can replace the finished file in the backup folder afterwards, and the data in it was never readable by them.
-  A leftover work directory (a run that was killed) is only ever removed by hand: the script never touches the work
-  directory of another run.
+- **A private work directory in your own temp folder.** Every run makes its own directory there (`bqr-work-<random>`, in
+  `%TEMP%` on Windows, `$TMPDIR` or `/tmp` on macOS and Linux), with a name nobody can guess, and does all of its work in it:
+  the dump is written there, both checks run there, and the mode or access list is set and checked there. Only then is the
+  verified file moved into the backup folder, and the work directory is removed, whatever happened. It is deliberately **not**
+  made inside the backup folder. Somebody who can write in the backup folder could add an access entry of their own to a
+  directory made there (an inheritable one, which neither removing inheritance nor granting your account replaces) in the
+  moment between its creation and the moment it is closed, or swap a file's path for a file of their own, because the program
+  that dumps (`pg_dump`) opens a file by its path. The temp folder of your account can be written only by your account (on
+  Windows it is inside your profile; on macOS and Linux the directory is made with mode 700 in one step), so none of that is
+  possible there. At most somebody who can write in the backup folder can replace the finished file afterwards, and the data
+  in it was never readable by them. A leftover work directory (a run that was killed) is only ever removed by hand: the
+  script never touches the work directory of another run.
+- **The backup folder must be on the same drive as the temp folder.** The finished file is moved with a rename, which keeps its
+  mode and access list but works on one drive only. When the backup folder is on another drive the run fails with a message
+  that says so (`EXDEV`), and nothing is kept. Put the backup folder on the drive of the temp folder (on Windows, the drive of
+  your profile), or point `TEMP` (on macOS and Linux `TMPDIR`) of the scheduled task at a private folder on the drive of the
+  backup folder. On many Linux systems `/tmp` is a separate disk (in memory): then set `TMPDIR`.
 - **On macOS and Linux** the script sets the umask to 077 before it creates anything (`pg_dump` makes its file with the
-  umask it inherits, which is often 022 and would let every account of the machine read it), makes the folder and the work
-  directory with mode 700, and sets mode 600 on every dump and on `backup.log`; the mode of the dump is read back, and a
-  dump that others could still read is deleted and the backup fails. A folder that already exists is your choice and is never
-  changed, but the script **refuses to run** (exit code 1, nothing is dumped, nothing is written there, not even the log:
-  a log in such a folder could be made a link to another of your files) when the group or others can write in it. Fix it with
-  `chmod 700 <folder>`. When they can only read it, `backup.log` and the screen get a warning with the same advice, because
-  the files in it are owner-only anyway and the others can see only their names.
-- **On Windows** a new file or folder inherits the access list of its parent, and a shared, network or synced folder may let
-  other people in. So the script closes each thing itself, with `icacls`: the work directory first (all inherited access
-  removed, full control for your own account alone, inherited by what is made inside), then the empty temporary file in it
-  the same way, then `pg_dump` overwrites that file in place (which keeps its list). The account is found by its SID with
-  `whoami /user`, so a name with a space or in another alphabet does not matter. The rename out of the work directory keeps
-  the list (checked on Windows 11), and `backup.log` gets the same list when it is created. If `icacls` is missing or fails,
-  the backup stops before anything is dumped, `backup.log` says why, and nothing is rotated. You can look at the result with
-  `icacls <file>`: it must list only your own account (the administrators and the system are not on the list either, on
-  purpose). Windows has no refusal for a folder that others can write in, because the access list of a folder is not read
-  there, so the choice of the folder matters more. The tools of Windows (`icacls`, and many others) cannot open a path of more
-  than about 260 characters, so the script refuses a folder whose paths would be longer than 245 characters (the names inside
-  the work directory are short, so it is the folder that decides): use a short folder, such as `C:\backups\building-qr` or one
-  directly under your profile.
-- Choose a folder under your user profile (`C:\Users\<your name>`), and never a shared folder, a network drive or a folder that a
-  service synchronises to the internet (for example OneDrive or Dropbox): a synchronisation client copies the file somewhere
-  else, and no access list can stop that copy.
+  umask it inherits, which is often 022 and would let every account of the machine read it), makes the backup folder with
+  mode 700, and sets mode 600 on every dump and on `backup.log`; the mode of the dump is read back, and a dump that others
+  could still read is deleted and the backup fails. A folder that already exists is your choice and is never changed, but the
+  script **refuses to run** (exit code 1, nothing is dumped, nothing is written there, not even the log: a log in such a
+  folder could be made a link to another of your files, and the finished file could be replaced) when the group or others can
+  write in it. Fix it with `chmod 700 <folder>`. When they can only read it, `backup.log` and the screen get a warning with
+  the same advice, because the files in it are owner-only anyway and the others can see only their names.
+- **On Windows** a new file or folder inherits the access list of its parent, so the script closes each thing itself, with
+  `icacls`, as a second net inside the private temp folder: the work directory first (all inherited access removed, full
+  control for your own account alone, inherited by what is made inside), then the empty temporary file in it the same way,
+  then `pg_dump` overwrites that file in place (which keeps its list). The account is found by its SID with `whoami /user`,
+  so a name with a space or in another alphabet does not matter. The rename into the backup folder keeps the list (checked on
+  Windows 11), and `backup.log` gets the same list when it is created. If `icacls` is missing or fails, the backup stops
+  before anything is dumped, `backup.log` says why, and nothing is rotated. You can look at the result with `icacls <file>`: it
+  must list only your own account (the administrators and the system are not on the list either, on purpose). Windows has no
+  refusal for a backup folder that others can write in, because the access list of a folder is not read there, so the choice
+  of the folder matters more. The tools of Windows (`icacls`, and many others) cannot open a path of more than about 260
+  characters, so the script refuses, before it makes anything, a backup folder or a temp folder whose paths would be longer
+  than 245 characters (the names inside the work directory are short): use a short backup folder, such as
+  `C:\backups\building-qr` or one directly under your profile.
+- Choose a backup folder under your user profile (`C:\Users\<your name>`), and never a shared folder, a network drive or a folder
+  that a service synchronises to the internet (for example OneDrive or Dropbox): a synchronisation client copies the file
+  somewhere else, and no access list can stop that copy.
 
 **What it needs on that computer.**
 
@@ -124,7 +131,8 @@ and its size, or a short error. It never holds the connection string, the user o
   `C:\Program Files\PostgreSQL\18\bin`, then `PATH`.
 - The Neon CLI, signed in (`neon auth`) as a person who can see the project. Any other Postgres works too: set
   `BACKUP_DATABASE_URL` to its direct connection string (a host without `-pooler`, because `pg_dump` needs a session) and
-  leave out `--neon-project`.
+  leave out `--neon-project`. Use one of the two, never both: when both are given the run stops (exit code 1, nothing is
+  dumped) instead of letting one of them win, because a backup of the wrong database is worse than none.
 - Optional: the GitHub CLI (`gh`), signed in. With `--report-issue <owner>/<repo>` a failed run opens an issue titled
   "Daily database backup failed", or, when an issue with exactly that title is already open, adds a comment to it (a
   failure that lasts a week is one issue, not seven). The issue and the comment say only that it failed and when: no path,
