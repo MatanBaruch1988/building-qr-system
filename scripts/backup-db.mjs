@@ -81,6 +81,15 @@
 //      dumped or written); delete the file. Appends one line to backup.log in the folder (the time, ok or failed, the masked host, the file and its size, or a
 //      short error) and prints a summary. It never writes the URL, the user or the password, and every message is cleaned
 //      of them first.
+//   7. With BACKUP_HEARTBEAT_URL set (an https address, from the environment only: it is a secret, and a command line is
+//      visible), it pings that address once after the outcome of the run is final: the address itself for a backup that
+//      worked, `<address>/fail` for any failure (a refusal, an unsupported system, the marker check). A service such as
+//      healthchecks.io alerts when no ping arrives in time, which is the only way to notice a backup that never ran (a laptop
+//      that was off, a task that was disabled, a crash before the script could report anything). The request is a GET with no
+//      body and no query, and holds nothing about the run (no host, file, size or error). It has a timeout of 10 seconds and at
+//      most 2 retries (a network error or a 5xx), and a ping that fails is only a warning in the log line (`heartbeat-failed`;
+//      `heartbeat-not-sent` for an address that is not https): never a failure of the backup, never an issue. The address is
+//      never printed or logged, and it is not passed to any child process. Without the variable nothing is sent.
 //
 // Systems: Windows and Linux. Any other system (macOS, FreeBSD, ...) is refused before anything is made, with exit code 1:
 // the folder checks read what Windows and Linux report, and on another system they would not see every way another account
@@ -182,6 +191,11 @@ export const FOLDER_SWAPPED_ERROR =
   'nothing was dumped, because the backup folder was changed while it was being made (a link or another folder is at its path now): nothing was kept, run it again'
 export const LOG_SKIPPED = 'backup: backup.log was not written, because other accounts can change the backup folder or a folder above it'
 
+// The heartbeat (see sendHeartbeat): one try and at most HEARTBEAT_RETRIES more, each with this timeout, with a pause before each retry.
+export const HEARTBEAT_TIMEOUT_MS = 10_000
+export const HEARTBEAT_RETRIES = 2
+const HEARTBEAT_PAUSES_MS = [2_000, 5_000]
+
 const NEON_TIMEOUT_MS = 2 * 60_000
 const DUMP_TIMEOUT_MS = 30 * 60_000
 const LIST_TIMEOUT_MS = 5 * 60_000
@@ -213,6 +227,7 @@ export const USAGE = [
   '  --report-issue <o/r>    on a failure, open an issue in this GitHub repository with the gh CLI',
   '  --pg-bin <dir>          the folder of pg_dump and pg_restore (else PG_BIN, else the Windows install, else PATH)',
   'Without --neon-project the connection string is read from BACKUP_DATABASE_URL (the direct one, not -pooler). Give only one of them.',
+  'With BACKUP_HEARTBEAT_URL set (an https address, from the environment only) each run pings it once: the address itself when the backup worked, <address>/fail when not.',
 ].join('\n')
 
 // ---- arguments -----------------------------------------------------------------------------------------------------
@@ -763,12 +778,12 @@ export function connectionEnv(connectionString) {
 /**
  * The environment for a child process: the current one without the variables that could steer pg_dump or pg_restore
  * somewhere else (every PG... variable of libpq: a stray PGSERVICE or PGHOST must not decide which database is dumped) and
- * without BACKUP_DATABASE_URL, which no child needs. PG_BIN is ours and stays.
+ * without BACKUP_DATABASE_URL and BACKUP_HEARTBEAT_URL (a secret too), which no child needs. PG_BIN is ours and stays.
  */
 export function cleanEnv(base) {
   const env = {}
   for (const [key, value] of Object.entries(base ?? {})) {
-    if (value === undefined || /^PG[A-Z]/i.test(key) || key.toUpperCase() === 'BACKUP_DATABASE_URL') continue
+    if (value === undefined || /^PG[A-Z]/i.test(key) || ['BACKUP_DATABASE_URL', 'BACKUP_HEARTBEAT_URL'].includes(key.toUpperCase())) continue
     env[key] = value
   }
   return env
@@ -1158,6 +1173,53 @@ async function openIssue({ repo, runner, now, env }) {
   }
 }
 
+// ---- the heartbeat -------------------------------------------------------------------------------------------------------
+
+const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Pings the heartbeat (see the header, step 7): `url` is the text of BACKUP_HEARTBEAT_URL. Returns null when all is well or when
+ * there is nothing to do (no address), and otherwise the word for the warning: `heartbeat-not-sent` (the address is not an https
+ * address, or has a user name or a password in it) or `heartbeat-failed` (no answer in 3 tries, a 4xx, or a redirect). The request
+ * is a GET with no body and no query of ours, to the address for ok, and to the address with /fail added for a failure; the
+ * answer is not read. A network error, a timeout and a 5xx are tried again (twice at most, after a pause); another answer is not.
+ * Never throws, and never says the address. `fetcher(url, options)` is fetch, and `sleep(ms)` waits (a test passes its own).
+ */
+export async function sendHeartbeat({ url, ok, fetcher = globalThis.fetch, sleep = sleepFor, timeoutMs = HEARTBEAT_TIMEOUT_MS }) {
+  const text = String(url ?? '').trim()
+  if (!text) return null
+  let target
+  try {
+    target = new URL(text)
+  } catch {
+    return 'heartbeat-not-sent'
+  }
+  if (target.protocol !== 'https:' || target.username || target.password) return 'heartbeat-not-sent'
+  if (!ok) target.pathname = `${target.pathname.replace(/\/+$/, '')}/fail`
+  for (let tries = 0; tries <= HEARTBEAT_RETRIES; tries++) {
+    if (tries > 0) await attemptAsync(() => sleep(HEARTBEAT_PAUSES_MS[tries - 1]))
+    try {
+      // redirect: 'error': the address is a secret, and an answer that sends it elsewhere is not an answer to trust
+      const response = await fetcher(target.href, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(timeoutMs) })
+      attempt(() => response.body?.cancel()) // the answer says OK and nothing else: it is not read, and the connection is let go
+      if (response.status >= 200 && response.status < 300) return null
+      if (response.status < 500) return 'heartbeat-failed'
+    } catch {
+      // a network error or a timeout: tried again
+    }
+  }
+  return 'heartbeat-failed'
+}
+
+/** Awaits `action` and never throws. */
+async function attemptAsync(action) {
+  try {
+    await action()
+  } catch {
+    // nothing to say
+  }
+}
+
 // ---- the backup ----------------------------------------------------------------------------------------------------------
 
 /** 123 B, 12.3 KB or 1.2 MB. */
@@ -1234,6 +1296,8 @@ export async function runBackup(options, deps = {}) {
     fs: files = fs,
     umask = setProcessUmask,
     getuid = process.getuid?.bind(process),
+    fetch: fetcher, // (sendHeartbeat falls back on the fetch of the system, and on a real sleep)
+    sleep,
     out = console.log,
     err = console.error,
   } = deps
@@ -1541,6 +1605,11 @@ export async function runBackup(options, deps = {}) {
     result.warning = [result.warning, 'work-directory-not-removed'].filter(Boolean).join(',')
   }
   if (earlyWarnings.length) result.warning = [result.warning, ...earlyWarnings].filter(Boolean).join(',')
+
+  // The outcome is final now: the heartbeat is told (see the header, step 7), before the issue (the alert must not wait for gh) and
+  // before the log line (a warning about the heartbeat goes in it). It never changes the result.
+  const heartbeat = await sendHeartbeat({ url: env.BACKUP_HEARTBEAT_URL, ok: result.ok, fetcher, sleep })
+  if (heartbeat) result.warning = [result.warning, heartbeat].filter(Boolean).join(',')
 
   let issue
   if (!result.ok && options.reportIssue) {
