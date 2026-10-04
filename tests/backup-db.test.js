@@ -1896,7 +1896,9 @@ describe('files for the owner only', () => {
 
   it('creates the real files for the owner only (checked with the real modes on macOS and Linux, where they exist)', async () => {
     if (process.platform === 'win32') return // Windows has no such modes: its protection is the access list of the profile
-    const r = await go({ deps: { fs, umask: undefined } })
+    // The real file system reports the real owner of the folders, so the run must compare them with the real user, not
+    // with the invented one that the other tests use.
+    const r = await go({ deps: { fs, umask: undefined, getuid: process.getuid } })
     expect(r.exitCode).toBe(0)
     expect(fs.statSync(dir).mode & 0o777).toBe(0o700)
     expect(fs.statSync(path.join(dir, FINAL)).mode & 0o777).toBe(0o600)
