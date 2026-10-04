@@ -5,7 +5,8 @@
 //           only way to make a route open, and the reason has to justify it.
 //   RULES   The guard of every other route, chosen by the path the route is registered with (`/admin/providers/:id`, the
 //           pattern, never the path of a request): `/admin/` the committee (requireAdmin), the provider routes the
-//           provider (requireProvider), `/agent/v1/` and `/health/db` the agent key (requireApiKey).
+//           provider (requireProvider), `/agent/v1/` and `/health/db` the agent key (requireApiKey), `/cron/` the scheduled
+//           jobs that Vercel Cron calls with the CRON_SECRET of the deployment (requireCron).
 //
 // How to add a route (route() in server/router.js throws at startup, so the server cannot run with an unguarded route):
 //   - A route under an existing rule needs nothing here: it is guarded by the router. Its handler may still call the guard
@@ -20,7 +21,7 @@
 //
 // The policy is data and a lookup. There is no function that registers a route without it, and nothing here can be changed
 // after the module has loaded: the exports are frozen.
-import { requireAdmin, requireProvider, requireApiKey } from './auth.js'
+import { requireAdmin, requireProvider, requireApiKey, requireCron } from './auth.js'
 import { requireApiKeyForHealth } from './health.js'
 
 // The routes that are meant to answer without credentials, each with the reason. Everything else must refuse a request
@@ -49,6 +50,7 @@ const RULES = Object.freeze(
     { guard: 'provider', owns: /^\/(session|scan|scans\/sync|my\/.*)$/, check: requireProvider },
     { guard: 'agent', owns: /^\/agent\/v1\//, check: requireApiKey },
     { guard: 'agent', owns: /^\/health\/db$/, check: requireApiKeyForHealth },
+    { guard: 'cron', owns: /^\/cron\//, check: requireCron },
   ].map((rule) => Object.freeze(rule)),
 )
 

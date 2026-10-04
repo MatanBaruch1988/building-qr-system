@@ -10,7 +10,8 @@
 //     with its reason). A new route does not need an edit here: it is picked up from the table and tested automatically.
 //   - The guard a protected route must have comes from its path (GUARDS below, this test's own copy of the rules, which
 //     the server's rules in server/access.js are compared with, so a weakened server rule fails here): /admin/ routes need
-//     a committee session, /agent/v1/ routes and /health/db an agent key, the provider routes a provider device token. A
+//     a committee session, /agent/v1/ routes and /health/db an agent key, the provider routes a provider device token, and
+//     /cron/ routes the CRON_SECRET of the deployment (set to a fake value below, and put back after the file). A
 //     protected route that fits none of those rules fails loudly, so a new route group needs a rule in both places.
 //   - Each protected route is called with no credentials, and with every kind of malformed credential (a cookie or a
 //     bearer token that does not exist, with and without the prefixes of server/config.js). All of them must get a 401
@@ -28,12 +29,13 @@
 //     guess which field a handler looks at. And the router itself must not read the body (`req.body`) or build the query
 //     for a handler before its guard has refused: the request writes down both (see sendRequest). Nothing the guard does
 //     touches any of it (a test proves that), so the guard has run before any use of the body when the lists are empty.
-//   - Each protected route is also called with VALID credentials of the other two roles (a real committee session, a
-//     real provider device token, a real agent key, all made in the throwaway schema), sent the usual way and the wrong
-//     way round (a bearer token in the cookie, a cookie value as a bearer token). It must refuse them with the 401 of
-//     its own guard, so a route that is switched to another role's guard is noticed.
+//   - Each protected route is also called with VALID credentials of the other roles (a real committee session, a
+//     real provider device token, a real agent key, all made in the throwaway schema, and the fake CRON_SECRET), sent the
+//     usual way and the wrong way round (a bearer token in the cookie, a cookie value as a bearer token). It must refuse
+//     them with the 401 of its own guard, so a route that is switched to another role's guard is noticed. The cron guard
+//     decides from the environment alone, so unlike the other three it makes no database statement, whatever it is sent.
 //   - 'the router guards every route before the handler runs' registers canaries under guarded paths (/admin/canary-...,
-//     /my/canary-..., /agent/v1/canary-...) whose handlers are written the unsafe way (they query, write, read the body,
+//     /my/canary-..., /agent/v1/canary-..., /cron/canary-...) whose handlers are written the unsafe way (they query, write, read the body,
 //     the query or the parameters before they call their guard, or never call it, or call the wrong one) and proves that
 //     for every refused request the handler never ran at all, and that it does run once a valid credential is sent.
 //   - 'the checks themselves' proves that the checks above notice these mistakes in a handler. The router now makes the
@@ -48,7 +50,7 @@ import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
 import '../server/index.js' // importing it registers every route file with the router
 import { route, routeTable } from '../server/router.js'
 import { PUBLIC, accessFor } from '../server/access.js'
-import { requireAdmin, requireProvider, requireApiKey } from '../server/auth.js'
+import { requireAdmin, requireProvider, requireApiKey, requireCron } from '../server/auth.js'
 import { getPool, setPool, query, tx } from '../server/db.js'
 import { bad, unauthorized } from '../server/http.js'
 import { ADMIN_COOKIE, ADMIN_TOKEN_PREFIX, PROVIDER_TOKEN_PREFIX, API_KEY_PREFIX } from '../server/config.js'
@@ -65,17 +67,20 @@ vi.mock('../server/access.js', async (importOriginal) => {
 // The policy as it is in server/access.js, whatever the mock above does.
 const policy = await vi.importActual('../server/access.js')
 
-// The three guards of server/auth.js. `owns` says which paths must use it. `missing` is the exact 401 code for a request
+// The four guards of server/auth.js. `owns` says which paths must use it. `missing` is the exact 401 code for a request
 // that carries nothing of that kind (also what a valid credential of another role gets); `codes` is every 401 code the
 // guard may give (an agent key that does not exist is api_key_invalid, one that is missing or has no agent key prefix is
-// api_key_required). A 401 with any other code does not prove that this guard ran.
+// api_key_required). A 401 with any other code does not prove that this guard ran. `looksUp` is false for the guard that
+// never asks the database (the cron secret is compared with the environment): it makes no statement for any request.
 const GUARDS = {
   committee: { owns: /^\/admin\//, missing: 'admin_required', codes: ['admin_required'] },
   provider: { owns: /^\/(session|scan|scans\/sync|my\/.*)$/, missing: 'invalid_session', codes: ['invalid_session'] },
   agent: { owns: /^\/(agent\/v1\/.*|health\/db)$/, missing: 'api_key_required', codes: ['api_key_required', 'api_key_invalid'] },
+  cron: { owns: /^\/cron\//, missing: 'cron_required', codes: ['cron_required'], looksUp: false },
 }
+const looksUp = (guard) => GUARDS[guard].looksUp !== false
 
-const checks = { committee: requireAdmin, provider: requireProvider, agent: requireApiKey }
+const checks = { committee: requireAdmin, provider: requireProvider, agent: requireApiKey, cron: requireCron }
 
 /** The guard a protected route must use, from its path. Throws for a path that no rule owns (or that two rules own). */
 function guardOf(path) {
@@ -160,8 +165,10 @@ const CREDENTIALS = [
 ]
 
 // The secret of each role, made in beforeAll: the value of the committee session cookie, the provider device token
-// from POST /session, and the agent key from POST /admin/api-keys.
+// from POST /session, the agent key from POST /admin/api-keys, and the CRON_SECRET (a fake value that beforeAll puts in
+// the environment and afterAll puts back; it has no prefix of another role, so no other guard could mistake it for its own).
 let VALID = {}
+let CRON_SECRET_BEFORE
 const asCookie = (value) => ({ cookie: `${ADMIN_COOKIE}=${value}` })
 const asBearer = (value) => ({ token: value })
 // Where a role's secret normally travels, then the wrong place (it is still a valid secret, but sent the wrong way).
@@ -169,12 +176,17 @@ const PLACES = {
   committee: [['', asCookie], [' sent as a bearer token', asBearer]],
   provider: [['', asBearer], [' sent in the admin cookie', asCookie]],
   agent: [['', asBearer], [' sent in the admin cookie', asCookie]],
+  cron: [['', asBearer], [' sent in the admin cookie', asCookie]],
 }
+
+// How many requests with a valid credential of ANOTHER role one route gets (crossRoleProblems): each of the three other
+// roles, sent the usual way and the wrong way round.
+const CROSS_ROLE_REQUESTS = (Object.keys(GUARDS).length - 1) * 2
 
 const HOW_TO_FIX =
   'A route that is not on the PUBLIC list of server/access.js is guarded by the router before any code of its handler ' +
   'runs: requireAdmin for /admin/ routes, requireApiKey for /agent/v1/ routes and /health/db, requireProvider for the ' +
-  'provider routes (see GUARDS, and RULES in server/access.js). handle() in server/router.js must run that guard first ' +
+  'provider routes, requireCron for /cron/ routes (see GUARDS, and RULES in server/access.js). handle() in server/router.js must run that guard first ' +
   'and only then read the body, build the query and the parameters and call the handler. Until the guard has refused, ' +
   'nothing may run for any kind of request (a cookie, an Authorization header, none): only the statements that the guard ' +
   'makes on its own, and a request without credentials must not touch the database at all. ' +
@@ -244,7 +256,7 @@ function countingPool(real) {
 // Test-only routes under the guarded paths of each role (the router gives them the guard of that role), named canary-... .
 // They are registered in beforeAll, after ROUTES was read, so they are never walked as routes of the API (see the test
 // that says so).
-const CANARY = { committee: '/admin/canary-', provider: '/my/canary-', agent: '/agent/v1/canary-' }
+const CANARY = { committee: '/admin/canary-', provider: '/my/canary-', agent: '/agent/v1/canary-', cron: '/cron/canary-' }
 const isCanary = (path) => /\/canary-/.test(path)
 // A route per guard and per method whose handler does nothing: only the router's guard runs for it. It measures what a
 // guard makes on its own for a given request.
@@ -403,6 +415,8 @@ beforeAll(async () => {
     for (const method of METHODS) route(method, guardAloneRoute(guard, method).path, async () => ({ ok: true }))
   }
   db = await setupDb()
+  CRON_SECRET_BEFORE = process.env.CRON_SECRET
+  process.env.CRON_SECRET = `route-auth-cron-${randomBytes(24).toString('hex')}`
   await seedAdmin(db.pool)
   const cookie = await adminCookie()
   const provider = await call('POST', '/api/admin/providers', {
@@ -417,13 +431,20 @@ beforeAll(async () => {
     committee: cookie.slice(cookie.indexOf('=') + 1),
     provider: signedIn.json.token,
     agent: key.json.key,
+    cron: process.env.CRON_SECRET,
   }
-  // The three secrets must be real ones, or the cross-role tests below would prove nothing.
+  // The four secrets must be real ones, or the cross-role tests below would prove nothing.
   expect(VALID.committee.startsWith(ADMIN_TOKEN_PREFIX)).toBe(true)
   expect(VALID.provider.startsWith(PROVIDER_TOKEN_PREFIX)).toBe(true)
   expect(VALID.agent.startsWith(API_KEY_PREFIX)).toBe(true)
+  expect(VALID.cron.length).toBeGreaterThanOrEqual(32)
+  for (const prefix of [ADMIN_TOKEN_PREFIX, PROVIDER_TOKEN_PREFIX, API_KEY_PREFIX]) expect(VALID.cron.startsWith(prefix)).toBe(false)
 })
-afterAll(async () => db?.teardown())
+afterAll(async () => {
+  if (CRON_SECRET_BEFORE === undefined) delete process.env.CRON_SECRET
+  else process.env.CRON_SECRET = CRON_SECRET_BEFORE
+  await db?.teardown()
+})
 
 describe('the route table', () => {
   it('is a frozen, read-only copy that shows only the method and the path as registered', () => {
@@ -439,7 +460,7 @@ describe('the route table', () => {
 
   it('covers every route file, as the Vercel function serves them', () => {
     // api/index.js imports server/index.js, the same module this test imports.
-    for (const prefix of ['/admin/', '/agent/v1/', '/public/', '/session', '/scan', '/health']) {
+    for (const prefix of ['/admin/', '/agent/v1/', '/public/', '/session', '/scan', '/health', '/cron/']) {
       expect(
         ROUTES.some((r) => r.path.startsWith(prefix)),
         `no route starts with ${prefix}`,
@@ -524,12 +545,14 @@ describe('the guards', () => {
   })
 
   it('measures each guard on its own: no statement without credentials, a lookup for a credential it can look up', async () => {
-    const own = { committee: asCookie(VALID.committee), provider: asBearer(VALID.provider), agent: asBearer(VALID.agent) }
-    // A token shaped like the guard's own kind, that does not exist: the guard has to look it up to refuse it.
+    const own = { committee: asCookie(VALID.committee), provider: asBearer(VALID.provider), agent: asBearer(VALID.agent), cron: asBearer(VALID.cron) }
+    // A token shaped like the guard's own kind, that does not exist: the guard has to look it up to refuse it (the cron
+    // guard looks nothing up: a wrong secret is refused by comparing it with the environment).
     const unknown = {
       committee: asCookie(token(ADMIN_TOKEN_PREFIX)),
       provider: asBearer(token(PROVIDER_TOKEN_PREFIX)),
       agent: asBearer(token(API_KEY_PREFIX)),
+      cron: asBearer(token()),
     }
     for (const guard of Object.keys(GUARDS)) {
       const alone = guardAloneRoute(guard, 'GET')
@@ -538,19 +561,25 @@ describe('the guards', () => {
       expect(nothing.statements, `the ${guard} guard must refuse a request with no credentials before any query`).toEqual([])
       const missing = await sendRequest(alone, unknown[guard])
       expect(missing.res.status, guard).toBe(401)
-      expect(missing.statements.length, `the ${guard} guard looks up a credential that is shaped like its own`).toBeGreaterThanOrEqual(1)
       const accepted = await sendRequest(alone, own[guard])
       expect(accepted.res.status, guard).toBe(200)
-      expect(accepted.statements.length, `the ${guard} guard looks up a valid credential`).toBeGreaterThanOrEqual(1)
+      if (looksUp(guard)) {
+        expect(missing.statements.length, `the ${guard} guard looks up a credential that is shaped like its own`).toBeGreaterThanOrEqual(1)
+        expect(accepted.statements.length, `the ${guard} guard looks up a valid credential`).toBeGreaterThanOrEqual(1)
+      } else {
+        expect(missing.statements, `the ${guard} guard refuses a wrong credential without a database statement`).toEqual([])
+        expect(accepted.statements, `the ${guard} guard accepts a valid credential without a database statement`).toEqual([])
+      }
     }
   })
 
   it('never touches the request body in a guard, whatever it is sent, so a touch before the guard is always the handler\'s', async () => {
-    const own = { committee: asCookie(VALID.committee), provider: asBearer(VALID.provider), agent: asBearer(VALID.agent) }
+    const own = { committee: asCookie(VALID.committee), provider: asBearer(VALID.provider), agent: asBearer(VALID.agent), cron: asBearer(VALID.cron) }
     const unknown = {
       committee: asCookie(token(ADMIN_TOKEN_PREFIX)),
       provider: asBearer(token(PROVIDER_TOKEN_PREFIX)),
       agent: asBearer(token(API_KEY_PREFIX)),
+      cron: asBearer(token()),
     }
     for (const guard of Object.keys(GUARDS)) {
       for (const method of METHODS.filter((m) => hasBody({ method: m }))) {
@@ -612,12 +641,13 @@ describe('the guards', () => {
     expect(touched).toEqual([])
   })
 
-  it('has a real committee session, provider device token and agent key, each accepted by its own routes', async () => {
+  it('has a real committee session, provider device token, agent key and cron secret, each accepted by its own routes', async () => {
     const sample = (guard) => PROTECTED.find((r) => r.method === 'GET' && !r.path.includes(':') && guardOf(r.path) === guard)
     const plain = {
       committee: asCookie(VALID.committee),
       provider: asBearer(VALID.provider),
       agent: asBearer(VALID.agent),
+      cron: asBearer(VALID.cron),
     }
     for (const guard of Object.keys(GUARDS)) {
       const r = sample(guard)
@@ -659,7 +689,7 @@ describe('the checks themselves, on routes that are open on purpose (the mock at
     const problems = await authProblems(r, 'committee')
     expect(problems.length).toBe(CREDENTIALS.length) // every kind of request got a 200
     expect(problems[0]).toMatch(/no credentials at all it answered 200, expected 401/)
-    expect((await crossRoleProblems(r, 'committee')).length).toBe(4) // and so did every credential of the other roles
+    expect((await crossRoleProblems(r, 'committee')).length).toBe(CROSS_ROLE_REQUESTS) // and so did every credential of the other roles
   })
 
   it('catch a route that validates its input before it checks authorization', async () => {
@@ -676,7 +706,7 @@ describe('the checks themselves, on routes that are open on purpose (the mock at
     // (the handler read `name` before the guard). The body check alone catches the same mistake when the answer is a 401.
     for (const p of problems) expect(p).toMatch(/used the request body before it refused \(it did: read name\)/)
     const cross = await crossRoleProblems(r, 'committee')
-    expect(cross.length).toBe(4)
+    expect(cross.length).toBe(CROSS_ROLE_REQUESTS)
     for (const p of cross) expect(p).toMatch(/answered 400 \(missing_field\)(.|\n)*read name/)
   })
 
@@ -700,7 +730,7 @@ describe('the checks themselves, on routes that are open on purpose (the mock at
       expect(p).not.toMatch(/answered/) // it did refuse with admin_required
     }
     const cross = await crossRoleProblems(r, 'committee')
-    expect(cross.length).toBe(4) // and so does every credential of the other roles
+    expect(cross.length).toBe(CROSS_ROLE_REQUESTS) // and so does every credential of the other roles
     for (const p of cross) expect(p).toMatch(/select 1 as one/)
     expect(getPool()).toBe(db.pool) // the counting pool was taken out again
   })
@@ -754,9 +784,9 @@ describe('the checks themselves, on routes that are open on purpose (the mock at
       expect(p).toMatch(/The guard must run first/)
     }
     const cross = await crossRoleProblems(r, 'committee')
-    expect(cross.length).toBe(2) // a provider token and an agent key sent in the admin cookie
+    expect(cross.length).toBe(3) // a provider token, an agent key and the cron secret sent in the admin cookie
     for (const p of cross) {
-      expect(p).toMatch(/^with a valid (provider|agent) credential sent in the admin cookie/)
+      expect(p).toMatch(/^with a valid (provider|agent|cron) credential sent in the admin cookie/)
       expect(p).toMatch(/select 1 as one/)
     }
   })
@@ -776,9 +806,9 @@ describe('the checks themselves, on routes that are open on purpose (the mock at
       expect(p).toMatch(/select 1 as one/)
     }
     const cross = await crossRoleProblems(r, 'provider')
-    expect(cross.length).toBe(2) // the committee session and the agent key, each sent as a bearer token
+    expect(cross.length).toBe(3) // the committee session, the agent key and the cron secret, each sent as a bearer token
     for (const p of cross) {
-      expect(p).toMatch(/^with a valid (committee|agent) credential/)
+      expect(p).toMatch(/^with a valid (committee|agent|cron) credential/)
       expect(p).toMatch(/select 1 as one/)
     }
   })
@@ -846,7 +876,7 @@ describe('the checks themselves, on routes that are open on purpose (the mock at
     expect(problems.length).toBe(CREDENTIALS.length)
     expect(problems[0]).toMatch(new RegExp(`^with no credentials at all the handler of ${r.method} ${r.path.replace(/\//g, '\\/')} used the request body`))
     const cross = await crossRoleProblems(r, guard)
-    expect(cross.length).toBe(4)
+    expect(cross.length).toBe(CROSS_ROLE_REQUESTS)
     for (const p of [...problems, ...cross]) {
       expect(p).toMatch(/used the request body before it refused/)
       expect(p).toMatch(touchedPattern)
@@ -1034,7 +1064,7 @@ describe('the access policy of server/access.js', () => {
 
 describe('a guard answers once per request', () => {
   it('hands the same answer to every call for a request, a refusal included, and keeps requests apart', async () => {
-    for (const guard of [requireAdmin, requireProvider, requireApiKey]) {
+    for (const guard of [requireAdmin, requireProvider, requireApiKey, requireCron]) {
       const req = { headers: {} }
       const first = guard(req)
       expect(guard(req)).toBe(first)
@@ -1049,7 +1079,7 @@ describe('a guard answers once per request', () => {
 })
 
 describe('the router guards every route before the handler runs', () => {
-  const own = (guard) => ({ committee: asCookie(VALID.committee), provider: asBearer(VALID.provider), agent: asBearer(VALID.agent) })[guard]
+  const own = (guard) => ({ committee: asCookie(VALID.committee), provider: asBearer(VALID.provider), agent: asBearer(VALID.agent), cron: asBearer(VALID.cron) })[guard]
 
   /** A route under the guarded path of `guard`. `ran` lists the requests that reached its handler, whatever the handler does. */
   function canary(guard, name, method, handler) {
@@ -1200,6 +1230,7 @@ describe('the router guards every route before the handler runs', () => {
     committee: (auth) => auth.admin.email === 'admin@test.local' && typeof auth.sessionId === 'string',
     provider: (auth) => auth.provider.company === 'Route auth test company' && typeof auth.deviceId === 'string',
     agent: (auth) => typeof auth.apiKeyId === 'string',
+    cron: (auth) => auth.cron === true,
   }
   for (const guard of Object.keys(GUARDS)) {
     it(`gives the handler of a ${guard} route the answer of the guard as \`auth\`, the same one that its own call gets`, async () => {
@@ -1223,7 +1254,8 @@ describe('the router guards every route before the handler runs', () => {
       const alone = await sendRequest(guardAloneRoute(guard, 'GET'), own(guard))
       const calledTwice = await sendRequest(twice.r, own(guard))
       expect(calledTwice.res.status).toBe(200)
-      expect(alone.statements.length).toBeGreaterThanOrEqual(1)
+      if (looksUp(guard)) expect(alone.statements.length).toBeGreaterThanOrEqual(1)
+      else expect(alone.statements).toEqual([])
       expect(calledTwice.statements).toEqual(alone.statements)
     })
   }
