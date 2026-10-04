@@ -111,7 +111,7 @@ see below). It never holds the connection string, the user or the password.
   of the system drive lets every signed-in account create a folder, and that is fine). An entry that only applies to what is
   made inside (inherit-only) and a deny entry are ignored. A folder owned by another account is refused. An access list that
   cannot be read, or has an entry that is not understood (a conditional one), is refused too: nothing that is not understood
-  is trusted. On macOS and Linux every folder of the chain, the backup folder and each folder above it, must be owned by you or
+  is trusted. On Linux every folder of the chain, the backup folder and each folder above it, must be owned by you or
   by root (an owner can rename or delete anything in a folder, and so can the owner of a sticky folder: the sticky bit only
   protects a file from the others), and no folder above the backup folder may be writable by the group or by others unless it
   has the sticky bit and is owned by you or root (as `/tmp` is: nobody can rename or delete what they do not own), because a
@@ -129,11 +129,11 @@ see below). It never holds the connection string, the user or the password.
   directory's access list read back, the two looks at `backup.log`, the mode checks), and the races that they cover need write
   access to the backup folder or to a folder above it, which this check refuses.
 - **A private work directory inside the backup folder.** Every run makes its own directory there, after the check above and
-  after the folder exists (`.bqr-work-<random>`, a name nobody can guess, hidden on macOS and Linux), and does all of its work
+  after the folder exists (`.bqr-work-<random>`, a name nobody can guess, hidden on Linux), and does all of its work
   in it: the dump is written there, the checks run there, and the mode or access list is set and checked there. Only then is
   the verified file moved into the backup folder with a rename (on the same volume, so it cannot fail for that reason), and
   the work directory is removed, whatever happened. It inherits the access list of the backup folder, which only the trusted
-  accounts can change (on macOS and Linux it is made with mode 700 in one step), and nobody else can add an access entry of
+  accounts can change (on Linux it is made with mode 700 in one step), and nobody else can add an access entry of
   their own to it or swap its path, because that needs write access to the backup folder. A work directory is a directory,
   and retention only ever touches files with the exact name of a backup, so it is never counted, rotated or deleted by
   retention.
@@ -143,7 +143,7 @@ see below). It never holds the connection string, the user or the password.
   is everything else: a file, a link, any other name, any backup. `backup.log` says how many were removed
   (`stale-work-folders-removed=N`, never a path); a folder that cannot be removed is a warning
   (`N-stale-work-folders-not-removed`) and the run goes on.
-- **On macOS and Linux** the script sets the umask to 077 before it creates anything (`pg_dump` makes its file with the
+- **On Linux** the script sets the umask to 077 before it creates anything (`pg_dump` makes its file with the
   umask it inherits, which is often 022 and would let every account of the machine read it), makes the backup folder with
   mode 700, and sets mode 600 on every dump and on `backup.log`; the mode of the dump is read back, and a dump that others
   could still read is deleted and the backup fails. A folder that already exists is your choice and is never changed, but the
@@ -178,6 +178,15 @@ see below). It never holds the connection string, the user or the password.
   somewhere else, and no access list can stop that copy.
 
 **What it needs on that computer.**
+
+- **Windows or Linux.** Any other system, macOS included, is refused before anything is made (exit code 1, the message says
+  that the backup runs on Windows and Linux). The folder checks read what Windows and Linux report. On Linux a POSIX ACL
+  cannot hide write access from them: with an extended ACL the group bits of the mode are the ACL mask (`acl(5)`), and a
+  named entry only gives what the mask also holds, so an entry that lets another account write makes the folder look
+  group-writable and it is refused; the files are made with modes 700 and 600 and the dump gets `chmod 600`, so the mask of
+  a new object is empty and an inherited default ACL gives nobody access. A file system with its own ACLs (NFSv4, SMB) is
+  not covered: use a local folder. macOS has extended ACLs that the mode does not show, and nobody can run or test that code
+  here (no Mac, and CI is Linux), so it is refused until it can be added with a Mac to test it on.
 
 - The PostgreSQL 18 client tools (`pg_dump` and `pg_restore`; a version older than the server, which is Postgres 18, is
   refused by `pg_dump`). The script finds them through `--pg-bin`, then the `PG_BIN` variable, then on Windows
@@ -305,7 +314,7 @@ is signed in. In the Task Scheduler window the same settings are on the **Settin
 If the run is refused because another account can change the backup folder or a folder above it (the first item of "Who can
 read them"), the backup folder must move into your own profile. Nothing about `TEMP` is needed.
 
-**On macOS or Linux** a cron line does the same (`crontab -e`). Cron has a short `PATH`, so use full paths, or set `PATH` at
+**On Linux** a cron line does the same (`crontab -e`). Cron has a short `PATH`, so use full paths, or set `PATH` at
 the top of the crontab so that `node`, `neon`, `pg_dump` and `gh` are found:
 
 ```

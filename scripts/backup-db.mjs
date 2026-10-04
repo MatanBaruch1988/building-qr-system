@@ -28,13 +28,13 @@
 //      nothing depends on the temp folder of the user.
 //      The checks of the next steps stay as a second net.
 //   3. Makes this run's private WORK DIRECTORY inside the output folder, with fs.mkdtemp (`.bqr-work-<random>`), after the check
-//      above and after the folder exists: the name is unpredictable, the directory is made with mode 700 in one step on macOS
-//      and Linux, and on Windows it inherits the list of the folder, which only the trusted accounts can change. Nobody else
+//      above and after the folder exists: the name is unpredictable, the directory is made with mode 700 in one step on Linux,
+//      and on Windows it inherits the list of the folder, which only the trusted accounts can change. Nobody else
 //      can add an access entry of their own (an explicit, inheritable one, which neither `icacls /inheritance:r` nor `/grant:r`
 //      removes) between the moment the directory is made and the moment it is closed, or swap a path for their own: that
 //      needs write access to the folder, which step 2 refused. On Windows the directory then also gets an owner-only access list
 //      (icacls) and the list is READ BACK (`icacls <dir>`): the run refuses unless it is exactly one entry, the user's, full
-//      control inherited by files and folders. On macOS and Linux the mode is read back. A second net.
+//      control inherited by files and folders. On Linux the mode is read back. A second net.
 //      The work directory is on the same volume as the finished file, so the last step is a rename. It is a directory, and
 //      retention only touches FILES with the exact name of a backup, so it is never counted, rotated or deleted by retention.
 //      A run that was killed leaves its work directory behind: at the start of the next run (after the checks) every directory
@@ -52,7 +52,7 @@
 //      data of the tables `scans` and `points`; but it does not read the data blocks, so a dump that was cut off after its
 //      table of contents would pass. A full read (`pg_restore --file=<the null device>`) writes the SQL of the whole archive
 //      to nowhere, which reads and decompresses every data block, and must exit with 0. Then the mode is set and read back
-//      (macOS and Linux). Only then is the verified, owner-only file renamed from the work directory to
+//      (Linux). Only then is the verified, owner-only file renamed from the work directory to
 //      building-qr-<UTC time>.dump in the output folder; a file of the same name from a run of the same minute is replaced
 //      by this verified one. A rename keeps the mode and the access list of the file. The work directory is removed at the
 //      end, whatever happened, and nothing in it survives.
@@ -74,7 +74,19 @@
 //      short error) and prints a summary. It never writes the URL, the user or the password, and every message is cleaned
 //      of them first.
 //
-// Who can read the files: only the owner, because the dump holds attendance data. On macOS and Linux the script sets the
+// Systems: Windows and Linux. Any other system (macOS, FreeBSD, ...) is refused before anything is made, with exit code 1:
+// the folder checks read what Windows and Linux report, and on another system they would not see every way another account
+// could change a folder. On Linux a POSIX ACL cannot hide write access from the mode check: with an extended ACL (named user or
+// group entries) the group bits of the mode are the ACL mask (acl(5): "the group permissions correspond to the permissions of the
+// ACL_MASK entry"), and a named entry only grants what the mask also holds, so an entry that lets another account write makes
+// the folder show as group-writable, and that is refused. The files and folders are made with the modes 700 and 600, and the dump
+// gets chmod 600: with a default ACL the kernel uses the mode that is given (not the umask), so the mask of a new object is empty
+// and an inherited default ACL gives nobody access, and the modes are read back. A file system with its own kind of ACL (NFSv4,
+// SMB) is not covered: use a local folder. macOS has extended ACLs (`chmod +a`) that the mode does not show. Nobody can run or
+// test code for them here (there is no Mac, and CI is Linux), and security code that nobody tested is worse than a clear refusal,
+// so macOS is refused until the code can be added with a Mac to test it on.
+//
+// Who can read the files: only the owner, because the dump holds attendance data. On Linux the script sets the
 // umask to 077 before it creates anything (pg_dump creates its file with the umask it inherits, which is often 022, so the
 // file would be readable by every account of the machine), makes the output folder with mode 700, and sets mode 600 on every
 // dump and on backup.log. The mode of the finished dump is READ BACK (stat), and a dump that is still readable by others
@@ -124,10 +136,10 @@ export const BACKUP_NAME = /^building-qr-\d{8}T\d{4}Z\.dump$/
 export const WINDOWS_PG_BIN = 'C:\\Program Files\\PostgreSQL\\18\\bin'
 // The line that backup.log and the screen get when the backup folder was there already and other users can read it.
 export const FOLDER_WARNING =
-  'the backup folder can be read by other users (the files in it are owner-only, so they see only the names): tighten it (on macOS and Linux run chmod 700 on the folder)'
+  'the backup folder can be read by other users (the files in it are owner-only, so they see only the names): tighten it (on Linux run chmod 700 on the folder)'
 // A folder that group or others can WRITE in is refused (see runBackup): they could swap a path for a file of their own.
 export const FOLDER_WRITABLE_ERROR =
-  'the backup folder can be written by other users (group or others), so nothing was dumped: tighten it (on macOS and Linux run chmod 700 on the folder)'
+  'the backup folder can be written by other users (group or others), so nothing was dumped: tighten it (on Linux run chmod 700 on the folder)'
 export const FOLDER_UNKNOWN_ERROR = 'the backup folder could not be inspected, so nothing was dumped'
 // icacls and the other tools of Windows cannot open a path longer than MAX_PATH (260 characters, 248 for a working directory),
 // where Node itself can. The run refuses a folder whose paths would go over this, instead of failing later with "path not found".
@@ -149,6 +161,10 @@ export const SHARED_FOLDERS_PREFIX = 'nothing was dumped, because another accoun
 export const SHARED_FOLDERS_ADVICE = ' (use a backup folder in your own profile)'
 export const SHARED_UNREADABLE_ERROR =
   'nothing was dumped, because the backup folder and the folders above it could not be inspected (their links resolved and their access lists read), and a folder that is not known to be private is not trusted'
+// The backup runs on Windows and Linux only (see the header): another system is refused before anything is made.
+const SUPPORTED_PLATFORMS = new Set(['win32', 'linux'])
+export const UNSUPPORTED_PLATFORM_ERROR =
+  'the backup runs on Windows and Linux; on this system its folder checks cannot see every way another account could change the folder'
 export const LOG_SKIPPED = 'backup: backup.log was not written, because other accounts can change the backup folder or a folder above it'
 
 const NEON_TIMEOUT_MS = 2 * 60_000
@@ -570,7 +586,7 @@ async function readSddls({ paths, runner, env }) {
  * 'itself' and 'above') } or { unreadable: true } when the access lists could not be read.
  * On Windows the security descriptors of the output folder (or, for one that is not made yet, the nearest folder that exists:
  * what is made in it inherits from it) and of every folder above it are read with one PowerShell call and judged by
- * sharedAclProblem. On macOS and Linux every folder of the chain (the output folder, or the nearest existing one, and each folder
+ * sharedAclProblem. On Linux every folder of the chain (the output folder, or the nearest existing one, and each folder
  * above) must be owned by the current user (`uid`) or by root: the owner of a folder can rename or delete anything in it, whatever
  * its mode says, and so can the owner of a sticky folder (the sticky bit only protects a child from the others). The same rule as
  * Windows has for an owner that is not trusted. And no folder above the output folder may be writable by the group or others
@@ -729,10 +745,10 @@ export function backupFileName(date) {
 
 /**
  * The start of the name of the private work directory of a run. fs.mkdtemp adds six random characters and makes the directory
- * (mode 700 on macOS and Linux) in one step, INSIDE the output folder, which the run has checked is not changeable by another
+ * (mode 700 on Linux) in one step, INSIDE the output folder, which the run has checked is not changeable by another
  * account; so two runs never share one, nobody can guess the name, and it is on the same volume as the finished file. The name
  * is short on purpose (icacls and the other tools of Windows cannot open a path of more than about 260 characters, see
- * WINDOWS_PATH_LIMIT) and starts with a dot, so that a file manager hides it on macOS and Linux.
+ * WINDOWS_PATH_LIMIT) and starts with a dot, so that a file manager hides it on Linux.
  */
 export const WORK_PREFIX = '.bqr-work-'
 /** The exact name of a work directory: the prefix and the six random characters that fs.mkdtemp adds. Nothing else is ever removed as one. */
@@ -1162,6 +1178,7 @@ export async function runBackup(options, deps = {}) {
     out = console.log,
     err = console.error,
   } = deps
+  const supported = SUPPORTED_PLATFORMS.has(platform)
   const posix = platform !== 'win32'
   const windows = !posix
   const started = now()
@@ -1214,9 +1231,13 @@ export async function runBackup(options, deps = {}) {
 
   // Before anything is created: every file that pg_dump (a child process, which inherits the mask) or this script makes is
   // closed to every other account. The old mask is put back at the end.
-  const previousMask = posix ? umask(PRIVATE_UMASK) : undefined
+  const previousMask = posix && supported ? umask(PRIVATE_UMASK) : undefined
 
   try {
+    if (!supported) {
+      logSkipped = '' // nothing is made, so there is no place for a log, and the message says it all
+      throw new Error(UNSUPPORTED_PLATFORM_ERROR)
+    }
     if (!outResolved) {
       logSkipped = '' // a folder that cannot be resolved is not known, so no log is written in it, and the message says it all
       throw new Error(SHARED_UNREADABLE_ERROR)
@@ -1285,12 +1306,12 @@ export async function runBackup(options, deps = {}) {
 
     // THE WORK DIRECTORY. Everything that holds data happens in a private directory that this run makes with fs.mkdtemp INSIDE the
     // output folder, after that folder (and every folder above it) was found not to be changeable by another account, and after
-    // the folder exists: an unpredictable name, mode 700 on macOS and Linux in the same step, and on Windows the list of the
+    // the folder exists: an unpredictable name, mode 700 on Linux in the same step, and on Windows the list of the
     // folder, which only the trusted accounts can change. Nobody else can add an explicit, inheritable access entry of their own
     // between the moment the directory exists and the moment its list is set (`/inheritance:r` removes only inherited entries, and
     // `/grant:r` replaces only the entries of the user), or swap a path: that needs write access to the folder, and that was
     // refused above. As a second net, on Windows the directory gets an owner-only list and it is read back before anything is
-    // written into it, and on macOS and Linux its mode is read back. It is removed at the end in every case (and one that a
+    // written into it, and on Linux its mode is read back. It is removed at the end in every case (and one that a
     // crashed run left is removed by the next run, see removeStaleWorkFolders). The temporary file is made, dumped into, checked
     // and closed there; the verified file is then renamed into the output folder, on the same volume. It is a directory and
     // not a file with a dump name, so retention (which only touches files with the exact name of a backup) never sees it.

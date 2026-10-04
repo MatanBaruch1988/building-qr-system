@@ -37,6 +37,7 @@ import {
   parseWhoamiAccount,
   parseWhoamiSid,
   PARTIAL_NAME,
+  UNSUPPORTED_PLATFORM_ERROR,
   PATH_TOO_LONG_ERROR,
   WINDOWS_PATH_LIMIT,
   WORK_NAME,
@@ -68,7 +69,7 @@ const MASKED_HOST = 'ep-tes****.eu-central-1.aws.neon.tech'
 const URL_FAKE = `postgresql://${USER}:${ENCODED}@${HOST}/appdb?sslmode=require`
 const POOLED = `postgresql://${USER}:${ENCODED}@ep-test-cool-123456-pooler.eu-central-1.aws.neon.tech/appdb?sslmode=require`
 const SID = 'S-1-5-21-111-222-333-1001' // a fake SID
-// macOS and Linux: the uid of the (fake) user, that of another account, and root. Every folder of a test is owned by UID, unless a test says not.
+// Linux: the uid of the (fake) user, that of another account, and root. Every folder of a test is owned by UID, unless a test says not.
 const UID = 1000
 const OTHER_UID = 1001
 const ROOT_UID = 0
@@ -169,7 +170,7 @@ let tmp
 let dir
 
 beforeEach(() => {
-  // the real path of the folder of the test (a short 8.3 name on Windows, /var on macOS are links or aliases): the script works on real paths
+  // the real path of the folder of the test (a short 8.3 name on Windows is an alias for it): the script works on real paths
   tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'bqr-backup-test-')))
   dir = path.join(tmp, 'backups')
 })
@@ -210,7 +211,7 @@ function expectWorkCwd(cwd) {
 }
 
 /**
- * The stat of a file as the script sees it on macOS or Linux: its real size, and a mode of 600. (A real file on Windows
+ * The stat of a file as the script sees it on Linux: its real size, and a mode of 600. (A real file on Windows
  * says 666, and on a machine with another umask something else: the script reads the mode back, and these tests are about
  * everything else. The tests of that check pass their own `fs`.) It throws for a file that is not there, like the real one.
  */
@@ -377,7 +378,7 @@ describe('the folder of pg_dump and pg_restore', () => {
     expect(resolvePgBin({ env: {}, platform: 'win32', exists: yes })).toBe(WINDOWS_PG_BIN)
     expect(resolvePgBin({ env: {}, platform: 'win32', exists: no })).toBeNull()
     expect(resolvePgBin({ env: {}, platform: 'linux', exists: yes })).toBeNull()
-    expect(resolvePgBin({ env: { PG_BIN: '  ' }, platform: 'darwin', exists: yes })).toBeNull()
+    expect(resolvePgBin({ env: { PG_BIN: '  ' }, platform: 'freebsd', exists: yes })).toBeNull()
   })
 
   it('the Windows folder is the install of Postgres 18', () => {
@@ -388,7 +389,7 @@ describe('the folder of pg_dump and pg_restore', () => {
     expect(pgTool(WINDOWS_PG_BIN, 'pg_dump', 'win32')).toBe('C:\\Program Files\\PostgreSQL\\18\\bin\\pg_dump.exe')
     expect(pgTool(null, 'pg_dump', 'win32')).toBe('pg_dump.exe')
     expect(pgTool('/opt/pg18/bin', 'pg_restore', 'linux')).toBe('/opt/pg18/bin/pg_restore')
-    expect(pgTool(null, 'pg_restore', 'darwin')).toBe('pg_restore')
+    expect(pgTool(null, 'pg_restore', 'freebsd')).toBe('pg_restore')
   })
 })
 
@@ -481,7 +482,7 @@ describe('the Neon CLI', () => {
   })
 
   it('is run as neon everywhere else', () => {
-    for (const platform of ['linux', 'darwin']) {
+    for (const platform of ['linux', 'freebsd']) {
       expect(neonCommand({ project: 'square-term-1', branch: 'release/one', platform })).toEqual({
         command: 'neon',
         args: ['connection-string', 'release/one', '--project-id', 'square-term-1'],
@@ -1705,7 +1706,7 @@ describe('the full read of the dump', () => {
   it('names the null device: NUL on Windows, /dev/null elsewhere', () => {
     expect(nullDevice('win32')).toBe('NUL')
     expect(nullDevice('linux')).toBe('/dev/null')
-    expect(nullDevice('darwin')).toBe('/dev/null')
+    expect(nullDevice('freebsd')).toBe('/dev/null')
   })
 
   it('runs pg_restore --file=<null device> on the temporary file, after the list, in the same folder, with no PG variable', async () => {
@@ -1793,7 +1794,7 @@ describe('the full read of the dump', () => {
 // ---- who can read the files ------------------------------------------------------------------------------------------------------------
 
 describe('files for the owner only', () => {
-  it('on macOS and Linux sets the umask to 077 before anything is created, and puts the old one back at the end', async () => {
+  it('on Linux sets the umask to 077 before anything is created, and puts the old one back at the end', async () => {
     const events = []
     const rec = recordingFs({ events })
     const runner = makeRunner({
@@ -1894,7 +1895,7 @@ describe('files for the owner only', () => {
     expect(asked).not.toContain(path.basename(dir))
   })
 
-  it('creates the real files for the owner only (checked with the real modes on macOS and Linux, where they exist)', async () => {
+  it('creates the real files for the owner only (checked with the real modes on Linux, where they exist)', async () => {
     if (process.platform === 'win32') return // Windows has no such modes: its protection is the access list of the profile
     // The real file system reports the real owner of the folders, so the run must compare them with the real user, not
     // with the invented one that the other tests use.
@@ -2265,7 +2266,7 @@ describe('owner-only files on Windows', () => {
     expect(r.errs).toEqual(['backup: warning, backup.log could not be made owner-only'])
   })
 
-  it('does not run on macOS and Linux, where the umask and the modes do this work', async () => {
+  it('does not run on Linux, where the umask and the modes do this work', async () => {
     const r = await go()
     expect(r.runner.of('whoami')).toEqual([])
     expect(r.runner.of('icacls')).toEqual([])
@@ -2596,7 +2597,7 @@ describe('the private work directory', () => {
     expect(next.files).toContain('building-qr-20261004T0715Z.dump')
   })
 
-  it('on macOS and Linux must be owner-only: a file system that ignores modes stops the run before anything is dumped', async () => {
+  it('on Linux must be owner-only: a file system that ignores modes stops the run before anything is dumped', async () => {
     const r = await go({ deps: { fs: recordingFs({ workMode: 0o040755 }).fs } })
     expect(r.exitCode).toBe(1)
     expect(r.message).toBe('the work directory could not be made owner-only (does this file system ignore modes?), so nothing was dumped')
@@ -2666,7 +2667,7 @@ describe('the private work directory', () => {
       expect(WINDOWS_PATH_LIMIT).toBeLessThan(260 - 10)
     })
 
-    it('is not applied on macOS and Linux, where the paths can be long', async () => {
+    it('is not applied on Linux, where the paths can be long', async () => {
       const r = await go({ options: { out: folderFor(WINDOWS_PATH_LIMIT + 5) } })
       expect(r.exitCode).toBe(0)
     })
@@ -2684,7 +2685,7 @@ describe('the private work directory', () => {
 // ---- a folder that other users can write in ----------------------------------------------------------------------------------------------
 
 describe('a folder that other users can write in', () => {
-  it('is refused on macOS and Linux: nothing runs, nothing is made, no log is written there, and the folder is not changed', async () => {
+  it('is refused on Linux: nothing runs, nothing is made, no log is written there, and the folder is not changed', async () => {
     seed(oldBackups)
     const rec = recordingFs({ folderMode: 0o040777 })
     const r = await go({ options: { keep: 1 }, deps: { fs: rec.fs } })
@@ -2902,7 +2903,7 @@ describe('the access list of the work directory is read back on Windows', () => 
       expect(r.exitCode).toBe(0)
     })
 
-    it('is not done on macOS and Linux, where the mode of the work directory is read back instead', async () => {
+    it('is not done on Linux, where the mode of the work directory is read back instead', async () => {
       const r = await go()
       expect(r.runner.of('icacls')).toEqual([])
     })
@@ -3483,7 +3484,7 @@ describe('a folder that another account can change', () => {
     })
   })
 
-  describe('on macOS and Linux', () => {
+  describe('on Linux', () => {
     // modes: [folder, mode, owner uid (UID when left out)]; a mode of null makes the stat fail
     const modeOf = (modes) => (target, ...rest) => {
       const key = path.resolve(String(target))
@@ -3569,7 +3570,7 @@ describe('a folder that another account can change', () => {
         const r = await runWith([[outRoot, 0o041777, uid]])
         expect(r.message, String(uid)).toBe(refusal('a folder above the backup folder'))
       }
-      // owned by root: accepted, sticky (like /tmp, or /private/tmp on macOS) or plain (like /home or /)
+      // owned by root: accepted, sticky (like /tmp) or plain (like /home or /)
       for (const mode of [0o041777, 0o041770, 0o040755, 0o040750]) {
         for (const folder of [outRoot, tmp]) {
           const r = await runWith([[folder, mode, ROOT_UID]])
@@ -3739,7 +3740,7 @@ describe('a folder that another account can change', () => {
       return { shared, real, alias: path.join(tmp, 'via-alias') }
     }
 
-    it('on macOS and Linux judges the folders of the target: a link into a folder that the group or others can write in is refused, nothing is made', async () => {
+    it('on Linux judges the folders of the target: a link into a folder that the group or others can write in is refused, nothing is made', async () => {
       const { shared, real, alias } = links()
       for (const mode of [0o040777, 0o040770, 0o040775]) {
         const spy = throughAlias(alias, shared, { modes: [[shared, mode]] })
@@ -3755,7 +3756,7 @@ describe('a folder that another account can change', () => {
       }
     })
 
-    it('on macOS and Linux, a link to a private folder passes, and the work directory, the log and the dump are in the real folder', async () => {
+    it('on Linux, a link to a private folder passes, and the work directory, the log and the dump are in the real folder', async () => {
       const { shared, real, alias } = links()
       const spy = throughAlias(alias, shared, { modes: [[shared, 0o040755]] })
       const r = await go({ options: { out: path.join(alias, 'backups') }, deps: { fs: spy.fs } })
@@ -3815,7 +3816,7 @@ describe('a folder that another account can change', () => {
       }
       const parentLink = path.join(tmp, 'via-link-b')
       fs.symlinkSync(shared, parentLink, 'junction')
-      // macOS and Linux: the real parent is writable by others
+      // Linux: the real parent is writable by others
       for (const out of [link, path.join(parentLink, 'backups')]) {
         const refused = await go({ options: { out }, deps: { fs: { ...fs, statSync: statting([[shared, 0o040777]]) } } })
         expect(refused.exitCode, out).toBe(1)
@@ -4226,6 +4227,78 @@ describe('work folders that a crashed run left behind', () => {
       expect(fs.existsSync(half)).toBe(false)
       expect(r.log).toBe(`03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=5 stale-work-folders-removed=1\n`)
     })
+  })
+})
+
+// ---- a system that is not Windows or Linux ---------------------------------------------------------------------------------------------------
+
+describe('a system that is not Windows or Linux', () => {
+  // macOS has extended ACLs that the mode does not show, and nobody can run or test the code for them here: it is refused, with
+  // every other system that is not Windows or Linux, before anything is made.
+  const others = ['darwin', 'freebsd', 'openbsd', 'netbsd', 'sunos', 'aix', 'android', 'cygwin', 'haiku', '']
+
+  it('is refused before anything is made: no tool, no folder, no work directory, no log, no umask, nothing rotated', async () => {
+    for (const platform of others) {
+      fs.rmSync(dir, { recursive: true, force: true })
+      const r = await go({ deps: { platform } })
+      expect(r.exitCode, platform).toBe(1)
+      expect(r.ok, platform).toBe(false)
+      expect(r.message, platform).toBe(UNSUPPORTED_PLATFORM_ERROR)
+      expect(r.runner.calls, platform).toEqual([]) // not even whoami, the Neon CLI or pg_dump
+      expect(r.masks, platform).toEqual([]) // the umask of the process is not even changed
+      expect(fs.existsSync(dir), platform).toBe(false) // the folder is not made
+      expect(r.log, platform).toBe('')
+      expect(r.errs, platform).toEqual([`backup failed: ${UNSUPPORTED_PLATFORM_ERROR}`])
+      expect(r.out, platform).toEqual([])
+    }
+  })
+
+  it('leaves the folder as it is when it is there: old backups, a log and a stale work folder are not touched', async () => {
+    seed(oldBackups)
+    fs.writeFileSync(path.join(dir, 'backup.log'), 'a log\n')
+    const stale = path.join(dir, '.bqr-work-OLD001')
+    fs.mkdirSync(stale)
+    const longAgo = new Date(NOW.getTime() - 100 * 60 * 60 * 1000)
+    fs.utimesSync(stale, longAgo, longAgo)
+    const before = fs.readdirSync(dir).sort()
+    const r = await go({ options: { keep: 1 }, deps: { platform: 'darwin' } })
+    expect(r.exitCode).toBe(1)
+    expect(fs.readdirSync(dir).sort()).toEqual(before)
+    expect(fs.readFileSync(path.join(dir, 'backup.log'), 'utf8')).toBe('a log\n')
+  })
+
+  it('still opens an issue with --report-issue, like any other failure (a daily run that never works must be seen)', async () => {
+    const r = await go({ options: { reportIssue: 'owner/repo' }, deps: { platform: 'darwin' } })
+    expect(r.exitCode).toBe(1)
+    expect(r.issue).toBe('opened')
+    expect(r.runner.of('gh').length).toBeGreaterThanOrEqual(2)
+    expect(r.runner.calls.filter((call) => call.tool !== 'gh')).toEqual([])
+    expect(r.errs).toEqual([`backup failed: ${UNSUPPORTED_PLATFORM_ERROR}`, 'backup: an issue was opened'])
+  })
+
+  it('says which systems it runs on, and holds no path', () => {
+    expect(UNSUPPORTED_PLATFORM_ERROR).toBe(
+      'the backup runs on Windows and Linux; on this system its folder checks cannot see every way another account could change the folder',
+    )
+    expect(UNSUPPORTED_PLATFORM_ERROR).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\//)
+  })
+
+  it('does not change Windows and Linux: both still run, and are the only two that do', async () => {
+    const linux = await go({ deps: { platform: 'linux' } })
+    expect(linux.exitCode).toBe(0)
+    fs.rmSync(dir, { recursive: true, force: true })
+    const windows = await go({ deps: { platform: 'win32', exists: () => false, env: { SystemRoot: 'C:\\Windows' } } })
+    expect(windows.exitCode).toBe(0)
+  })
+
+  it('claims support for Windows and Linux only, in the script and in the runbook', () => {
+    const source = fs.readFileSync(new URL('../scripts/backup-db.mjs', import.meta.url), 'utf8')
+    expect(source).toMatch(/new Set\(\['win32', 'linux'\]\)/)
+    // no claim of support for macOS, in the script or in the runbook (the runbook says it is refused)
+    expect(source).not.toMatch(/macOS and Linux|macOS or Linux/)
+    const runbook = fs.readFileSync(new URL('../docs/runbooks/restore.md', import.meta.url), 'utf8')
+    expect(runbook).not.toMatch(/macOS and Linux|macOS or Linux/)
+    expect(runbook).toMatch(/Windows or Linux/)
   })
 })
 

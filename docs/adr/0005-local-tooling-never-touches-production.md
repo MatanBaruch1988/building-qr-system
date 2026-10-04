@@ -66,7 +66,7 @@ decision. It is written down here so that it stays narrow:
 - It does not use the production guard (`server/dbGuard.js`), because refusing production would defeat its purpose. The
   read-only session is the protection instead.
 - The dump never leaves the owner's machine: a folder outside the repository, files that only the owner can read (the
-  umask and the modes on macOS and Linux, an owner-only access list on Windows), `*.dump` in `.gitignore`, and no
+  umask and the modes on Linux, an owner-only access list on Windows), `*.dump` in `.gitignore`, and no
   connection string or personal data in a log, an issue or a pull request.
 - It refuses to work in a folder that another account can change: the output folder and every folder above it (the access
   lists are read as SDDL on Windows, the modes elsewhere). It then works in a private directory inside that folder
