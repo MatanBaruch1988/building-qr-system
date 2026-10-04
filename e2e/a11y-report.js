@@ -57,3 +57,37 @@ export function formatReport(screen, { fresh, gone }) {
   }
   return lines.join('\n')
 }
+
+/**
+ * The screens that the spec scans, read from its source, so that a baseline entry for a screen that was renamed or removed
+ * can be found without running a browser. A scan is named by a plain string: `scanBothThemes(page, 'name')` scans
+ * "name [light]" and "name [dark]", and `{ context: 'name [print]' }` names one scan. `unreadable` lists the lines that
+ * name a scan in another way (a template, a variable), which this reading cannot follow: there must be none.
+ */
+export function scannedContexts(specSource) {
+  const contexts = new Set()
+  const unreadable = []
+  for (const line of specSource.split('\n')) {
+    if (line.trim().startsWith('//')) continue
+    if (/function scanBothThemes/.test(line) || line.includes('context: `${screen} [${scheme}]`')) continue // the helper itself
+    const both = line.includes('scanBothThemes(page,')
+    if (both) {
+      const named = /scanBothThemes\(page, '([^'\\]+)'/.exec(line)
+      if (named) {
+        contexts.add(`${named[1]} [light]`)
+        contexts.add(`${named[1]} [dark]`)
+      } else unreadable.push(line.trim())
+    }
+    if (/\bcontext:/.test(line)) {
+      const named = /\bcontext: '([^'\\]+)'/.exec(line)
+      if (named) contexts.add(named[1])
+      else unreadable.push(line.trim())
+    }
+  }
+  return { contexts, unreadable }
+}
+
+/** The baseline entries whose screen is not one that is scanned: nothing would ever check them. */
+export function entriesForUnscannedScreens(baseline, contexts) {
+  return baseline.filter((entry) => !contexts.has(entry.screen))
+}

@@ -153,11 +153,14 @@ test.describe('provider app', () => {
     await scanBothThemes(page, 'provider ru: sign-in list')
 
     // a theme that the person chose is kept whatever the device says: the picker, not the device, sets it here
-    for (const choice of ['dark', 'light']) {
+    const choose = async (choice) => {
       await page.getByLabel(ru['theme.label']).selectOption(choice)
       await expect(page.locator('html')).toHaveAttribute('data-theme', choice)
-      await expectNoA11yViolations(page, { context: `provider ru: theme chosen in the picker [${choice}]` })
     }
+    await choose('dark')
+    await expectNoA11yViolations(page, { context: 'provider ru: theme chosen in the picker [dark]' })
+    await choose('light')
+    await expectNoA11yViolations(page, { context: 'provider ru: theme chosen in the picker [light]' })
   })
 
   test('the states that a slow, failing or empty server brings, and a phone with visits saved on it', async ({ page }) => {
@@ -244,13 +247,6 @@ async function stubMapImages(page) {
 const NEW_PROVIDER = 'בדיקת נגישות' // the company that the provider form of the dialogs is filled with
 const NEW_KEY = 'מפתח נגישות' // the start of the name that the agent key of the dialogs is given
 
-const TABS = [
-  ['points', 'נקודות סריקה'],
-  ['providers', 'נותני שירות'],
-  ['history', 'היסטוריית נוכחות'],
-  ['agent', 'גישה לאייג\'נט'],
-  ['committee', 'חברי הוועד'],
-]
 const loaded = async (page, title) => {
   await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
   await expect(page.getByRole('status').filter({ hasText: 'טוען' })).toHaveCount(0)
@@ -376,10 +372,17 @@ test.describe('committee app with the sample data filled in', () => {
     allowConsoleErrors(page, /status of 401/) // the first load of /admin, before the sign-in
     await adminSignIn(page)
     await signedIn(page)
-    for (const [tab, title] of TABS) {
-      await openTab(page, tab, title)
-      await scanBothThemes(page, `committee phone: ${tab}`)
-    }
+    // (every screen is named by a plain string, so that tests/a11y-report.test.js can read the names from this file)
+    await openTab(page, 'points', 'נקודות סריקה')
+    await scanBothThemes(page, 'committee phone: points')
+    await openTab(page, 'providers', 'נותני שירות')
+    await scanBothThemes(page, 'committee phone: providers')
+    await openTab(page, 'history', 'היסטוריית נוכחות')
+    await scanBothThemes(page, 'committee phone: history')
+    await openTab(page, 'agent', "גישה לאייג'נט")
+    await scanBothThemes(page, 'committee phone: agent')
+    await openTab(page, 'committee', 'חברי הוועד')
+    await scanBothThemes(page, 'committee phone: committee')
     // the history with every kind of row: refused, cancelled, flagged, and the demo account's
     await openTab(page, 'history', 'היסטוריית נוכחות')
     await page.getByLabel('סוג').selectOption('all')
@@ -398,10 +401,10 @@ test.describe('committee app with the sample data filled in', () => {
     // The side rail replaces the top bar and the tab bar. The five screens are the same markup at any width, so two of
     // them are enough to see the rail and the wider layout.
     await page.setViewportSize(COMPUTER)
-    for (const [tab, title] of TABS.filter(([name]) => name === 'points' || name === 'history')) {
-      await openTab(page, tab, title)
-      await scanBothThemes(page, `committee computer: ${tab}`)
-    }
+    await openTab(page, 'points', 'נקודות סריקה')
+    await scanBothThemes(page, 'committee computer: points')
+    await openTab(page, 'history', 'היסטוריית נוכחות')
+    await scanBothThemes(page, 'committee computer: history')
   })
 
   test('the dialogs of the points and the providers', async ({ page }) => {
@@ -436,11 +439,17 @@ test.describe('committee app with the sample data filled in', () => {
     await scanBothThemes(page, 'committee phone: confirm on top of another dialog')
     await closeWithEscape('להחליף את קוד ה-QR?')
 
-    // The sign is on the page only for the printer (hidden on a screen, and out of the accessibility tree): so the page is
-    // scanned the way the printer sees it. The browser's own print dialog is outside the page: count the call instead.
+    // The sign is on the page only for the printer (hidden on a screen), so the page is scanned the way the printer sees it.
+    // The browser's own print dialog is outside the page: count the call instead.
     await qr.getByRole('button', { name: 'הדפסת שלט' }).click()
     await expect.poll(() => page.evaluate(() => window.__prints)).toBe(1) // the sheet is built and shown
     await page.emulateMedia({ media: 'print' })
+    // PrintSheet marks the whole sheet aria-hidden="true", which is right on a screen (a screen reader must not read a
+    // second copy of the sign), but it also takes the sign out of what axe looks at: with the print styles only the sheet
+    // is left, so axe would scan an empty page and pass whatever the sign looks like. So for this scan only, the attribute
+    // is taken off, and the sign must then really be in the accessibility tree before axe is asked.
+    await page.evaluate(() => document.querySelector('.a-print-only').removeAttribute('aria-hidden'))
+    await expect(page.getByRole('heading', { name: 'לובי' })).toBeVisible()
     await expectNoA11yViolations(page, { context: 'committee: the printed sign [print]' })
     await page.emulateMedia({ media: null })
     await page.evaluate(() => window.dispatchEvent(new Event('afterprint'))) // what the browser says when printing is over: the sheet goes
