@@ -3,9 +3,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
+import { SAMPLE_POINT, SAMPLE_PROVIDER_NAMES } from '../scripts/sample-data.mjs'
 
 let db, cookie, provider, token
-const HOME = { lat: 32.3132, lng: 34.9442 }
+const HOME = SAMPLE_POINT
 const near = { ...HOME, accuracy: 10 }
 const far = { lat: HOME.lat + 0.05, lng: HOME.lng, accuracy: 10 }
 
@@ -20,8 +21,8 @@ beforeAll(async () => {
   db = await setupDb()
   await seedAdmin(db.pool)
   cookie = await adminCookie()
-  provider = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'ניקיון', contact_name: 'ליאור', password: 'lior-1234' } })).json.provider
-  token = (await call('POST', '/api/session', { body: { provider_id: provider.id, password: 'lior-1234' } })).json.token
+  provider = (await call('POST', '/api/admin/providers', { cookie, body: { company: 'ניקיון', contact_name: SAMPLE_PROVIDER_NAMES.cleaner, password: 'ploni-1234' } })).json.provider
+  token = (await call('POST', '/api/session', { body: { provider_id: provider.id, password: 'ploni-1234' } })).json.token
 })
 afterAll(async () => db?.teardown())
 
@@ -130,8 +131,8 @@ describe('deleting a scan row', () => {
 
 describe('deleting a provider', () => {
   const newProvider = async (extra = {}) =>
-    (await call('POST', '/api/admin/providers', { cookie, body: { company: 'גינון', contact_name: 'חמודי', password: 'hamudi-1234', ...extra } })).json.provider
-  const signIn = async (p) => (await call('POST', '/api/session', { body: { provider_id: p.id, password: 'hamudi-1234' } })).json.token
+    (await call('POST', '/api/admin/providers', { cookie, body: { company: 'גינון', contact_name: SAMPLE_PROVIDER_NAMES.gardener, password: 'almoni-1234', ...extra } })).json.provider
+  const signIn = async (p) => (await call('POST', '/api/session', { body: { provider_id: p.id, password: 'almoni-1234' } })).json.token
 
   it('keeps every scan recorded for them, with their name, and takes their phones and assignments away', async () => {
     const p = await newProvider()
@@ -150,18 +151,18 @@ describe('deleting a provider', () => {
     expect((await call('GET', '/api/admin/providers', { cookie })).json.providers.find((x) => x.id === p.id)).toBeUndefined()
     expect((await call('GET', '/api/public/providers')).json.providers.find((x) => x.id === p.id)).toBeUndefined()
     expect((await call('GET', '/api/session', { token: t })).status).toBe(401)
-    expect((await call('POST', '/api/session', { body: { provider_id: p.id, password: 'hamudi-1234' } })).status).toBeGreaterThanOrEqual(400)
+    expect((await call('POST', '/api/session', { body: { provider_id: p.id, password: 'almoni-1234' } })).status).toBeGreaterThanOrEqual(400)
     // their devices and their entry on the point's list went with them
     expect((await db.pool.query('select count(*)::int n from provider_devices where provider_id = $1', [p.id])).rows[0].n).toBe(0)
     expect((await db.pool.query('select count(*)::int n from point_providers where provider_id = $1', [p.id])).rows[0].n).toBe(0)
     // the scan is still there, readable by name, and the history still protects it
     const kept = (await allScans()).find((s) => s.id === done.id)
-    expect(kept).toMatchObject({ provider_id: p.id, provider_name: expect.stringContaining('חמודי'), outcome: 'accepted' })
+    expect(kept).toMatchObject({ provider_id: p.id, provider_name: expect.stringContaining(SAMPLE_PROVIDER_NAMES.gardener), outcome: 'accepted' })
     await expect(db.pool.query('delete from scans where id = $1', [done.id])).rejects.toThrow(/append-only/)
     // who did it is on record
     const rows = await audit('provider.delete', p.id)
     expect(rows).toHaveLength(1)
-    expect(rows[0].detail).toMatchObject({ company: 'גינון', contact_name: 'חמודי', scans_kept: 1 })
+    expect(rows[0].detail).toMatchObject({ company: 'גינון', contact_name: SAMPLE_PROVIDER_NAMES.gardener, scans_kept: 1 })
   })
 
   it('works for a provider with no scans, an inactive one and the demo account', async () => {

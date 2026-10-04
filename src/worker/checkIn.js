@@ -5,7 +5,7 @@
  */
 export const withScanContext = (result, { qrCode, point }) => ({ ...result, qrCode, point })
 
-/** "Lior · Cleaning": who is signed in, as the committee named them (the same shape as its own lists). */
+/** "Ploni · Cleaning": who is signed in, as the committee named them (the same shape as its own lists). */
 export const providerLabel = (p) => (p?.contact_name ? `${p.contact_name} · ${p.company}` : p?.company ?? '')
 
 // The whole "scan → recorded" journey as one function with injectable dependencies, so every branch
