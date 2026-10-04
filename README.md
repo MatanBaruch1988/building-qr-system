@@ -93,7 +93,7 @@ src/worker, src/i18n   the service provider app
 src/admin              the committee app
 src/ui                 what both apps share: the colour tokens, light and dark, and the screen that replaces a broken one (ErrorBoundary: a message with "Try again" and "Reload the app" instead of a blank page; it logs the error's name only)
 tests/                 vitest (logic, the API against a real Postgres in a temporary schema, i18n, import, tests/components for components)
-e2e/                   Playwright (PWA, the service provider app, the committee app) on a Pixel and an iPhone
+e2e/                   Playwright (PWA, the service provider app, the committee app, and an axe accessibility scan of both) on a Pixel and an iPhone
 legacy-redirect/       a redirect site for the old printed QR codes
 ```
 
