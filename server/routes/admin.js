@@ -10,10 +10,16 @@ import { verifyGoogleCredential } from '../google.js'
 import { readAddress, saveAddress, parseAddress } from '../building.js'
 import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvRow } from '../scans.js'
 import {
-  ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, API_KEY_PREFIX, PASSWORD_MIN_LENGTH,
+  ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, API_KEY_PREFIX,
 } from '../config.js'
+import {
+  GPS_MODES, GPS_MODE_REQUIRED, DEFAULT_GPS_MODE,
+  POINT_RADIUS_MIN_M, POINT_RADIUS_MAX_M,
+  PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH,
+  NAME_MAX_LENGTH, DESCRIPTION_MAX_LENGTH, SERVICE_TYPE_MAX_LENGTH, VOID_REASON_MAX_LENGTH, KEY_NAME_MAX_LENGTH,
+  EMAIL_MAX_LENGTH, QR_TOKEN_PREFIX,
+} from '../../shared/contract.js'
 
-const GPS_MODES = ['required', 'optional', 'none']
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const isSecure = (req) => !!process.env.VERCEL || String(req.headers['x-forwarded-proto'] || '').includes('https')
@@ -41,7 +47,7 @@ function setClause(fields, startAt = 1) {
 }
 
 function password(value, required = false) {
-  const pw = str(value, { field: 'password', max: 200, required })
+  const pw = str(value, { field: 'password', max: PASSWORD_MAX_LENGTH, required })
   if (pw !== undefined && pw.length < PASSWORD_MIN_LENGTH) {
     throw bad('password_too_short', `Password must be at least ${PASSWORD_MIN_LENGTH} characters`)
   }
@@ -96,7 +102,7 @@ route('POST', '/admin/google', async ({ req, res, body }) => {
 
 route('POST', '/admin/dev-login', async ({ req, res, body }) => {
   if (!devLoginAllowed()) throw new ApiError(404, 'not_found', 'Unknown endpoint')
-  const email = str(body.email, { field: 'email', max: 200, required: true }).toLowerCase()
+  const email = str(body.email, { field: 'email', max: EMAIL_MAX_LENGTH, required: true }).toLowerCase()
   const { rows } = await query('select * from admins where email = $1 and is_active', [email])
   if (!rows.length) throw forbidden('not_an_admin', 'Not an admin')
   return startAdminSession(req, res, rows[0])
@@ -127,9 +133,9 @@ route('GET', '/admin/admins', async ({ req }) => {
 
 route('POST', '/admin/admins', async ({ req, body }) => {
   const { admin } = await requireAdmin(req)
-  const email = str(body.email, { field: 'email', max: 200, required: true }).toLowerCase()
+  const email = str(body.email, { field: 'email', max: EMAIL_MAX_LENGTH, required: true }).toLowerCase()
   if (!EMAIL_RE.test(email)) throw bad('invalid_field', 'Not a valid e-mail address', { field: 'email' })
-  const name = str(body.name, { field: 'name', max: 120 }) ?? ''
+  const name = str(body.name, { field: 'name', max: NAME_MAX_LENGTH }) ?? ''
   const { rows } = await query(
     `insert into admins (email, name) values ($1, $2)
      on conflict (email) do update set is_active = true returning id, email, name, is_active`,
@@ -204,15 +210,15 @@ const pointJson = (p, req) => ({
   created_at: p.created_at,
 })
 
-const newQrToken = () => `BQR-${randomBytes(12).toString('hex')}`
+const newQrToken = () => `${QR_TOKEN_PREFIX}${randomBytes(12).toString('hex')}`
 
 function pointFields(body, { create }) {
   const f = {}
-  const name = str(body.name, { field: 'name', max: 120, required: create, nonEmpty: true })
+  const name = str(body.name, { field: 'name', max: NAME_MAX_LENGTH, required: create, nonEmpty: true })
   if (name !== undefined) f.name = name
-  const description = str(body.description, { field: 'description', max: 500 })
+  const description = str(body.description, { field: 'description', max: DESCRIPTION_MAX_LENGTH })
   if (description !== undefined) f.description = description
-  if (body.service_type !== undefined) f.service_type = str(body.service_type, { field: 'service_type', max: 60 }) || null
+  if (body.service_type !== undefined) f.service_type = str(body.service_type, { field: 'service_type', max: SERVICE_TYPE_MAX_LENGTH }) || null
   if (body.gps_mode !== undefined) {
     if (!GPS_MODES.includes(body.gps_mode)) throw bad('invalid_field', 'gps_mode must be required, optional or none', { field: 'gps_mode' })
     f.gps_mode = body.gps_mode
@@ -220,7 +226,7 @@ function pointFields(body, { create }) {
   // null clears the coordinate; a blank string is an error (it used to silently switch GPS checking off).
   if (body.lat !== undefined) f.lat = body.lat === null ? null : num(body.lat, { field: 'lat', min: -90, max: 90 })
   if (body.lng !== undefined) f.lng = body.lng === null ? null : num(body.lng, { field: 'lng', min: -180, max: 180 })
-  if (body.radius_m !== undefined) f.radius_m = num(body.radius_m, { field: 'radius_m', min: 1, max: 1000, integer: true })
+  if (body.radius_m !== undefined) f.radius_m = num(body.radius_m, { field: 'radius_m', min: POINT_RADIUS_MIN_M, max: POINT_RADIUS_MAX_M, integer: true })
   if (body.is_active !== undefined) {
     if (typeof body.is_active !== 'boolean') throw bad('invalid_field', 'is_active must be true or false', { field: 'is_active' })
     f.is_active = body.is_active
@@ -230,7 +236,7 @@ function pointFields(body, { create }) {
 
 /** A point that must verify GPS needs somewhere to verify against. */
 function assertLocatable(point) {
-  if (point.gps_mode === 'required' && (point.lat == null || point.lng == null)) {
+  if (point.gps_mode === GPS_MODE_REQUIRED && (point.lat == null || point.lng == null)) {
     throw bad('coordinates_required', "A point with gps_mode 'required' needs coordinates", { field: 'lat' })
   }
 }
@@ -266,7 +272,7 @@ route('GET', '/admin/points', async ({ req }) => {
 route('POST', '/admin/points', async ({ req, body }) => {
   const { admin } = await requireAdmin(req)
   const fields = pointFields(body, { create: true })
-  assertLocatable({ gps_mode: 'optional', ...fields })
+  assertLocatable({ gps_mode: DEFAULT_GPS_MODE, ...fields })
   const ids = providerIds(body) ?? []
   const created = await tx(async (c) => {
     const cols = [...Object.keys(fields), 'qr_token']
@@ -343,11 +349,11 @@ const PROVIDER_SELECT = `
 
 function providerFields(body, { create }) {
   const f = {}
-  const company = str(body.company, { field: 'company', max: 120, required: create, nonEmpty: true })
+  const company = str(body.company, { field: 'company', max: NAME_MAX_LENGTH, required: create, nonEmpty: true })
   if (company !== undefined) f.company = company
-  const contact = str(body.contact_name, { field: 'contact_name', max: 120 })
+  const contact = str(body.contact_name, { field: 'contact_name', max: NAME_MAX_LENGTH })
   if (contact !== undefined) f.contact_name = contact
-  if (body.service_type !== undefined) f.service_type = str(body.service_type, { field: 'service_type', max: 60 }) || null
+  if (body.service_type !== undefined) f.service_type = str(body.service_type, { field: 'service_type', max: SERVICE_TYPE_MAX_LENGTH }) || null
   for (const flag of ['is_active', 'is_demo']) {
     if (body[flag] === undefined) continue
     if (typeof body[flag] !== 'boolean') throw bad('invalid_field', `${flag} must be true or false`, { field: flag })
@@ -452,7 +458,7 @@ route('GET', '/admin/scans', async ({ req, query: q }) => {
 async function setVoid(req, params, body, voided) {
   const { admin } = await requireAdmin(req)
   const id = requireUuid(params.id)
-  const reason = voided ? str(body.reason, { field: 'reason', max: 300 }) || null : null
+  const reason = voided ? str(body.reason, { field: 'reason', max: VOID_REASON_MAX_LENGTH }) || null : null
   const r = await query(
     `update scans set voided_at = $2, void_reason = $3
       where id = $1 and (voided_at is null) = $4 returning *`,
@@ -504,7 +510,7 @@ route('GET', '/admin/api-keys', async ({ req }) => {
 // The secret is shown exactly once, here.
 route('POST', '/admin/api-keys', async ({ req, body }) => {
   const { admin } = await requireAdmin(req)
-  const name = str(body.name, { field: 'name', max: 80, required: true })
+  const name = str(body.name, { field: 'name', max: KEY_NAME_MAX_LENGTH, required: true })
   const key = randomToken(API_KEY_PREFIX)
   const { rows } = await query(
     'insert into api_keys (name, key_prefix, key_hash) values ($1, $2, $3) returning id, name, key_prefix, created_at',

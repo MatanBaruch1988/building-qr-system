@@ -3,6 +3,7 @@ import { adminApi, errorText, copyText } from '../api.js'
 import { useLoad, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconKey, IconCopy, IconBan, IconAlert, IconInfo, IconTrash } from '../icons.jsx'
+import { KEY_NAME_MAX_LENGTH } from '../../../shared/contract.js'
 
 function NewKeyDialog({ onClose, onCreated }) {
   const toast = useToast()
@@ -41,7 +42,7 @@ function NewKeyDialog({ onClose, onCreated }) {
       )}>
       <form id="key-form" className="a-form" onSubmit={submit} noValidate>
         <Field label="שם המפתח" error={error} hint="לדוגמה: הסוכן של הוועד. המפתח נותן קריאה בלבד, אי אפשר לשנות דרכו שום דבר.">
-          <input className="a-input" value={name} onChange={(e) => { setName(e.target.value); setError('') }} maxLength={80} />
+          <input className="a-input" value={name} onChange={(e) => { setName(e.target.value); setError('') }} maxLength={KEY_NAME_MAX_LENGTH} />
         </Field>
       </form>
     </Modal>

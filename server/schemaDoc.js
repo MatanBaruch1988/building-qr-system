@@ -8,6 +8,9 @@ import {
   FLAG_LOCATION_UNVERIFIED, FLAG_LOCATION_OUTSIDE_RADIUS, FLAG_LOCATION_STALE, FLAG_OFFLINE_SYNC, FLAG_CLOCK_SKEW,
   FLAG_DEMO, FLAG_LEGACY_IMPORT,
 } from '../shared/flags.js'
+import {
+  OUTCOME_ACCEPTED, OUTCOME_REJECTED_FAR, OUTCOME_REJECTED_NO_LOCATION, SOURCE_ONLINE, SOURCE_OFFLINE_SYNC,
+} from '../shared/contract.js'
 
 // Every number that the prose below quotes from config.js is written from the constant (never typed), so a change of
 // a limit changes this document with it. docs/agent-api.md cannot do that: tests/agent-docs.test.js compares its numbers
@@ -100,13 +103,13 @@ export const schemaDoc = {
     void_reason: 'Reason given when voided',
   },
   outcomes: {
-    accepted: 'Recorded as attendance.',
-    rejected_far: 'A usable GPS fix placed the phone clearly away from the point.',
-    rejected_no_location: "The point requires GPS ('required') and no usable fix was sent.",
+    [OUTCOME_ACCEPTED]: 'Recorded as attendance.',
+    [OUTCOME_REJECTED_FAR]: 'A usable GPS fix placed the phone clearly away from the point.',
+    [OUTCOME_REJECTED_NO_LOCATION]: "The point requires GPS ('required') and no usable fix was sent.",
   },
   sources: {
-    online: 'The phone had a signal and the scan arrived at once.',
-    offline_sync: 'The phone had no signal and uploaded the scan later.',
+    [SOURCE_ONLINE]: 'The phone had a signal and the scan arrived at once.',
+    [SOURCE_OFFLINE_SYNC]: 'The phone had no signal and uploaded the scan later.',
   },
   flags: {
     [FLAG_LOCATION_UNVERIFIED]: 'No usable GPS fix (typical indoors or in basements). Not evidence of fraud on its own.',

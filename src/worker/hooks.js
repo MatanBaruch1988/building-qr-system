@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client.js'
-import { parseQrToken } from '../../server/scanLogic.js' // one definition of "what is one of our QR codes"
+import { parseQrToken } from '../../shared/qrToken.js' // one definition of "what is one of our QR codes", shared with the server
+import { SCAN_ERROR_INVALID_CODE, SCAN_ERROR_UNKNOWN_CODE } from '../../shared/contract.js'
 import { safeStorage, readJson } from './storage.js'
 import { getCachedPoint, setCachedPoint, dropCachedPoint } from './pointCache.js'
 import { getCachedAddress, setCachedAddress } from './buildingCache.js'
@@ -61,7 +62,7 @@ export function usePoint(code) {
   useEffect(() => {
     if (!code) return setState({ status: 'none', point: null, error: null, settled: true })
     const token = parseQrToken(code)
-    if (!token) return setState({ status: 'invalid', point: null, error: 'invalid_code', settled: true })
+    if (!token) return setState({ status: 'invalid', point: null, error: SCAN_ERROR_INVALID_CODE, settled: true })
 
     const cached = getCachedPoint(token)
     setState(cached
@@ -78,7 +79,7 @@ export function usePoint(code) {
         if (cancelled) return
         if (err.status === 404) {
           dropCachedPoint(token)
-          setState({ status: 'invalid', point: null, error: 'unknown_code', settled: true })
+          setState({ status: 'invalid', point: null, error: SCAN_ERROR_UNKNOWN_CODE, settled: true })
         } else if (cached) {
           setState((s) => ({ ...s, settled: true }))
         } else {

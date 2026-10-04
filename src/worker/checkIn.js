@@ -1,3 +1,5 @@
+import { GPS_MODE_NONE, GPS_MODE_REQUIRED, OUTCOME_REJECTED_FAR, OUTCOME_REJECTED_NO_LOCATION } from '../../shared/contract.js'
+
 /**
  * What the result screen needs besides the outcome: the scanned QR address and the point (for "try again").
  * They get their own names. `code` is the SERVER's error code ('not_assigned', …) and must stay untouched:
@@ -20,11 +22,11 @@ export async function performCheckIn({ code, point, session, deps, onPhase = () 
 
   let gps = null
   let locationReason = null
-  if (point?.gps_mode !== 'none') {
+  if (point?.gps_mode !== GPS_MODE_NONE) {
     onPhase('locating')
     // A point that MUST verify location gets a fresh reading: a position the phone remembers from a few minutes
     // earlier (fine for "optional" points, and quicker) would let someone scan right after leaving the building.
-    const res = await getFix(point?.gps_mode === 'required' ? { maxAgeMs: 0 } : undefined)
+    const res = await getFix(point?.gps_mode === GPS_MODE_REQUIRED ? { maxAgeMs: 0 } : undefined)
     gps = res.fix
     locationReason = res.reason
   }
@@ -38,8 +40,8 @@ export async function performCheckIn({ code, point, session, deps, onPhase = () 
       body: { id, code, client_time, gps },
     })
     const scan = res.scan
-    if (scan.outcome === 'rejected_far') return { kind: 'far', scan }
-    if (scan.outcome === 'rejected_no_location') return { kind: 'needLocation', scan, locationReason }
+    if (scan.outcome === OUTCOME_REJECTED_FAR) return { kind: 'far', scan }
+    if (scan.outcome === OUTCOME_REJECTED_NO_LOCATION) return { kind: 'needLocation', scan, locationReason }
     return { kind: res.duplicate ? 'duplicate' : 'success', scan }
   } catch (err) {
     if (err.status === 401) return { kind: 'signedOut' }

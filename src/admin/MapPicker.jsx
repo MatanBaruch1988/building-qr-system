@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css' // bundled with the committee app only (the provider app never loads it)
+import { POINT_RADIUS_DEFAULT_M } from '../../shared/contract.js'
 
 // Leaflet's default marker images do not survive bundling: point them at the CDN copies.
 delete L.Icon.Default.prototype._getIconUrl
@@ -65,7 +66,7 @@ export default function MapPicker({ lat, lng, radius, onPick, hint }) {
     const at = [lat, lng]
     if (state.current.marker) state.current.marker.setLatLng(at)
     else state.current.marker = L.marker(at).addTo(map)
-    const r = Number.isFinite(radius) ? radius : 50
+    const r = Number.isFinite(radius) ? radius : POINT_RADIUS_DEFAULT_M
     if (state.current.circle) state.current.circle.setLatLng(at).setRadius(r)
     else state.current.circle = L.circle(at, { radius: r, color: ringColor(box.current), weight: 2, fillOpacity: 0.12 }).addTo(map)
     if (!map.getBounds().contains(at)) map.setView(at) // only recentre when the point left the view

@@ -1,7 +1,8 @@
 import { query, tx } from './db.js'
 import { formatDateTime, formatDateTimeUtc, formatDay } from '../shared/datetime.js'
 import { ApiError, bad, forbidden, notFound, requireUuid, isUuid } from './http.js'
-import { parseQrToken, evaluateGps, resolveClock } from './scanLogic.js'
+import { evaluateGps, resolveClock } from './scanLogic.js'
+import { parseQrToken } from '../shared/qrToken.js'
 import {
   SCAN_COOLDOWN_MINUTES,
   TIMEZONE,
@@ -10,6 +11,15 @@ import {
   FILTER_TEXT_MAX_LENGTH,
 } from './config.js'
 import { FLAG_DEMO } from '../shared/flags.js'
+import {
+  OUTCOME_ACCEPTED,
+  SCAN_ERROR_INVALID_SCAN_ID,
+  SCAN_ERROR_INVALID_CODE,
+  SCAN_ERROR_UNKNOWN_CODE,
+  SCAN_ERROR_POINT_INACTIVE,
+  SCAN_ERROR_NOT_ASSIGNED,
+  SCAN_ERROR_SCAN_ID_CONFLICT,
+} from '../shared/contract.js'
 
 const localFmt = new Intl.DateTimeFormat('sv-SE', {
   timeZone: TIMEZONE,
@@ -71,16 +81,19 @@ export function normalizeGps(gps) {
  * Records one scan on behalf of an authenticated provider.
  * Safe to call again with the same `input.id` (offline retries): the stored row is returned.
  * Returns { scan, duplicate }, where `duplicate` means an equal visit was already recorded within the cooldown.
+ * Every refusal is an ApiError whose code is one of the SCAN_ERROR_* constants of shared/contract.js: as the item of a
+ * sync batch it reaches the phone, which decides from the code what to do with the queued scan. A new refusal is a new
+ * constant there, and tests/contract.test.js fails until the phone classifies it.
  */
 export async function recordScan({ provider, deviceId, input, source, now = new Date() }) {
-  const id = requireUuid(input?.id, 'invalid_scan_id')
+  const id = requireUuid(input?.id, SCAN_ERROR_INVALID_SCAN_ID)
   const token = parseQrToken(input?.code)
-  if (!token) throw bad('invalid_code', 'This is not a QR code of this system')
+  if (!token) throw bad(SCAN_ERROR_INVALID_CODE, 'This is not a QR code of this system')
   const gps = normalizeGps(input.gps)
 
   // Same id seen before (a retry): return the stored row. Someone else's id is a conflict.
   const replay = (row) => {
-    if (row.provider_id !== provider.id) throw new ApiError(409, 'scan_id_conflict', 'Scan id already used')
+    if (row.provider_id !== provider.id) throw new ApiError(409, SCAN_ERROR_SCAN_ID_CONFLICT, 'Scan id already used')
     return { scan: scanJson(row), duplicate: false, replay: true }
   }
 
@@ -89,16 +102,16 @@ export async function recordScan({ provider, deviceId, input, source, now = new 
     if (existing.rows.length) return replay(existing.rows[0])
 
     const found = await c.query('select * from points where qr_token = $1', [token])
-    if (!found.rows.length) throw notFound('unknown_code', 'QR code not found in the system')
+    if (!found.rows.length) throw notFound(SCAN_ERROR_UNKNOWN_CODE, 'QR code not found in the system')
     const point = found.rows[0]
-    if (!point.is_active) throw new ApiError(409, 'point_inactive', 'This point is not active')
+    if (!point.is_active) throw new ApiError(409, SCAN_ERROR_POINT_INACTIVE, 'This point is not active')
 
     // The demo account may scan every point (it exists to try the whole system, and its scans are tagged 'demo'
     // and kept out of reports). Everyone else only where the committee assigned them (no assignment = anyone).
     if (!provider.is_demo) {
       const assigned = await c.query('select provider_id from point_providers where point_id = $1', [point.id])
       if (assigned.rows.length && !assigned.rows.some((r) => r.provider_id === provider.id)) {
-        throw forbidden('not_assigned', 'This point is not assigned to this provider')
+        throw forbidden(SCAN_ERROR_NOT_ASSIGNED, 'This point is not assigned to this provider')
       }
     }
 
@@ -231,8 +244,8 @@ export async function listScans(q = {}) {
   if (q.service_type) add('service_type = ?', String(q.service_type).slice(0, FILTER_TEXT_MAX_LENGTH))
   if (q.flag) add('? = any(flags)', String(q.flag).slice(0, FILTER_TEXT_MAX_LENGTH))
 
-  const outcome = q.outcome || 'accepted'
-  if (outcome === 'accepted') where.push(`outcome = 'accepted'`)
+  const outcome = q.outcome || OUTCOME_ACCEPTED
+  if (outcome === OUTCOME_ACCEPTED) where.push(`outcome = 'accepted'`)
   else if (outcome === 'rejected') where.push(`outcome <> 'accepted'`)
   else if (outcome !== 'all') throw bad('invalid_filter', 'outcome must be accepted, rejected or all', { field: 'outcome' })
 

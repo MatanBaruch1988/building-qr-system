@@ -6,14 +6,19 @@ import { downloadDataUrl, safeFileName, useQrImage } from '../qr.js'
 import MapPicker from '../MapPicker.jsx'
 import PrintSheet from '../PrintSheet.jsx'
 import { IconPlus, IconEdit, IconQr, IconPrinter, IconDownload, IconCopy, IconRefresh, IconLocate, IconPin, IconAlert, IconTrash, IconBan, IconCheck } from '../icons.jsx'
+import {
+  GPS_MODE_REQUIRED, GPS_MODE_OPTIONAL, GPS_MODE_NONE, DEFAULT_GPS_MODE,
+  POINT_RADIUS_MIN_M, POINT_RADIUS_MAX_M, POINT_RADIUS_DEFAULT_M,
+  NAME_MAX_LENGTH, DESCRIPTION_MAX_LENGTH,
+} from '../../../shared/contract.js'
 
 const GPS = {
-  required: { label: 'מיקום חובה', hint: 'לנקודות עם קליטה: חובה להיות בתוך הרדיוס של הנקודה (בתוספת 15 מטר לדיוק הסיכה ולסטיית ה-GPS של הטלפון). בלי מיקום תקין הנוכחות לא נרשמת.' },
-  optional: { label: 'מיקום אם אפשר', hint: 'ברירת המחדל. כשהטלפון יודע איפה הוא, המיקום נבדק באותה קפדנות כמו ב"מיקום חובה". כשאין קליטה הנוכחות נרשמת ומסומנת "מיקום לא מאומת".' },
-  none: { label: 'בלי מיקום', hint: 'למרתפים וחדרים בלי קליטה: המיקום לא נבדק בכלל.' },
+  [GPS_MODE_REQUIRED]: { label: 'מיקום חובה', hint: 'לנקודות עם קליטה: חובה להיות בתוך הרדיוס של הנקודה (בתוספת 15 מטר לדיוק הסיכה ולסטיית ה-GPS של הטלפון). בלי מיקום תקין הנוכחות לא נרשמת.' },
+  [GPS_MODE_OPTIONAL]: { label: 'מיקום אם אפשר', hint: 'ברירת המחדל. כשהטלפון יודע איפה הוא, המיקום נבדק באותה קפדנות כמו ב"מיקום חובה". כשאין קליטה הנוכחות נרשמת ומסומנת "מיקום לא מאומת".' },
+  [GPS_MODE_NONE]: { label: 'בלי מיקום', hint: 'למרתפים וחדרים בלי קליטה: המיקום לא נבדק בכלל.' },
 }
 
-const EMPTY = { name: '', description: '', service_type: '', gps_mode: 'optional', lat: '', lng: '', radius_m: '50', provider_ids: [], is_active: true }
+const EMPTY = { name: '', description: '', service_type: '', gps_mode: DEFAULT_GPS_MODE, lat: '', lng: '', radius_m: String(POINT_RADIUS_DEFAULT_M), provider_ids: [], is_active: true }
 const fromPoint = (p) => ({
   name: p.name, description: p.description ?? '', service_type: p.service_type ?? '', gps_mode: p.gps_mode,
   lat: p.lat ?? '', lng: p.lng ?? '', radius_m: String(p.radius_m), provider_ids: p.provider_ids, is_active: p.is_active,
@@ -37,7 +42,7 @@ function PointForm({ point, providers, onClose, onSaved }) {
   const lat = coord(form.lat)
   const lng = coord(form.lng)
   const radius = Number(String(form.radius_m).trim() || NaN)
-  const usesLocation = form.gps_mode !== 'none' // with "no location" the map and its fields are hidden: do not check them
+  const usesLocation = form.gps_mode !== GPS_MODE_NONE // with "no location" the map and its fields are hidden: do not check them
   // The demo account may scan every point, so it has no place in a per-point list.
   const assignable = providers.filter((p) => !p.is_demo)
   const hasDemo = assignable.length !== providers.length
@@ -57,10 +62,10 @@ function PointForm({ point, providers, onClose, onSaved }) {
     if (!form.name.trim()) next.name = 'צריך שם לנקודה.'
     if (usesLocation) {
       if ((lat === null) !== (lng === null)) next[lat === null ? 'lat' : 'lng'] = 'יש להזין גם קו רוחב וגם קו אורך, או להשאיר את שניהם ריקים.'
-      else if (form.gps_mode === 'required' && lat === null) next.lat = 'נקודה שמחייבת מיקום צריכה מיקום במפה.'
+      else if (form.gps_mode === GPS_MODE_REQUIRED && lat === null) next.lat = 'נקודה שמחייבת מיקום צריכה מיקום במפה.'
       if (lat !== null && !(Number.isFinite(lat) && lat >= -90 && lat <= 90)) next.lat = 'קו רוחב חייב להיות מספר בין -90 ל-90.'
       if (lng !== null && !(Number.isFinite(lng) && lng >= -180 && lng <= 180)) next.lng = 'קו אורך חייב להיות מספר בין -180 ל-180.'
-      if (!Number.isInteger(radius) || radius < 1 || radius > 1000) next.radius_m = 'רדיוס בין 1 ל-1000 מטר.'
+      if (!Number.isInteger(radius) || radius < POINT_RADIUS_MIN_M || radius > POINT_RADIUS_MAX_M) next.radius_m = `רדיוס בין ${POINT_RADIUS_MIN_M} ל-${POINT_RADIUS_MAX_M} מטר.`
     }
     setErrors(next)
     if (Object.keys(next).length) {
@@ -75,7 +80,7 @@ function PointForm({ point, providers, onClose, onSaved }) {
       // Switching to "no location" keeps whatever coordinates the point already had (the person may switch back).
       ...(usesLocation
         ? { lat, lng, radius_m: radius }
-        : { lat: point?.lat ?? null, lng: point?.lng ?? null, radius_m: point?.radius_m ?? 50 }),
+        : { lat: point?.lat ?? null, lng: point?.lng ?? null, radius_m: point?.radius_m ?? POINT_RADIUS_DEFAULT_M }),
       ...(point ? { is_active: form.is_active } : {}),
     }
     const res = await run(
@@ -101,10 +106,10 @@ function PointForm({ point, providers, onClose, onSaved }) {
     >
       <form id="point-form" className="a-form" onSubmit={submit} noValidate>
         <Field label="שם הנקודה" error={errors.name}>
-          <input className="a-input" value={form.name} onChange={(e) => set('name', e.target.value)} maxLength={120} placeholder="לדוגמה: לובי, חדר מדרגות, מינוס 1" />
+          <input className="a-input" value={form.name} onChange={(e) => set('name', e.target.value)} maxLength={NAME_MAX_LENGTH} placeholder="לדוגמה: לובי, חדר מדרגות, מינוס 1" />
         </Field>
         <Field label="תיאור (לא חובה)">
-          <textarea className="a-input" value={form.description} onChange={(e) => set('description', e.target.value)} maxLength={500} />
+          <textarea className="a-input" value={form.description} onChange={(e) => set('description', e.target.value)} maxLength={DESCRIPTION_MAX_LENGTH} />
         </Field>
         <Field label="סוג שירות">
           <select className="a-input" value={form.service_type} onChange={(e) => set('service_type', e.target.value)}>
@@ -119,7 +124,7 @@ function PointForm({ point, providers, onClose, onSaved }) {
           </select>
         </Field>
 
-        {form.gps_mode !== 'none' && (
+        {form.gps_mode !== GPS_MODE_NONE && (
           <>
             <MapPicker
               lat={lat} lng={lng} radius={radius}
@@ -304,7 +309,7 @@ export default function PointsView() {
 
       <div className="a-grid">
         {list.map((p) => {
-          const missingCoords = p.gps_mode !== 'none' && (p.lat == null || p.lng == null)
+          const missingCoords = p.gps_mode !== GPS_MODE_NONE && (p.lat == null || p.lng == null)
           return (
             <article key={p.id} className={`a-card${p.is_active ? '' : ' is-off'}`}>
               <div className="a-card__top">
@@ -328,7 +333,7 @@ export default function PointsView() {
               <dl className="a-facts">
                 <dt>מי סורק</dt>
                 <dd>{p.provider_ids.length ? p.provider_ids.map((id) => names[id] ?? '…').join(', ') : 'כל נותני השירות'}</dd>
-                {p.gps_mode !== 'none' && (<><dt>רדיוס</dt><dd>{p.radius_m} מ׳</dd></>)}
+                {p.gps_mode !== GPS_MODE_NONE && (<><dt>רדיוס</dt><dd>{p.radius_m} מ׳</dd></>)}
               </dl>
             </article>
           )
