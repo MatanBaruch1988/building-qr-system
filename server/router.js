@@ -38,22 +38,20 @@ function decode(part) {
 }
 
 /**
- * Whether the path is this route's: the same number of segments and the same text in every fixed one. A parameter segment
- * that is not valid percent-encoding is a malformed URL for every route and every method (the 400 it always was), found
- * while looking for the route, so it still comes before the guard. No value is kept: the parameters of a handler are built
- * after its guard (paramsOf).
+ * Whether the path is this route's: the same number of segments and the same text in every fixed one. It reads no
+ * parameter (nothing is decoded), so finding the route says nothing about the values in the path.
  */
 function matches(segments, path) {
   const parts = path.split('/').filter(Boolean)
   if (parts.length !== segments.length) return false
-  for (let i = 0; i < segments.length; i++) {
-    if (segments[i].startsWith(':')) decode(parts[i])
-    else if (segments[i] !== parts[i]) return false
-  }
-  return true
+  return segments.every((segment, i) => segment.startsWith(':') || segment === parts[i])
 }
 
-/** The values of the `:name` parameters of a path that `matches`. Handed to a handler, so built only after its guard has let the request in. */
+/**
+ * The values of the `:name` parameters of a path that `matches`, decoded. They are for the handler, so they are built only
+ * after the guard of the route has let the request in; a segment that is not valid percent-encoding is a 400 `bad_request`
+ * from there on. (Without a route for the method, no guard and no handler run: see the end of handle().)
+ */
 function paramsOf(segments, path) {
   const parts = path.split('/').filter(Boolean)
   const params = {}
@@ -151,10 +149,10 @@ export async function handle(req, res) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.replace(/^\/api/, '') || '/'
 
-    let allowed = false
+    const sameShape = [] // the routes of this path, whatever their method
     for (const r of routes) {
       if (!matches(r.segments, path)) continue
-      allowed = true
+      sameShape.push(r)
       if (r.method !== req.method) continue
       matched = r
       assertSafeWrite(req)
@@ -173,9 +171,13 @@ export async function handle(req, res) {
       const shaped = out && (out.json !== undefined || out.text !== undefined || out.status) ? out : { json: out }
       return send(res, shaped)
     }
-    throw allowed
-      ? new ApiError(405, 'method_not_allowed', 'Method not allowed')
-      : new ApiError(404, 'not_found', 'Unknown endpoint')
+    if (sameShape.length) {
+      // The path is a route's but not for this method (405). No guard and no handler run for it, so nothing is exposed by
+      // checking the parameters here: a malformed one is the same 400 as it always was for such a path.
+      for (const r of sameShape) paramsOf(r.segments, path)
+      throw new ApiError(405, 'method_not_allowed', 'Method not allowed')
+    }
+    throw new ApiError(404, 'not_found', 'Unknown endpoint')
   } catch (raw) {
     if (raw instanceof Answer) return send(res, raw.out)
     const err = raw instanceof ApiError ? raw : fromDatabaseError(raw)

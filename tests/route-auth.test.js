@@ -1255,4 +1255,83 @@ describe('the router guards every route before the handler runs', () => {
     expect(crossOrigin.status).toBe(403)
     expect(crossOrigin.json.error.code).toBe('bad_origin')
   })
+
+  // A parameter of the path that is not valid percent-encoding is a 400 `bad_request` for the handler, so it is looked at
+  // only after the guard has let the request in. Finding the route compares segment counts and fixed segments and decodes
+  // nothing, so a request that the guard refuses never learns anything about its parameters.
+  const MALFORMED = '%E0%A4%A'
+
+  /** The database statements that a request makes (through a counting pool), with its answer. */
+  async function withStatements(method, url, creds = {}) {
+    const real = getPool()
+    const counter = countingPool(real)
+    setPool(counter)
+    try {
+      const res = await call(method, url, { ...(method === 'GET' ? {} : { body: {} }), ...creds })
+      return { res, statements: counter.seen }
+    } finally {
+      setPool(real)
+    }
+  }
+
+  for (const guard of Object.keys(GUARDS)) {
+    it(`answers a malformed path parameter on a ${guard} route with the 401 of the guard, and with the 400 only for a request that the guard let in`, async () => {
+      const c = canary(guard, 'malformed/:id', 'GET', async ({ params }) => ({ id: params.id }))
+      const url = `/api${c.r.path.replace(':id', MALFORMED)}`
+      // Without credentials, with a malformed one, and with the valid credentials of the other roles: the guard's 401.
+      const refused = [['no credentials at all', {}], ['a bearer token that does not exist', asBearer(token())]]
+      for (const role of Object.keys(GUARDS).filter((name) => name !== guard)) {
+        for (const [how, place] of PLACES[role]) refused.push([`a valid ${role} credential${how}`, place(VALID[role])])
+      }
+      for (const [label, creds] of refused) {
+        const res = await call('GET', url, creds)
+        expect(res.status, label).toBe(401)
+        expect(GUARDS[guard].codes, label).toContain(res.json.error.code)
+      }
+      // The request with nothing at all is refused without a statement, and without decoding anything.
+      expect((await withStatements('GET', url)).statements).toEqual([])
+      // A request that the guard lets in meets the malformed value: a 400 from the router, before the handler.
+      const signed = await call('GET', url, own(guard))
+      expect(signed.status).toBe(400)
+      expect(signed.json.error.code).toBe('bad_request')
+      expect(c.ran, 'the handler must not run for a malformed parameter').toEqual([])
+      // A well-formed value is decoded and handed to the handler.
+      const fine = await call('GET', `/api${c.r.path.replace(':id', 'a%20b')}`, own(guard))
+      expect(fine.json).toEqual({ id: 'a b' })
+      expect(c.ran.length).toBe(1)
+    })
+  }
+
+  it('answers a malformed parameter on a real route with the 401 of its guard, and with the 400 after a valid session', async () => {
+    const url = `/api/admin/points/${MALFORMED}`
+    const without = await withStatements('PATCH', url)
+    expect(without.res.status).toBe(401)
+    expect(without.res.json.error.code).toBe('admin_required')
+    expect(without.statements).toEqual([])
+    const asProvider = await call('PATCH', url, { body: {}, ...asBearer(VALID.provider) })
+    expect(asProvider.status).toBe(401)
+    expect(asProvider.json.error.code).toBe('admin_required')
+    const signed = await call('PATCH', url, { body: {}, ...asCookie(VALID.committee) })
+    expect(signed.status).toBe(400)
+    expect(signed.json.error.code).toBe('bad_request')
+  })
+
+  // The path is a route's but not for the method: no guard and no handler run, so nothing is exposed, and the answer is
+  // what it always was (tests/api.test.js): a 400 for a malformed parameter, otherwise a 405. An unknown path is a 404.
+  it('keeps the 405 for a method that the path has no route for, and the 400 when its parameter is malformed, without a statement', async () => {
+    for (const [method, url, status, code] of [
+      ['PUT', '/api/scan', 405, 'method_not_allowed'],
+      ['GET', '/api/admin/points/abc', 405, 'method_not_allowed'],
+      ['GET', `/api/admin/points/${MALFORMED}`, 400, 'bad_request'],
+      ['GET', '/api/nothing/here', 404, 'not_found'],
+      ['GET', `/api/nothing/${MALFORMED}`, 404, 'not_found'],
+    ]) {
+      const { res, statements } = await withStatements(method, url)
+      expect([res.status, res.json.error.code], `${method} ${url}`).toEqual([status, code])
+      expect(statements, `${method} ${url}`).toEqual([])
+    }
+    // The same with a session, as tests/api.test.js sends it.
+    expect((await call('GET', `/api/admin/points/${MALFORMED}`, asCookie(VALID.committee))).status).toBe(400)
+    expect((await call('GET', '/api/admin/points/abc', asCookie(VALID.committee))).status).toBe(405)
+  })
 })
