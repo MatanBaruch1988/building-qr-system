@@ -56,17 +56,17 @@ Coding agents (Claude Code, Codex) work by [AGENTS.md](AGENTS.md), and the decis
 2. **Authorized JavaScript origins**: the address of the site (for example `https://building-qr-system.vercel.app`) and `http://localhost:3000` for development.
 3. If the consent screen is in Testing mode: add the committee's Gmail addresses under **Test users** (or publish the app).
 4. Copy the Client ID into `GOOGLE_CLIENT_ID` in Vercel (Production) and in `.env.local`.
-5. Add the first committee member of the site. The command `npm run db:create-admin` writes to the database in `DATABASE_URL`, and in `.env.local` that is the development database (not Production), so without preparation it would add the member there and not to the site. To add the first committee member of the site, run it with the direct connection string of the site's database, which you give only to this command:
+5. Add the first committee member of the site. The command `npm run db:create-admin` writes to the database in `DATABASE_URL`, and in `.env.local` that is the development database (not Production), so without preparation it would add the member there and not to the site. To add the first committee member of the site, run it with the direct connection string of the site's database, which you give only to this command. Paste the string at the prompt, never into the command itself: the shell keeps every command you type in its history file (PowerShell's PSReadLine, bash and zsh), and what you type at a hidden prompt is not recorded:
 
    ```powershell
-   $env:DATABASE_URL = '<connection string>'; npm run db:create-admin -- you@gmail.com "Your Name"; Remove-Item Env:DATABASE_URL
+   try { $env:DATABASE_URL = [System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Connection string')).Password; npm run db:create-admin -- you@gmail.com "Your Name" } finally { Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue }
    ```
 
    ```bash
-   DATABASE_URL='<connection string>' npm run db:create-admin -- you@gmail.com "Your Name"
+   ( printf 'Connection string: '; read -rs DATABASE_URL; echo; export DATABASE_URL; npm run db:create-admin -- you@gmail.com "Your Name" )
    ```
 
-   The command prints which database it writes to (the address with its middle hidden and no password, and the database's marker if it has one): check that it is the address of the site's database and that it does not say `nonprod`. The connection string is a secret, so it does not go into any file in the repository. You add the others from the Committee tab ("ועד").
+   The command prints which database it writes to (the address with its middle hidden and no password, and the database's marker if it has one): check that it is the address of the site's database and that it does not say `nonprod`. The connection string is a secret, so it does not go into any file in the repository, and it does not stay in the shell afterwards, also when the command is stopped with Ctrl-C: PowerShell runs the `finally` part even then, and in bash the string only ever exists inside the parentheses (a subshell that ends with the command). You add the others from the Committee tab ("ועד").
 6. Set the building's address, which the service providers' app shows at the top, in the committee app: the Committee tab ("ועד"), building details card ("פרטי הבניין"). It is stored in the site's own database and starts empty, and while it is empty that app shows no address line.
 
 ## The move from the old system (Firebase): done
