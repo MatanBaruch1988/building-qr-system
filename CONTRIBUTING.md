@@ -54,6 +54,7 @@ The full list is in [`AGENTS.md`](AGENTS.md), under "Rules for every change". Th
 
 ```bash
 npm run lint          # ESLint: must pass with no warnings (CI runs it in the guards check)
+npm run typecheck     # TypeScript checks the JavaScript (types are JSDoc comments): must pass (CI runs it in the guards check)
 npm run test:unit     # Vitest: logic, the API against Postgres, i18n, contrast, typography, components
 npm run test:e2e      # Playwright: Chromium as a Pixel 7 and WebKit as an iPhone 14
 npm test              # both
@@ -64,7 +65,7 @@ throwaway schema in your database and drop it at the end.
 
 CI runs on every pull request, against a Postgres 18 container, and four checks are required to merge:
 
-- `guards`: migrations only move forward, tests are not removed, the pull request title, ESLint, a dependency audit
+- `guards`: migrations only move forward, tests are not removed, the pull request title, ESLint, the type check, a dependency audit
 - `unit`
 - `e2e (android-chrome)`
 - `e2e (iphone-webkit)`

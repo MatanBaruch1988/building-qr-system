@@ -18,6 +18,8 @@ import {
 } from '../../shared/contract.js'
 import { readAddress } from '../building.js'
 
+/** @import { SyncItemResult } from '../../shared/types.js' */
+
 const providerJson = (p) => ({
   id: p.id,
   company: p.company,
@@ -111,6 +113,7 @@ route('POST', '/scans/sync', async ({ req, body }) => {
   if (body.scans.length > MAX_SYNC_BATCH) throw bad('batch_too_large', `At most ${MAX_SYNC_BATCH} scans per request`)
 
   const items = [...body.scans].sort((a, b) => String(a?.client_time).localeCompare(String(b?.client_time)))
+  /** @type {SyncItemResult[]} */
   const results = []
   for (const item of items) {
     try {

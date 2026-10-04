@@ -27,7 +27,7 @@ const { handle } = await import('./index.js')
 const port = Number(process.env.API_PORT || 3001)
 
 http
-  .createServer((req, res) => {
+  .createServer((/** @type {import('./http.js').ApiRequest} */ req, res) => {
     const chunks = []
     req.on('data', (c) => chunks.push(c))
     req.on('end', () => {

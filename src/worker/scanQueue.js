@@ -3,6 +3,9 @@ import {
   SYNC_CHUNK_SIZE, SYNC_QUEUE_MAX_ITEMS, SYNC_PERMANENT_ERROR_CODES, OUTCOME_ACCEPTED,
 } from '../../shared/contract.js'
 
+/** @import { SyncItem, SyncRequest, SyncResponse } from '../../shared/types.js' */
+/** @import { StorageLike } from './storage.js' */
+
 const KEY = 'qr.queue.v1'
 // The queue size, the size of one upload and the codes below are the phone's side of the sync contract with the server,
 // written once in shared/contract.js (tests/contract.test.js keeps the chunk under the server's MAX_SYNC_BATCH).
@@ -15,20 +18,37 @@ const BATCH = SYNC_CHUNK_SIZE // must not exceed the server's MAX_SYNC_BATCH
 const PERMANENT = new Set(SYNC_PERMANENT_ERROR_CODES)
 
 /**
+ * One saved check-in: what the sync upload sends (`SyncItem`) and what only the phone keeps. The queue key is versioned
+ * (`qr.queue.v1`) because an old version of the app writes items too: an item may lack a field that a newer one adds.
+ * @typedef {SyncItem & { provider_id: string, saved_at: string, point_name?: string }} QueuedScan
+ */
+
+/** @typedef {ReturnType<typeof createQueue>} Queue */
+
+/**
  * Check-ins saved on the phone while it had no signal. Each item carries the id the server uses for
  * idempotency, so a retry after a half-finished upload can never create a duplicate visit.
+ * @param {StorageLike} [storage]
  */
 export function createQueue(storage = safeStorage) {
   const read = () => readJson(storage, KEY, [])
   const write = (items) => storage.setItem(KEY, JSON.stringify(items.slice(-MAX_ITEMS)))
   return {
+    /**
+     * @param {string} providerId
+     * @returns {QueuedScan[]}
+     */
     list: (providerId) => read().filter((i) => i.provider_id === providerId),
-    /** @returns {boolean} false when the item is held in memory only (persistent storage refused it) */
+    /**
+     * @param {QueuedScan} item
+     * @returns {boolean} false when the item is held in memory only (persistent storage refused it)
+     */
     add(item) {
       const items = read()
       if (items.some((i) => i.id === item.id)) return true
       return write([...items, item]) !== false
     },
+    /** @param {string[]} ids */
     remove(ids) {
       const drop = new Set(ids)
       write(read().filter((i) => !drop.has(i.id)))
@@ -43,6 +63,12 @@ export function createQueue(storage = safeStorage) {
  *             left the point, so they must be told rather than shown a green "sent",
  *  - dropped  refused for good (unknown code, point removed, …).
  * Throws ApiError only for a 401 (the caller signs the person out); network trouble just stops early.
+ * @param {object} args
+ * @param {Queue} args.queue
+ * @param {typeof import('../api/client.js').api} args.api
+ * @param {string} args.token  the provider's device token
+ * @param {string} args.providerId  whose check-ins to upload
+ * @returns {Promise<{ sent: number, rejected: number, dropped: number, remaining: number }>}
  */
 export async function flushQueue({ queue, api, token, providerId }) {
   let sent = 0
@@ -53,13 +79,14 @@ export async function flushQueue({ queue, api, token, providerId }) {
     const items = queue.list(providerId).slice(0, BATCH)
     if (!items.length) break
     const inBatch = new Set(items.map((i) => i.id))
+    /** @type {SyncResponse} */
     let res
     try {
       res = await api('/scans/sync', {
         method: 'POST',
         token,
         timeoutMs: 8000 + 1500 * items.length,
-        body: { scans: items.map(({ id, code, client_time, gps }) => ({ id, code, client_time, gps })) },
+        body: /** @type {SyncRequest} */ ({ scans: items.map(({ id, code, client_time, gps }) => ({ id, code, client_time, gps })) }),
       })
     } catch (err) {
       if (err.status === 401) throw err
