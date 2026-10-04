@@ -286,8 +286,9 @@ of the three is enough: the loop narrows all of them, and the strongest cut is t
   (`*.dump` is in `.gitignore`; `npm run db:backup` prints no connection string and its issue says nothing but "failed").
 - Tests and fixtures use only fake data (the dev seed). Never real names, phone numbers, e-mails, coordinates or
   attendance rows. Put nothing personal in a log or an error message.
-- An unhandled API error is logged only through `describeUnhandled` in `server/router.js` (method, path without the query
-  string, name, code, stack frames; never the message, which can quote a value). Never pass a raw error object to
+- An unhandled API error is logged only through `describeUnhandled` in `server/router.js` (method, the route as it is
+  written in the code, name, code, stack frames; never the path that was asked for or the message, which can hold a
+  value, and no line of the message as a stack frame). Never pass a raw error object to
   `console.*`: a Postgres error carries `detail`, `where`, `table`, `column` and `parameters`, which can hold row values.
 - Every secret the server mints has its prefix and the maximum length in `server/config.js` (`PROVIDER_TOKEN_PREFIX`,
   `ADMIN_TOKEN_PREFIX`, `API_KEY_PREFIX`, `MAX_TOKEN_LENGTH`); never write a prefix as a literal. A token is checked by
