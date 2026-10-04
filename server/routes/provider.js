@@ -5,7 +5,7 @@ import { ApiError, bad, notFound, requireUuid, str, clientIp } from '../http.js'
 import { requireProvider, guardLogin } from '../auth.js'
 import { recordScan, scanJson } from '../scans.js'
 import { parseQrToken } from '../scanLogic.js'
-import { MAX_SYNC_BATCH } from '../config.js'
+import { MAX_SYNC_BATCH, PROVIDER_TOKEN_PREFIX } from '../config.js'
 import { readAddress } from '../building.js'
 
 const providerJson = (p) => ({
@@ -60,7 +60,7 @@ route('POST', '/session', async ({ req, body }) => {
   if (!ok) throw new ApiError(401, 'invalid_credentials', 'Wrong password')
   await attempt.success()
 
-  const token = randomToken('qrp_')
+  const token = randomToken(PROVIDER_TOKEN_PREFIX)
   await query(
     'insert into provider_devices (provider_id, token_hash, label) values ($1, $2, $3)',
     [provider.id, sha256(token), label],
