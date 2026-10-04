@@ -29,6 +29,8 @@ import {
   neonCommand,
   nullDevice,
   parseArgs,
+  notProductionMessage,
+  parseMarkerValues,
   parseNeonOutput,
   parseWhoamiSid,
   PARTIAL_NAME,
@@ -65,6 +67,28 @@ const LISTING = [
   '3564; 0 24898 TABLE DATA public providers backup_user',
 ].join('\n')
 
+/** The SQL that `pg_restore --data-only --table=environment_marker --file=-` writes for a dump whose marker table holds `rows`. */
+const markerSql = (...rows) =>
+  [
+    '--',
+    '-- PostgreSQL database dump',
+    '--',
+    '',
+    "SET client_encoding = 'UTF8';",
+    '',
+    '-- Data for Name: environment_marker; Type: TABLE DATA; Schema: public; Owner: -',
+    '',
+    'COPY public.environment_marker (environment) FROM stdin;',
+    ...rows,
+    '\\.',
+    '',
+    '-- PostgreSQL database dump complete',
+    '',
+  ].join('\n')
+/** The same for a dump that has no marker table at all: pg_restore writes the header and no COPY block. */
+const NO_MARKER_SQL = "--\n-- PostgreSQL database dump\n--\n\nSET client_encoding = 'UTF8';\n\n-- PostgreSQL database dump complete\n"
+const isMarkerCall = (call) => call.args.includes('--data-only')
+
 // ---- a stub runner ---------------------------------------------------------------------------------------------------
 
 function toolOf(command) {
@@ -77,7 +101,7 @@ const defaults = {
     fs.writeFileSync(path.join(options.cwd, args[args.indexOf('--file') + 1]), 'PGDMP fake dump')
     return { status: 0, stdout: '', stderr: '' }
   },
-  pg_restore: () => ({ status: 0, stdout: LISTING, stderr: '' }),
+  pg_restore: (call) => ({ status: 0, stdout: isMarkerCall(call) ? markerSql('production') : LISTING, stderr: '' }),
   neon: () => ({ status: 0, stdout: `${URL_FAKE}\n`, stderr: '' }),
   // Windows only: the SID of the user (a fake one) and the owner-only access list of a file
   whoami: () => ({ status: 0, stdout: `"PC\\user","${SID}"\r\n`, stderr: '' }),
@@ -131,6 +155,10 @@ function isWorkDir(target) {
 }
 
 /** The work directories of runs that are in the temp folder of the test now: a run makes its own with mkdtemp. */
+function backupFilesIn(folder) {
+  return fs.readdirSync(folder).filter((name) => BACKUP_NAME.test(name)).sort()
+}
+
 function workDirsNow() {
   return fs.readdirSync(tmp).filter((name) => name.startsWith('bqr-work-'))
 }
@@ -566,7 +594,7 @@ describe('a good backup', () => {
     expect(list.command).toBe('pg_restore')
     expect(list.args).toEqual(['--list', PARTIAL])
     expectWorkCwd(list.options.cwd)
-    expect(r.runner.calls.map((c) => c.tool)).toEqual(['pg_dump', 'pg_restore', 'pg_restore'])
+    expect(r.runner.calls.map((c) => c.tool)).toEqual(['pg_dump', 'pg_restore', 'pg_restore', 'pg_restore'])
   })
 
   it('creates the folder when it is missing, also a nested one', async () => {
@@ -1100,6 +1128,161 @@ describe('retention when a run that started earlier finishes later', () => {
   })
 })
 
+// ---- the marker: only a dump of a production database is kept --------------------------------------------------------------------------
+
+describe('the marker of the dump', () => {
+  /** A runner whose pg_restore answers the marker call with `sql` (or with `answer`, a whole result) and the others as usual. */
+  const withMarker = (sql, answer) =>
+    makeRunner({ pg_restore: (call) => (isMarkerCall(call) ? (answer ?? { status: 0, stdout: sql, stderr: '' }) : defaults.pg_restore(call)) })
+
+  describe('reading the values out of the SQL of the dump', () => {
+    it('reads a production marker, and a non-production one', () => {
+      expect(parseMarkerValues(markerSql('production'))).toEqual(['production'])
+      expect(parseMarkerValues(markerSql('nonprod'))).toEqual(['nonprod'])
+    })
+
+    it('trims and lowers the case, like the guard does, and reads every row', () => {
+      expect(parseMarkerValues(markerSql(' Production '))).toEqual(['production'])
+      expect(parseMarkerValues(markerSql('nonprod', 'PRODUCTION'))).toEqual(['nonprod', 'production'])
+      expect(parseMarkerValues(markerSql('production').replace(/\n/g, '\r\n'))).toEqual(['production'])
+    })
+
+    it('gives an empty list for a table without rows, and null for a dump that has no such table', () => {
+      expect(parseMarkerValues(markerSql())).toEqual([])
+      expect(parseMarkerValues(NO_MARKER_SQL)).toBeNull()
+      expect(parseMarkerValues('')).toBeNull()
+      expect(parseMarkerValues(undefined)).toBeNull()
+    })
+
+    it('is not fooled by another table, or by a row that only looks like a COPY block', () => {
+      expect(parseMarkerValues('COPY public.points (id, name) FROM stdin;\n1\tproduction\n\\.\n')).toBeNull()
+      expect(parseMarkerValues('COPY other.environment_marker (environment) FROM stdin;\nproduction\n\\.\n')).toBeNull()
+      // a value that is in the data of another table, after the end of the marker rows, does not count
+      expect(parseMarkerValues(`${markerSql('nonprod')}\nCOPY public.x (a) FROM stdin;\nproduction\n\\.\n`)).toEqual(['nonprod'])
+    })
+
+    it('finds the column by its name when the table has more columns, and ignores a table without the column', () => {
+      const wide = 'COPY public.environment_marker (set_at, environment) FROM stdin;\n2026-10-03\tproduction\n\\.\n'
+      expect(parseMarkerValues(wide)).toEqual(['production'])
+      expect(parseMarkerValues('COPY public.environment_marker (kind) FROM stdin;\nproduction\n\\.\n')).toEqual([])
+    })
+  })
+
+  describe('the message of a refusal', () => {
+    it('says what the marker holds, as short labels, and what to check', () => {
+      expect(notProductionMessage(null)).toMatch(/public\.environment_marker is missing\)/)
+      expect(notProductionMessage([])).toMatch(/public\.environment_marker is empty\)/)
+      expect(notProductionMessage(['nonprod'])).toMatch(/public\.environment_marker says "nonprod"\)/)
+      expect(notProductionMessage(['nonprod', 'staging'])).toMatch(/says "nonprod" and "staging"\)/)
+      expect(notProductionMessage(['a b c'])).toMatch(/says something else\)/) // only a label is shown, never free text
+      for (const values of [null, [], ['nonprod']]) {
+        const message = notProductionMessage(values)
+        expect(message).toMatch(/--neon-project and --neon-branch/)
+        expect(message).toMatch(/BACKUP_DATABASE_URL/)
+        expect(message).toMatch(/was not kept/)
+        expect(message).not.toMatch(/postgres|neon\.tech|[A-Za-z]:\\|\/Users\//)
+      }
+    })
+  })
+
+  describe('in a run', () => {
+    it('keeps a dump whose marker says production, after the full read and before it is moved, from the dump itself', async () => {
+      let finalDuringCheck
+      const runner = makeRunner({
+        pg_restore: (call) => {
+          if (!isMarkerCall(call)) return defaults.pg_restore(call)
+          finalDuringCheck = fs.existsSync(path.join(dir, FINAL))
+          return defaults.pg_restore(call)
+        },
+      })
+      const r = await go({ runner })
+      expect(r.exitCode).toBe(0)
+      const [list, full, mark] = r.runner.of('pg_restore')
+      expect(list.args[0]).toBe('--list')
+      expect(full.args).toEqual(['--file=/dev/null', PARTIAL])
+      expect(mark.command).toBe('pg_restore')
+      expect(mark.args).toEqual(['--data-only', '--schema=public', '--table=environment_marker', '--file=-', PARTIAL])
+      expectWorkCwd(mark.options.cwd) // the dump in the work directory, not a second connection to the database
+      expect(Object.keys(mark.options.env).filter((key) => /^PG[A-Z]/.test(key))).toEqual([])
+      expect(finalDuringCheck).toBe(false) // nothing was moved yet
+      expect(r.runner.of('neon')).toEqual([]) // and no other connection was made
+      expect(r.files).toEqual(['backup.log', FINAL])
+    })
+
+    it('accepts a marker with a production row among others, like the guard (one production row is enough)', async () => {
+      const r = await go({ runner: withMarker(markerSql('nonprod', 'production')) })
+      expect(r.exitCode).toBe(0)
+    })
+
+    const refusals = {
+      'a dump without the marker table': [withMarker(NO_MARKER_SQL), null],
+      'a dump whose marker says nonprod': [withMarker(markerSql('nonprod')), ['nonprod']],
+      'a dump whose marker table is empty': [withMarker(markerSql()), []],
+      'a dump whose marker says something else': [withMarker(markerSql('staging')), ['staging']],
+    }
+    for (const [what, [runner, values]] of Object.entries(refusals)) {
+      it(`refuses ${what}: nothing is kept, moved or rotated, and the failure is logged`, async () => {
+        seed(oldBackups)
+        const r = await go({ options: { keep: 1, reportIssue: 'owner/repo' }, runner })
+        expect(r.exitCode).toBe(1)
+        expect(r.message).toBe(notProductionMessage(values))
+        expect(r.files).toEqual(['backup.log', ...oldBackups]) // no new file, and the five old dumps are all still there
+        expect(workDirsNow()).toEqual([]) // the dump in the work directory is deleted
+        expect(r.log).toBe(`03/10/2026 10:15 failed host=${MASKED_HOST} issue=opened error=${r.message}\n`)
+        expect(r.issue).toBe('opened') // the committee is told, like for any other failure
+        expect(r.errs).toContain(`backup failed: ${r.message}`)
+        for (const secret of [PASSWORD, ENCODED, USER, HOST, 'postgresql://']) expect(visible(r)).not.toContain(secret)
+      })
+    }
+
+    it('is checked before the dump is renamed, so the old backups of the real database are never rotated by the wrong one', async () => {
+      // the story of the finding: a stale BACKUP_DATABASE_URL points at a non-production database that has scans and points
+      seed(oldBackups)
+      const first = await go({ options: { keep: 5 }, runner: withMarker(markerSql('nonprod')) })
+      expect(first.exitCode).toBe(1)
+      expect(backupFilesIn(dir)).toEqual(oldBackups) // every real dump survives, as often as the task runs
+      fs.rmSync(path.join(dir, 'backup.log'))
+      const second = await go({ options: { keep: 1 }, runner: withMarker(markerSql('nonprod')) })
+      expect(second.exitCode).toBe(1)
+      expect(backupFilesIn(dir)).toEqual(oldBackups)
+    })
+
+    it('fails when the marker cannot be read at all: pg_restore fails, is missing, or takes too long', async () => {
+      const answers = [
+        [{ status: 1, stdout: '', stderr: 'pg_restore: error: out of memory' }, 'the marker of the dump could not be read with pg_restore (exit code 1): pg_restore: error: out of memory'],
+        [{ status: null, stdout: '', stderr: '', problem: 'ENOENT' }, 'pg_restore was not found: install the PostgreSQL 18 client tools, then pass --pg-bin <folder> or set PG_BIN'],
+        [{ status: null, stdout: '', stderr: '', problem: 'TIMEOUT' }, 'pg_restore did not finish in time'],
+      ]
+      for (const [answer, message] of answers) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const r = await go({ runner: withMarker('', answer) })
+        expect(r.exitCode, message).toBe(1)
+        expect(r.message).toBe(message)
+        expect(r.files).toEqual(['backup.log'])
+        expect(workDirsNow()).toEqual([])
+      }
+    })
+
+    it('is not run when an earlier check failed: one reason is enough, and the marker of a broken dump means nothing', async () => {
+      const noScans = makeRunner({ pg_restore: () => ({ status: 0, stdout: '3563; 0 24869 TABLE DATA public points x', stderr: '' }) })
+      const r = await go({ runner: noScans })
+      expect(r.exitCode).toBe(1)
+      expect(r.runner.of('pg_restore').filter(isMarkerCall)).toEqual([])
+      fs.rmSync(dir, { recursive: true, force: true })
+      const cut = makeRunner({ pg_restore: (call) => (call.args[0] === '--list' ? defaults.pg_restore(call) : { status: 1, stdout: '', stderr: 'cut' }) })
+      const r2 = await go({ runner: cut })
+      expect(r2.exitCode).toBe(1)
+      expect(r2.runner.of('pg_restore').filter(isMarkerCall)).toEqual([])
+    })
+
+    it('does not print the connection string or the host in the refusal, whatever the address is', async () => {
+      const r = await go({ runner: withMarker(markerSql('nonprod')), deps: { env: { BACKUP_DATABASE_URL: POOLED.replace('-pooler', '') } } })
+      expect(r.exitCode).toBe(1)
+      for (const text of [HOST, 'ep-test-cool', PASSWORD, ENCODED, USER, 'postgresql://']) expect(visible(r)).not.toContain(text) // (the log has the masked host, by design)
+    })
+  })
+})
+
 // ---- the log ---------------------------------------------------------------------------------------------------------------------------
 
 describe('backup.log', () => {
@@ -1452,7 +1635,7 @@ describe('the full read of the dump', () => {
   const runnerWithRead = (read, dump = defaults.pg_dump) =>
     makeRunner({
       pg_dump: dump,
-      pg_restore: (call) => (call.args[0] === '--list' ? defaults.pg_restore(call) : read(call)),
+      pg_restore: (call) => (call.args[0] === '--list' || isMarkerCall(call) ? defaults.pg_restore(call) : read(call)),
     })
 
   it('names the null device: NUL on Windows, /dev/null elsewhere', () => {
@@ -1474,6 +1657,7 @@ describe('the full read of the dump', () => {
       'pg_dump',
       'pg_restore --list',
       'pg_restore --file',
+      'pg_restore --data-only',
     ])
   })
 
@@ -1912,7 +2096,7 @@ describe('owner-only files on Windows', () => {
         return defaults.pg_dump(call)
       },
       pg_restore: (call) => {
-        events.push(call.args[0] === '--list' ? 'list' : 'full read')
+        events.push(call.args[0] === '--list' ? 'list' : isMarkerCall(call) ? 'marker' : 'full read')
         return defaults.pg_restore(call)
       },
     })
@@ -1925,6 +2109,7 @@ describe('owner-only files on Windows', () => {
       'pg_dump',
       'list',
       'full read',
+      'marker',
       // the file was renamed into the output folder and the work directory is removed: the log is made last
       `icacls backup.log (out: backup.log ${FINAL}, work: -)`,
     ])
@@ -2023,7 +2208,7 @@ describe('owner-only files on Windows', () => {
     const r = await go()
     expect(r.runner.of('whoami')).toEqual([])
     expect(r.runner.of('icacls')).toEqual([])
-    expect(r.runner.calls.map((c) => c.tool)).toEqual(['pg_dump', 'pg_restore', 'pg_restore'])
+    expect(r.runner.calls.map((c) => c.tool)).toEqual(['pg_dump', 'pg_restore', 'pg_restore', 'pg_restore'])
   })
 })
 
@@ -2287,7 +2472,7 @@ describe('the private work directory', () => {
   it('is where pg_dump, the list and the full read run, and the finished file is moved out of it into the output folder', async () => {
     const r = await go()
     const cwds = r.runner.calls.map((c) => c.options.cwd)
-    expect(cwds).toHaveLength(3)
+    expect(cwds).toHaveLength(4) // pg_dump, the list, the full read and the marker
     expect(new Set(cwds).size).toBe(1)
     expectWorkCwd(cwds[0])
     expect(fs.existsSync(path.join(dir, FINAL))).toBe(true)
@@ -2299,7 +2484,7 @@ describe('the private work directory', () => {
       defaults.pg_dump(call) // a half written dump is in the directory
       return { status: 1, stdout: '', stderr: 'pg_dump: error: boom' }
     }
-    const readFails = (call) => (call.args[0] === '--list' ? defaults.pg_restore(call) : { status: 1, stdout: '', stderr: 'cut' })
+    const readFails = (call) => (call.args[0] === '--list' || isMarkerCall(call) ? defaults.pg_restore(call) : { status: 1, stdout: '', stderr: 'cut' })
     const scenarios = [
       ['pg_dump fails after it wrote', makeRunner({ pg_dump: halfDump }), {}],
       ['pg_dump is not found', makeRunner({ pg_dump: () => ({ status: null, stdout: '', stderr: '', problem: 'ENOENT' }) }), {}],

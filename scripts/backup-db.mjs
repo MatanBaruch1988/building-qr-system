@@ -39,6 +39,11 @@
 //      private folder on the drive of the output folder). The work directory is removed at the end, whatever happened, and
 //      nothing in it survives: another account can at most replace the FINAL file after the fact, and the data in it was
 //      never readable by that account.
+//      A third check reads the marker out of the dump: the table public.environment_marker (server/dbGuard.js) must hold a row
+//      `production`. A dump of a database that does not say so (the wrong project or branch, a stale BACKUP_DATABASE_URL) is not
+//      kept, and nothing is rotated, because it would pass the two checks above and could push the real dumps out. Every
+//      production database has the marker: the production build of the first deploy sets it. Whoever backs up another database
+//      has to give it that table with the value `production`.
 //   4. Keeps the newest --keep files that match that exact name and deletes the older ones. ALL of them are sorted together
 //      by the UTC time in their names, so a run that started earlier and finishes later than a newer one never deletes the
 //      newer dump: when its own file is older than the kept ones, its own file is removed (the run still ends with 0, with
@@ -115,6 +120,8 @@ export const AMBIGUOUS_SOURCE_ERROR =
 // The temp folder and the backup folder are on two drives: the verified file cannot be renamed into place (EXDEV).
 export const EXDEV_ERROR =
   'the backup folder is on another drive than the temp folder, so the finished dump cannot be moved into it: put the backup folder on the same drive as the temp folder, or point TEMP (on macOS and Linux TMPDIR) at a private folder on the drive of the backup folder'
+// The table that says which database it is (server/dbGuard.js): `production` in the production database, `nonprod` in the other.
+export const MARKER_TABLE = 'environment_marker'
 export const LOG_SKIPPED = 'backup: backup.log was not written, because other users can write in the backup folder'
 
 const NEON_TIMEOUT_MS = 2 * 60_000
@@ -426,6 +433,42 @@ export const WORK_PREFIX = 'bqr-work-'
  * .dump, so `*.dump` in .gitignore covers it. It is created with `wx`: a file that is there already is an error.
  */
 export const PARTIAL_NAME = 'partial.dump'
+
+/**
+ * The values of the column `environment` of public.environment_marker in the SQL that `pg_restore --data-only --table=...`
+ * writes for a dump: the lower-case, trimmed text of each row, as a list (an empty list for a table without rows), or null
+ * when the table is not in the dump (there is no COPY block for it). This is what server/dbGuard.js reads from a live
+ * database; here it is read from the dump itself, so that the check is about the file that gets kept.
+ */
+export function parseMarkerValues(sql) {
+  const lines = String(sql ?? '').split(/\r?\n/)
+  const start = lines.findIndex((line) => /^COPY public\.environment_marker \(.*\) FROM stdin;$/.test(line))
+  if (start === -1) return null
+  const columns = /\((.*)\)/
+    .exec(lines[start])[1]
+    .split(',')
+    .map((column) => column.trim().replace(/^"|"$/g, ''))
+  const index = columns.indexOf('environment')
+  const values = []
+  for (let i = start + 1; i < lines.length && lines[i] !== '\\.'; i++) {
+    if (index !== -1) values.push((lines[i].split('\t')[index] ?? '').trim().toLowerCase())
+  }
+  return values
+}
+
+/**
+ * Why a dump is not of a production database, for the message of the failure: what public.environment_marker holds, as
+ * short labels (`missing`, `empty`, or its values when they look like a label). It names no project, no host and no
+ * connection string, and says what to check.
+ */
+export function notProductionMessage(values) {
+  const label = (value) => (/^[a-z0-9_-]{1,20}$/.test(value) ? `"${value}"` : 'something else')
+  const found = values === null ? 'is missing' : values.length === 0 ? 'is empty' : `says ${[...new Set(values)].map(label).join(' and ')}`
+  return (
+    `the dump is not of a production database, so it was not kept (public.environment_marker ${found}): ` +
+    'check that --neon-project and --neon-branch name the production database, and that BACKUP_DATABASE_URL is not an old one or the one of another database'
+  )
+}
 
 /**
  * The UTC time that a backup name says (a Date), or null when `name` is not the name of a backup: it must match BACKUP_NAME
@@ -911,6 +954,24 @@ export async function runBackup(options, deps = {}) {
     if (full.status !== 0) {
       throw new Error(`the dump could not be read to the end with pg_restore (exit code ${full.status})${firstLine(full.stderr)}`)
     }
+
+    // Check 3, the marker: every production database says so in the table public.environment_marker (the production build marks it
+    // on the first deploy, and server/dbGuard.js reads it). A dump of a database that does not say `production` (a project or a
+    // branch that was named wrong, a BACKUP_DATABASE_URL that is stale) would still have scans and points, pass the checks above,
+    // be kept as a good backup, and let retention rotate the real production dumps away over the next days. The marker is read
+    // from the DUMP, not from a second connection, so that the check is about the file that is kept; nothing is kept, renamed
+    // or rotated before it passes.
+    const marker = await runner(pgRestore, ['--data-only', '--schema=public', `--table=${MARKER_TABLE}`, '--file=-', partialName], {
+      env: cleanEnv(env),
+      cwd: workDir,
+      timeoutMs: LIST_TIMEOUT_MS,
+    })
+    if (marker.problem) throw new Error(toolProblem('pg_restore', marker.problem))
+    if (marker.status !== 0) {
+      throw new Error(`the marker of the dump could not be read with pg_restore (exit code ${marker.status})${firstLine(marker.stderr)}`)
+    }
+    const markerValues = parseMarkerValues(marker.stdout)
+    if (!markerValues?.includes('production')) throw new Error(notProductionMessage(markerValues))
 
     if (posix) {
       // Already 600 through the umask and the mode of the empty file: this makes sure. Then the mode is READ BACK: a failed

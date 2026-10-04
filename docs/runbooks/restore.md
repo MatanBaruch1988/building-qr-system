@@ -69,11 +69,20 @@ check-ins, the e-mail addresses of the committee), so they never go to GitHub, i
 string of the production branch (kept in memory, never written down) and runs `pg_dump` in a read-only session: the server
 refuses any write in it, so the backup cannot change production. This is the one sanctioned local read of production (see
 ADR 0005). The dump goes into a temporary file in a private work directory in your own temp folder that belongs to this run
-alone (see "Who can read them"), so two runs in the same minute never share a file. Then the file is checked twice: the table of contents (`pg_restore --list`) must name the data of `scans` and
-`points`, and then a full read (`pg_restore --file=` to the null device, `NUL` on Windows and `/dev/null` elsewhere) must get
-through every data block and exit with 0. The first check alone is not enough, because the table of contents is at the
-start of the file and a dump that was cut off after it would pass. Only then is the file named
-`building-qr-<UTC date and time>.dump` (a file of the same minute is replaced by it). A failed dump leaves no file behind.
+alone (see "Who can read them"), so two runs in the same minute never share a file. Then the file is checked three times: the
+table of contents (`pg_restore --list`) must name the data of `scans` and `points`; a full read (`pg_restore --file=` to the
+null device, `NUL` on Windows and `/dev/null` elsewhere) must get through every data block and exit with 0 (the first check
+alone is not enough, because the table of contents is at the start of the file and a dump that was cut off after it would
+pass); and the marker must say production: the table `public.environment_marker`, which every production database has (the
+production build of the first deploy sets it, and the local tools read it to refuse production), is read out of the dump
+itself with `pg_restore --data-only --table=environment_marker`, and must hold a row `production`. A dump of a database that
+does not say so (the wrong project or branch, a stale `BACKUP_DATABASE_URL`) would pass the first two checks and be kept as
+a good backup, and the retention could then rotate the real production dumps away over the following days, so such a dump is
+not kept and nothing is rotated: the run fails (exit code 1, a line in `backup.log`, an issue with `--report-issue`) with a
+message that says what the marker holds (`missing`, `empty` or `says "nonprod"`) and to check `--neon-project`,
+`--neon-branch` and `BACKUP_DATABASE_URL`; the project, the host and the connection string are never in it. Only after the
+three checks is the file named `building-qr-<UTC date and time>.dump` (a file of the same minute is replaced by it). A failed
+dump leaves no file behind.
 It keeps the newest 30 dumps (`--keep`) and deletes older ones, and it never touches another file in the folder. "Newest"
 is decided by the UTC time in the file names, for all the dumps together, whichever run finishes last: a run that started
 earlier and finishes after a newer one never deletes the newer dump. When its own dump is older than the ones that are
@@ -136,7 +145,9 @@ and its size, or a short error. It never holds the connection string, the user o
   `C:\Program Files\PostgreSQL\18\bin`, then `PATH`.
 - The Neon CLI, signed in (`neon auth`) as a person who can see the project. Any other Postgres works too: set
   `BACKUP_DATABASE_URL` to its direct connection string (a host without `-pooler`, because `pg_dump` needs a session) and
-  leave out `--neon-project`. Use one of the two, never both: when both are given the run stops (exit code 1, nothing is
+  leave out `--neon-project`. That database must carry the marker `production` (see "What runs"); a database that was never
+  deployed to production by this project has none, and the backup refuses it until the table
+  `public.environment_marker (environment text)` holds a row `production`. Use one of the two, never both: when both are given the run stops (exit code 1, nothing is
   dumped) instead of letting one of them win, because a backup of the wrong database is worse than none.
 - Optional: the GitHub CLI (`gh`), signed in. With `--report-issue <owner>/<repo>` a failed run opens an issue titled
   "Daily database backup failed", or, when an issue with exactly that title is already open, adds a comment to it (a
@@ -151,7 +162,9 @@ and its size, or a short error. It never holds the connection string, the user o
 - Look inside a file: `pg_restore --list <file>` prints the table of contents. It must show lines such as
   `TABLE DATA public scans` and `TABLE DATA public points` (one `TABLE DATA` line for every table). To read every data
   block, as the script does, run `pg_restore --file=/dev/null <file>` (`--file=NUL` on Windows): it prints nothing and exits
-  with 0 for a good file, and with an error such as "could not read from input file: end of file" for a cut one.
+  with 0 for a good file, and with an error such as "could not read from input file: end of file" for a cut one. The marker
+  is read with `pg_restore --data-only --schema=public --table=environment_marker --file=- <file>`: the output must have a
+  `COPY public.environment_marker (environment) FROM stdin;` block with the line `production` in it.
 - A run by hand is the same command as the task (below). It prints one line with the file, its size and how many old files
   it removed, and exits with 1 on a failure.
 
