@@ -19,9 +19,9 @@ database is at ...` and `the database check failed`) to steps 3 to 5. Each line 
    response says nothing). `401` means the key is missing, wrong or revoked, not that the site is down.
 4. **Vercel**: Deployments, the latest production deployment: did the build pass, did the migration print an error, is it the
    one that is promoted? Open **Logs** for runtime errors of `/api/*` (by rule they never contain personal data:
-   `server/router.js` writes an unhandled error as one line with only the method, the path without its query string, the
-   error name, its code (for Postgres the SQLSTATE) and the stack frames, never the message or the raw error, and `tests/router-log.test.js`
-   keeps it so; if one does, that is a second problem to fix).
+   `server/router.js` writes an unhandled error as one line with only the method and the route as it is
+   written in the code (never the path that was asked for), the error name, its code (for Postgres the SQLSTATE) and the
+   stack frames, never the message or the raw error, and `tests/router-log.test.js` keeps it so; if one does, that is a second problem to fix).
 5. **Neon console**: is the project and its compute running (a compute that sleeps wakes in a few seconds), any limit reached
    (storage, compute hours), any outage notice?
 6. **Roll back the code** if the last deployment is the cause: Instant Rollback (`deploy-and-rollback.md`). It is

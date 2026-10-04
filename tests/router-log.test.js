@@ -37,6 +37,22 @@ route('GET', '/test/personal-message', async () => {
   throw Object.assign(new Error(`invalid input syntax for type uuid: "${PERSONAL}"`), { code: 'XX001' })
 })
 
+route('GET', '/test/person/:id', async () => {
+  throw new TypeError('Cannot read properties of undefined')
+})
+
+route('GET', '/test/fake-frame', async () => {
+  // A message that quotes a value after a newline, shaped like a stack frame: V8 copies it into the stack.
+  throw Object.assign(new Error(`bad input\n    at ${PERSONAL} (/server/x.js:1:1)\n    at next`), { code: 'XX001' })
+})
+
+route('GET', '/test/changed-message', async () => {
+  const err = new Error(`bad input\n    at ${PERSONAL}`)
+  void err.stack // V8 writes the stack when it is first read, so after this it keeps the first message
+  err.message = 'something else'
+  throw err
+})
+
 route('GET', '/test/plain-error', async () => {
   throw new TypeError('Cannot read properties of undefined')
 })
@@ -113,11 +129,29 @@ describe('an unhandled error', () => {
     expect(line).not.toContain('invalid input syntax')
   })
 
-  it('leaves the query string out of the path (it can hold a QR code or a name)', async () => {
+  it('names the route as it is written in the code, never the path that was asked for (it can hold a QR code or a name)', async () => {
     const { calls } = await boom(`/api/test/postgres-error?code=BQR-1234&name=${PERSONAL}#frag`)
     const line = calls[0][0]
     expect(line).toContain('GET /api/test/postgres-error ')
     expect(line).not.toMatch(/BQR-1234|someone|[?#]frag|name=/)
+
+    const segment = (await boom(`/api/test/person/${encodeURIComponent(PERSONAL)}`)).calls[0][0]
+    expect(segment).toContain('GET /api/test/person/:id TypeError')
+    expect(segment).not.toContain('someone')
+    expect(segment).not.toContain('example.com')
+  })
+
+  it('never takes a line of the message for a stack frame', async () => {
+    const fake = (await boom('/api/test/fake-frame')).calls[0][0]
+    expect(fake).toContain('code=XX001')
+    expect(fake).toMatch(/stack: at .*router-log\.test\.js/) // the real frames are kept
+    expect(fake).not.toContain('someone')
+    expect(fake).not.toContain('/server/x.js')
+    expect(fake).not.toContain('at next')
+
+    // When the message no longer matches the stack, the header cannot be found, so no frame is trusted.
+    const changed = (await boom('/api/test/changed-message')).calls[0][0]
+    expect(changed).toBe('unhandled API error: GET /api/test/changed-message Error')
   })
 
   it('cannot be made to forge a second log line, or to fill the log', async () => {
