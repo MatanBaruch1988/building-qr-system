@@ -1,4 +1,26 @@
+/**
+ * A request as the handlers see it: a Node request, with the parsed JSON in `body` (on Vercel `body` is a lazy getter that
+ * throws on malformed JSON; the dev server sets it eagerly, see readBody in server/router.js).
+ * @typedef {import('node:http').IncomingMessage & { body?: unknown }} ApiRequest
+ */
+
+/**
+ * The complete answer of a route (what a handler returns, or what an Answer carries): `json` is the body, unless `text`
+ * is set, and `headers` are added to the defaults of send() in server/router.js.
+ * @typedef {object} SendResult
+ * @property {number} [status]  default 200
+ * @property {unknown} [json]
+ * @property {string} [text]
+ * @property {Record<string, string>} [headers]
+ */
+
 export class ApiError extends Error {
+  /**
+   * @param {number} status  the HTTP status
+   * @param {string} code  the machine's word for the refusal (the `code` of the error that the client reads)
+   * @param {string} [message]  an English sentence for a developer or a log (default: the code)
+   * @param {Record<string, unknown>} [extra]  more fields for the `error` of the answer, for example `{ field }`
+   */
   constructor(status, code, message, extra) {
     super(message || code)
     this.status = status
@@ -14,6 +36,7 @@ export class ApiError extends Error {
  * GET /api/health/db needs it (server/health.js). A refusal is still an ApiError.
  */
 export class Answer {
+  /** @param {SendResult} out */
   constructor(out) {
     this.out = out
   }
@@ -48,6 +71,17 @@ export function getCookie(req, name) {
   return null
 }
 
+/**
+ * @typedef {object} CookieOptions
+ * @property {number} [maxAgeSeconds]  how long the browser keeps the cookie; left out, it is a session cookie
+ * @property {boolean} [secure]  `Secure`, true unless said otherwise (only the local dev server over http turns it off)
+ */
+
+/**
+ * @param {string} name
+ * @param {string} value
+ * @param {CookieOptions} [options]
+ */
 export function cookieHeader(name, value, { maxAgeSeconds, secure = true } = {}) {
   const attrs = [`${name}=${encodeURIComponent(value)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax']
   if (secure) attrs.push('Secure')
@@ -95,6 +129,20 @@ export function requireUuid(value, code = 'invalid_id') {
   return value.toLowerCase()
 }
 
+/**
+ * @typedef {object} StrOptions
+ * @property {string} [field]  the name that a refusal reports (`{ field }` in the error); every caller passes it
+ * @property {number} [max]  the longest text, in characters (default 200)
+ * @property {boolean} [required]  a missing value is a 400 `missing_field` (default false: a missing value is `undefined`)
+ * @property {boolean} [nonEmpty]  a blank text is a 400 `missing_field` too (default false)
+ */
+
+/**
+ * A trimmed text, `undefined` when the value is missing and not required. Anything but a text is a 400.
+ * @param {unknown} value
+ * @param {StrOptions} [options]
+ * @returns {string | undefined}
+ */
 export function str(value, { field, max = 200, required = false, nonEmpty = false } = {}) {
   if (value === undefined || value === null) {
     if (required) throw bad('missing_field', `${field} is required`, { field })
@@ -107,7 +155,21 @@ export function str(value, { field, max = 200, required = false, nonEmpty = fals
   return v
 }
 
-/** A JSON number, or a non-blank numeric string. Blank strings, booleans, arrays, objects are errors. */
+/**
+ * @typedef {object} NumOptions
+ * @property {string} [field]  the name that a refusal reports (`{ field }` in the error); every caller passes it
+ * @property {number} [min]  the smallest value that is accepted (default: no limit)
+ * @property {number} [max]  the largest value that is accepted (default: no limit)
+ * @property {boolean} [integer]  only a whole number is accepted (default false)
+ * @property {boolean} [required]  a missing value is a 400 `missing_field` (default false: a missing value is `undefined`)
+ */
+
+/**
+ * A JSON number, or a non-blank numeric string. Blank strings, booleans, arrays, objects are errors.
+ * @param {unknown} value
+ * @param {NumOptions} [options]
+ * @returns {number | undefined}
+ */
 export function num(value, { field, min = -Infinity, max = Infinity, integer = false, required = false } = {}) {
   if (value === undefined || value === null) {
     if (required) throw bad('missing_field', `${field} is required`, { field })

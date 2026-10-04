@@ -21,6 +21,8 @@ import {
   SCAN_ERROR_SCAN_ID_CONFLICT,
 } from '../shared/contract.js'
 
+/** @import { Gps, Scan } from '../shared/types.js' */
+
 const localFmt = new Intl.DateTimeFormat('sv-SE', {
   timeZone: TIMEZONE,
   year: 'numeric',
@@ -34,7 +36,11 @@ const localFmt = new Intl.DateTimeFormat('sv-SE', {
 /** '2026-09-30 08:12:00' in Israel time: handy for humans and agents reading the raw JSON. */
 export const toLocal = (d) => (d ? localFmt.format(new Date(d)).replace('T', ' ') : null)
 
-/** One consistent JSON shape for a scan, used by every endpoint. */
+/**
+ * One consistent JSON shape for a scan, used by every endpoint.
+ * @param {Record<string, any>} r  a row of the `scans` table
+ * @returns {Scan}
+ */
 export function scanJson(r) {
   return {
     id: r.id,
@@ -60,6 +66,11 @@ export function scanJson(r) {
 // empty form would otherwise be judged as standing at latitude 0, longitude 0.)
 const realNumber = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null)
 
+/**
+ * The position of a request as the server uses it, or null when there is no usable `lat` and `lng` in it.
+ * @param {any} gps  whatever the client sent: it is JSON that nobody has checked yet
+ * @returns {Gps | null}
+ */
 export function normalizeGps(gps) {
   if (!gps || typeof gps !== 'object' || Array.isArray(gps)) return null
   const lat = realNumber(gps.lat)

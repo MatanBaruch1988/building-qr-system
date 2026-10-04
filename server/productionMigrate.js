@@ -157,12 +157,27 @@ async function verifyOnGithubMaster({ files, dir, owner, slug, token, fetchFile,
 }
 
 /**
+ * @typedef {object} MigrateProductionOptions
+ * @property {string} connectionString  the direct (not pooled) connection string, `DATABASE_URL_UNPOOLED`
+ * @property {string} [markerTable]  default public.environment_marker
+ * @property {string} [dir]  the folder of the migrations, default db/migrations
+ * @property {(message: string) => void} [log]  default: no log
+ * @property {string} [repoOwner]  the GitHub owner of the repository, the rules of GitHub names apply
+ * @property {string} [repoSlug]  the name of the repository
+ * @property {string} [githubToken]  sent as `Authorization: Bearer` so that a private fork can deploy; never logged
+ * @property {typeof fetch} [fetch]  default the global fetch
+ * @property {number[]} [retryDelaysMs]  the waits between the tries to read a file from GitHub master
+ */
+
+/**
  * Migrates the database behind `connectionString` and, when it is not marked yet, marks it as production.
  * It refuses a non-production marker, and it applies only migrations that are on GitHub master: every pending file must
  * be byte-identical to the file in `repoOwner/repoSlug` on master (and with no pending file there is no network call).
  * `githubToken` (optional) is sent as `Authorization: Bearer` so that a private fork can deploy; it is never logged.
  * `markerTable` (default public.environment_marker), `dir`, `fetch` and `retryDelaysMs` are for the tests, which point
  * them at a table and a folder of their own, a stub and tiny waits. Returns the names of the migrations it applied.
+ * @param {MigrateProductionOptions} options
+ * @returns {Promise<string[]>}
  */
 export async function migrateProduction({
   connectionString,

@@ -1,7 +1,10 @@
 import { randomBytes, scrypt, timingSafeEqual, createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 
-const scryptAsync = promisify(scrypt)
+// promisify() cannot pick one of the overloads of scrypt() (the one with `options`), so its type is written out here.
+const scryptAsync = /** @type {(password: string, salt: Buffer, keylen: number, options: import('node:crypto').ScryptOptions) => Promise<Buffer>} */ (
+  promisify(scrypt)
+)
 const N = 16384
 const R = 8
 const P = 1

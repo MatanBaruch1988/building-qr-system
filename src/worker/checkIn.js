@@ -1,5 +1,8 @@
 import { GPS_MODE_NONE, GPS_MODE_REQUIRED, OUTCOME_REJECTED_FAR, OUTCOME_REJECTED_NO_LOCATION } from '../../shared/contract.js'
 
+/** @import { PublicPoint, Scan, ScanResponse } from '../../shared/types.js' */
+/** @import { Session } from './session.js' */
+
 /**
  * What the result screen needs besides the outcome: the scanned QR address and the point (for "try again").
  * They get their own names. `code` is the SERVER's error code ('not_assigned', …) and must stay untouched:
@@ -15,6 +18,41 @@ export const providerLabel = (p) => (p?.contact_name ? `${p.contact_name} · ${p
 //
 // Result kinds: success | duplicate | queued | far | needLocation | signedOut | error
 
+/**
+ * What performCheckIn needs from outside, so that a test can replace each of them.
+ * @typedef {object} CheckInDeps
+ * @property {typeof import('../api/client.js').api} api
+ * @property {typeof import('./geo.js').getFix} getFix
+ * @property {ReturnType<typeof import('./scanQueue.js').createQueue>} queue
+ * @property {() => string} newId  a new scan id
+ * @property {() => Date} now
+ */
+
+/** @typedef {'locating' | 'saving'} CheckInPhase */
+
+/**
+ * @typedef {object} CheckInArgs
+ * @property {string} code  the scanned QR address
+ * @property {PublicPoint | null | undefined} point  null or undefined when the phone does not know the point yet
+ * @property {Session} session
+ * @property {CheckInDeps} deps
+ * @property {(phase: CheckInPhase) => void} [onPhase]  told when the journey moves to the next step
+ */
+
+/**
+ * The answer of performCheckIn, by `kind`.
+ * @typedef {{ kind: 'success' | 'duplicate', scan: Scan }
+ *   | { kind: 'far', scan: Scan }
+ *   | { kind: 'needLocation', scan: Scan, locationReason: string | null }
+ *   | { kind: 'queued', id: string, client_time: string, persisted: boolean }
+ *   | { kind: 'signedOut' }
+ *   | { kind: 'error', code: string }} CheckInResult
+ */
+
+/**
+ * @param {CheckInArgs} args
+ * @returns {Promise<CheckInResult>}
+ */
 export async function performCheckIn({ code, point, session, deps, onPhase = () => {} }) {
   const { api, getFix, queue, newId, now } = deps
   const id = newId()
@@ -33,6 +71,7 @@ export async function performCheckIn({ code, point, session, deps, onPhase = () 
 
   onPhase('saving')
   try {
+    /** @type {ScanResponse} */
     const res = await api('/scan', {
       method: 'POST',
       token: session.token,

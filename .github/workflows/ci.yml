@@ -1,5 +1,6 @@
 # Continuous integration. Four checks, and branch protection (.github/rulesets/) requires all of them to merge:
-#   guards                 migrations only move forward, tests are not removed, the PR title, ESLint, a dependency audit
+#   guards                 migrations only move forward, tests are not removed, the PR title, ESLint, the type check,
+#                          a dependency audit
 #   unit                   Vitest, against a Postgres 18 container (production runs Postgres 18 on Neon)
 #   e2e (android-chrome)   Playwright, Chromium as a Pixel 7
 #   e2e (iphone-webkit)    Playwright, WebKit as an iPhone 14
@@ -81,11 +82,14 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: node scripts/check-pr-title.mjs
 
-      # The guard scripts above use Node built-ins only and `npm audit` reads the lock file: only ESLint needs the
-      # dependencies, so the install sits right before it.
+      # The guard scripts above use Node built-ins only and `npm audit` reads the lock file: only ESLint and the type check
+      # need the dependencies, so the install sits right before them.
       - run: npm ci
       - name: Lint
         run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
 
       - name: Audit the production dependencies
         run: npm audit --omit=dev --audit-level=high
