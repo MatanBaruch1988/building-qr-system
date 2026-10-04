@@ -2,7 +2,7 @@
 // process runner is a stub that records every call and writes the files that pg_dump would write, and the folder of the
 // backups is a real temporary folder, so that the file handling (the temporary file, the rename, the retention) is real.
 // Fake values only: the connection string below does not exist.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -21,6 +21,8 @@ import {
   FOLDER_UNKNOWN_ERROR,
   FOLDER_WARNING,
   FOLDER_SWAPPED_ERROR,
+  HEARTBEAT_RETRIES,
+  HEARTBEAT_TIMEOUT_MS,
   FOLDER_WRITABLE_ERROR,
   icaclsArgs,
   issueBody,
@@ -40,6 +42,7 @@ import {
   parseWhoamiSid,
   PARTIAL_NAME,
   UNSUPPORTED_PLATFORM_ERROR,
+  USAGE,
   PATH_TOO_LONG_ERROR,
   WINDOWS_PATH_LIMIT,
   WORK_NAME,
@@ -52,6 +55,7 @@ import {
   rotate,
   runBackup,
   runProcess,
+  sendHeartbeat,
   backupTime,
   selectOld,
   SHARED_FOLDERS_ADVICE,
@@ -4723,6 +4727,524 @@ describe('a system that is not Windows or Linux', () => {
     const runbook = fs.readFileSync(new URL('../docs/runbooks/restore.md', import.meta.url), 'utf8')
     expect(runbook).not.toMatch(/macOS and Linux|macOS or Linux/)
     expect(runbook).toMatch(/Windows or Linux/)
+  })
+})
+
+// ---- the heartbeat ---------------------------------------------------------------------------------------------------------------------------
+
+describe('the heartbeat', () => {
+  // An invented address: nothing is at it, and no real address is ever used in a test.
+  const PING = 'https://hc-ping.example/00000000-0000-4000-8000-0000000000aa'
+  const UUID = '00000000-0000-4000-8000-0000000000aa'
+  const NORMAL_LINE = `03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0\n`
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  const status = (code) => () => new Response('', { status: code })
+  const ok = status(200)
+  const down = () => {
+    throw new TypeError('fetch failed')
+  }
+  /** A fetch that records what it is asked, and answers with the next of `answers` (the last one for ever; 200 when there is none). */
+  function fetchStub(...answers) {
+    const calls = []
+    const fetcher = async (url, options) => {
+      calls.push({ url, options })
+      return (answers[Math.min(calls.length - 1, answers.length - 1)] ?? ok)()
+    }
+    fetcher.calls = calls
+    return fetcher
+  }
+  /** A sleep that does not wait, and says how long it was asked to. */
+  function sleepStub() {
+    const asked = []
+    const sleep = async (ms) => {
+      asked.push(ms)
+    }
+    sleep.asked = asked
+    return sleep
+  }
+  /** One run with the heartbeat address set (or not, with url null). */
+  function run({ url = PING, fetcher = fetchStub(), sleep = sleepStub(), options, runner, deps = {} } = {}) {
+    const env = url === null ? {} : { BACKUP_HEARTBEAT_URL: url }
+    return go({ options, runner, deps: { env: { ...env, ...deps.env }, fetch: fetcher, sleep, ...Object.fromEntries(Object.entries(deps).filter(([key]) => key !== 'env')) } })
+  }
+  const failingDump = () => makeRunner({ pg_dump: () => ({ status: 1, stdout: '', stderr: 'nope' }) })
+  /** The kinds of failure of a backup, each as the arguments of a run: the heartbeat must say fail for every one. */
+  const failures = {
+    'pg_dump fails': () => ({ runner: failingDump() }),
+    'the marker says nonprod': () => ({ runner: makeRunner({ pg_restore: (call) => ({ status: 0, stdout: isMarkerCall(call) ? markerSql('nonprod') : LISTING, stderr: '' }) }) }),
+    'the dump has no scans': () => ({ runner: makeRunner({ pg_restore: () => ({ status: 0, stdout: '1; 0 1 TABLE DATA public points x', stderr: '' }) }) }),
+    'a system that is not supported (refused before anything is made)': () => ({ deps: { platform: 'darwin' } }),
+    'a backup folder that others can write in (refused before anything is made)': () => ({ deps: { fs: recordingFs({ folderMode: 0o040777 }).fs } }),
+    'no database to back up': () => ({ deps: { env: { BACKUP_DATABASE_URL: '' } } }),
+    'two sources of the database': () => ({ options: { neonProject: 'square-term-1' } }),
+    'a backup.log that is a folder': () => {
+      fs.mkdirSync(path.join(dir, 'backup.log'), { recursive: true })
+      return {}
+    },
+  }
+
+  describe('without the variable', () => {
+    it('does nothing: no call, and the line, the screen and the result are what they were', async () => {
+      for (const url of [null, '', '   ']) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const fetcher = fetchStub()
+        const r = await run({ url, fetcher })
+        expect(fetcher.calls, JSON.stringify(url)).toEqual([])
+        expect(r.log, JSON.stringify(url)).toBe(NORMAL_LINE)
+        expect(r.errs, JSON.stringify(url)).toEqual([])
+        expect(r.out, JSON.stringify(url)).toEqual([`backup ok: ${FINAL}, 15 B, removed 0 old files`])
+        expect(r.warning, JSON.stringify(url)).toBeUndefined()
+      }
+      for (const [what, make] of Object.entries(failures)) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const fetcher = fetchStub()
+        const r = await run({ url: null, fetcher, ...make() })
+        expect(r.exitCode, what).toBe(1)
+        expect(fetcher.calls, what).toEqual([])
+      }
+    })
+  })
+
+  describe('after a run', () => {
+    it('pings the address itself when the backup worked: one GET, once', async () => {
+      const fetcher = fetchStub()
+      const r = await run({ fetcher })
+      expect(r.exitCode).toBe(0)
+      expect(fetcher.calls).toHaveLength(1)
+      expect(fetcher.calls[0].url).toBe(PING)
+      expect(fetcher.calls[0].options.method).toBe('GET')
+      expect(r.log).toBe(NORMAL_LINE) // all is well: the line is the normal one
+      expect(r.errs).toEqual([])
+      expect(r.warning).toBeUndefined()
+    })
+
+    for (const [what, make] of Object.entries(failures)) {
+      it(`pings <address>/fail, once, for any failure: ${what}`, async () => {
+        const fetcher = fetchStub()
+        const r = await run({ fetcher, ...make() })
+        expect(r.exitCode).toBe(1)
+        expect(fetcher.calls).toHaveLength(1)
+        expect(fetcher.calls[0].url).toBe(`${PING}/fail`)
+        expect(fetcher.calls[0].options.method).toBe('GET')
+        expect(r.warning).toBeUndefined() // the heartbeat answered: nothing to say about it
+      })
+    }
+
+    it('puts /fail once after a slash that ends the address, and keeps what the owner wrote after the path', async () => {
+      const a = fetchStub()
+      await run({ url: `${PING}/`, fetcher: a, runner: failingDump() })
+      expect(a.calls[0].url).toBe(`${PING}/fail`)
+      fs.rmSync(dir, { recursive: true, force: true })
+      const b = fetchStub()
+      await run({ url: `${PING}//`, fetcher: b, runner: failingDump() })
+      expect(b.calls[0].url).toBe(`${PING}/fail`)
+      const c = fetchStub()
+      expect(await sendHeartbeat({ url: `${PING}?x=1`, ok: false, fetcher: c })).toBeNull()
+      expect(c.calls[0].url).toBe(`${PING}/fail?x=1`) // the owner's own query is theirs: nothing is added to it
+      expect(await sendHeartbeat({ url: `${PING}?x=1`, ok: true, fetcher: c })).toBeNull()
+      expect(c.calls[1].url).toBe(`${PING}?x=1`)
+    })
+
+    it('sends no body, no header and no query of its own, and does not follow a redirect', async () => {
+      for (const make of [() => ({}), () => ({ runner: failingDump() })]) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const fetcher = fetchStub()
+        await run({ fetcher, ...make() })
+        const [{ url, options }] = fetcher.calls
+        expect(Object.keys(options).sort()).toEqual(['method', 'redirect', 'signal'])
+        expect('body' in options).toBe(false)
+        expect('headers' in options).toBe(false)
+        expect(options.redirect).toBe('error') // the address is a secret: an answer that sends it elsewhere is not trusted
+        expect(options.signal).toBeInstanceOf(AbortSignal)
+        expect(new URL(url).search).toBe('')
+        expect(new URL(url).hash).toBe('')
+      }
+    })
+
+    it('says nothing about the run: no host, file, size, error, folder or user in the request', async () => {
+      const seen = []
+      for (const make of [() => ({}), () => ({ runner: failingDump() })]) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const fetcher = fetchStub()
+        await run({ fetcher, ...make() })
+        seen.push(JSON.stringify(fetcher.calls.map(({ url, options }) => [url, { ...options, signal: String(options.signal instanceof AbortSignal) }])))
+      }
+      for (const text of seen) {
+        for (const secret of [HOST, MASKED_HOST, 'ep-tes', 'neon.tech', USER, PASSWORD, 'postgres', 'building-qr', FINAL, '.dump', 'nope', 'pg_dump', dir, tmp, path.basename(tmp), os.homedir(), 'size', 'failed']) {
+          expect(text, secret).not.toContain(secret)
+        }
+      }
+    })
+
+    it('comes after the outcome is final, before the line is written: the work directory is gone, the dump is where it goes, the log has nothing yet', async () => {
+      const looks = []
+      const fetcher = async (url) => {
+        looks.push({ url, final: fs.existsSync(path.join(dir, FINAL)), work: workDirsNow(), log: fs.existsSync(path.join(dir, 'backup.log')) })
+        return ok()
+      }
+      await run({ fetcher })
+      fs.rmSync(dir, { recursive: true, force: true })
+      await run({ fetcher, runner: failingDump() })
+      expect(looks).toEqual([
+        { url: PING, final: true, work: [], log: false },
+        { url: `${PING}/fail`, final: false, work: [], log: false },
+      ])
+    })
+
+    it('comes before the issue, so that the alert does not wait for gh', async () => {
+      const events = []
+      const fetcher = async (url) => {
+        events.push('ping')
+        return ok()
+      }
+      const runner = makeRunner({
+        pg_dump: () => ({ status: 1, stdout: '', stderr: 'nope' }),
+        gh: (call) => {
+          events.push(`gh ${call.args[1]}`)
+          return defaults.gh(call)
+        },
+      })
+      const r = await run({ fetcher, runner, options: { reportIssue: 'owner/repo' } })
+      expect(r.issue).toBe('opened')
+      expect(events[0]).toBe('ping')
+      expect(events.slice(1)).toEqual(['gh list', 'gh create'])
+    })
+
+    it('uses the fetch of the system when none is given', async () => {
+      const stub = fetchStub()
+      vi.stubGlobal('fetch', stub)
+      const r = await go({ deps: { env: { BACKUP_HEARTBEAT_URL: PING }, sleep: sleepStub() } })
+      expect(r.exitCode).toBe(0)
+      expect(stub.calls.map((call) => call.url)).toEqual([PING])
+    })
+
+    it('works the same on Windows', async () => {
+      const fetcher = fetchStub()
+      const r = await run({ fetcher, deps: { platform: 'win32', exists: () => false, env: { SystemRoot: 'C:\\Windows' } } })
+      expect(r.exitCode).toBe(0)
+      expect(fetcher.calls.map((call) => call.url)).toEqual([PING])
+    })
+  })
+
+  describe('an address that is not https', () => {
+    const invalid = [
+      'http://hc-ping.example/00000000-0000-4000-8000-0000000000aa',
+      'HTTP://HC-PING.EXAMPLE/x',
+      'ftp://hc-ping.example/x',
+      'javascript:alert(1)',
+      'file:///etc/passwd',
+      'not a url',
+      'hc-ping.example/00000000-0000-4000-8000-0000000000aa',
+      '//hc-ping.example/x',
+      'https:',
+      'https://user:pa55word@hc-ping.example/x',
+      'https://:pa55word@hc-ping.example/x',
+      'https://user@hc-ping.example/x',
+    ]
+
+    it('is a configuration error: a warning in the line and on the screen, and no call', async () => {
+      for (const url of invalid) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const fetcher = fetchStub()
+        const r = await run({ url, fetcher })
+        expect(fetcher.calls, url).toEqual([])
+        expect(r.exitCode, url).toBe(0) // the backup itself is unchanged
+        expect(r.warning, url).toBe('heartbeat-not-sent')
+        expect(r.log, url).toBe(`03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0 warning=heartbeat-not-sent\n`)
+        expect(r.errs, url).toEqual(['backup: warning, heartbeat-not-sent'])
+        expect(visible(r), url).not.toContain('pa55word')
+        expect(r.errs.join('\n'), url).not.toContain('hc-ping')
+      }
+    })
+
+    it('does not change a failed backup either: it still fails, with the warning after the others', async () => {
+      const fetcher = fetchStub()
+      const r = await run({ url: invalid[0], fetcher, runner: failingDump() })
+      expect(fetcher.calls).toEqual([])
+      expect(r.exitCode).toBe(1)
+      expect(r.log).toBe(`03/10/2026 10:15 failed host=${MASKED_HOST} warning=heartbeat-not-sent error=pg_dump failed (exit code 1): nope\n`)
+      expect(r.errs).toEqual(['backup failed: pg_dump failed (exit code 1): nope', 'backup: warning, heartbeat-not-sent'])
+    })
+
+    it('accepts an https address in any case of the scheme and the host', async () => {
+      for (const url of ['HTTPS://HC-PING.EXAMPLE/x', 'https://hc-ping.example:8443/x', 'https://[::1]/x']) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const fetcher = fetchStub()
+        const r = await run({ url, fetcher })
+        expect(fetcher.calls, url).toHaveLength(1)
+        expect(r.warning, url).toBeUndefined()
+      }
+    })
+  })
+
+  describe('an answer that is not good', () => {
+    it('tries a network error again, twice at most, after a pause, and then warns', async () => {
+      const sleep = sleepStub()
+      const fetcher = fetchStub(down)
+      const r = await run({ fetcher, sleep })
+      expect(fetcher.calls).toHaveLength(3) // the first try and two more
+      expect(fetcher.calls.map((call) => call.url)).toEqual([PING, PING, PING])
+      expect(sleep.asked).toEqual([2000, 5000])
+      expect(r.exitCode).toBe(0)
+      expect(r.warning).toBe('heartbeat-failed')
+      expect(r.log).toBe(`03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0 warning=heartbeat-failed\n`)
+      expect(r.errs).toEqual(['backup: warning, heartbeat-failed'])
+      expect(r.runner.of('gh')).toEqual([]) // never an issue
+    })
+
+    it('goes on when a retry works: no warning', async () => {
+      for (const answers of [[down, ok], [down, down, ok], [status(503), ok], [status(500), status(502), ok], [down, status(503), ok]]) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const fetcher = fetchStub(...answers)
+        const r = await run({ fetcher })
+        expect(fetcher.calls, String(answers.length)).toHaveLength(answers.length)
+        expect(r.warning, String(answers.length)).toBeUndefined()
+        expect(r.log).toBe(NORMAL_LINE)
+        expect(r.errs).toEqual([])
+      }
+    })
+
+    it('tries a 5xx again, and warns when it does not stop', async () => {
+      for (const code of [500, 502, 503, 504, 599]) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const sleep = sleepStub()
+        const fetcher = fetchStub(status(code))
+        const r = await run({ fetcher, sleep })
+        expect(fetcher.calls, String(code)).toHaveLength(3)
+        expect(sleep.asked, String(code)).toEqual([2000, 5000])
+        expect(r.warning, String(code)).toBe('heartbeat-failed')
+        expect(r.exitCode).toBe(0)
+      }
+    })
+
+    it('does not try a 4xx again (the address is wrong, or the rate limit is reached): one call, and a warning', async () => {
+      for (const code of [400, 401, 403, 404, 410, 429]) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const sleep = sleepStub()
+        const fetcher = fetchStub(status(code))
+        const r = await run({ fetcher, sleep })
+        expect(fetcher.calls, String(code)).toHaveLength(1)
+        expect(sleep.asked, String(code)).toEqual([])
+        expect(r.warning, String(code)).toBe('heartbeat-failed')
+        expect(r.exitCode).toBe(0)
+        expect(r.runner.of('gh')).toEqual([])
+      }
+    })
+
+    it('does not try a 3xx again either (a redirect is not followed, and is not an answer)', async () => {
+      for (const code of [301, 302, 307]) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const fetcher = fetchStub(status(code))
+        const r = await run({ fetcher })
+        expect(fetcher.calls, String(code)).toHaveLength(1)
+        expect(r.warning, String(code)).toBe('heartbeat-failed')
+      }
+    })
+
+    it('warns in the line of a failed backup too, and the failure of the backup is reported as before', async () => {
+      const fetcher = fetchStub(down)
+      const r = await run({ fetcher, runner: failingDump(), sleep: sleepStub() })
+      expect(fetcher.calls.map((call) => call.url)).toEqual([`${PING}/fail`, `${PING}/fail`, `${PING}/fail`])
+      expect(r.exitCode).toBe(1)
+      expect(r.log).toBe(`03/10/2026 10:15 failed host=${MASKED_HOST} warning=heartbeat-failed error=pg_dump failed (exit code 1): nope\n`)
+      expect(r.errs).toEqual(['backup failed: pg_dump failed (exit code 1): nope', 'backup: warning, heartbeat-failed'])
+    })
+
+    it('joins the other warnings of the run, after them', async () => {
+      seed([])
+      const stale = path.join(dir, '.bqr-work-STUCK1')
+      fs.mkdirSync(stale)
+      const longAgo = new Date(NOW.getTime() - 100 * 60 * 60 * 1000)
+      fs.utimesSync(stale, longAgo, longAgo)
+      const files = {
+        ...fs,
+        statSync: privateStat,
+        rmSync: (target, options) => {
+          if (path.basename(String(target)) === '.bqr-work-STUCK1') throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' })
+          return fs.rmSync(target, options)
+        },
+      }
+      const r = await run({ fetcher: fetchStub(status(404)), deps: { fs: files } })
+      expect(r.warning).toBe('1-stale-work-folders-not-removed,heartbeat-failed')
+    })
+
+    it('copes with a fetch that is missing, a response that cannot be let go, and a sleep that fails: never an exception', async () => {
+      expect(await sendHeartbeat({ url: PING, ok: true, fetcher: null, sleep: sleepStub() })).toBe('heartbeat-failed')
+      const hostile = { status: 200, body: { cancel: () => { throw new Error('cannot') } } }
+      expect(await sendHeartbeat({ url: PING, ok: true, fetcher: async () => hostile })).toBeNull()
+      let tries = 0
+      const sleep = async () => {
+        throw new Error('no timers')
+      }
+      expect(await sendHeartbeat({ url: PING, ok: true, fetcher: async () => (tries++, status(503)()), sleep })).toBe('heartbeat-failed')
+      expect(tries).toBe(3)
+    })
+
+    it('lets the body of the answer go (the connection is freed) and does not read it', async () => {
+      let cancelled = 0
+      let read = 0
+      const response = { status: 200, text: () => (read++, ''), json: () => (read++, {}), body: { cancel: () => cancelled++ } }
+      expect(await sendHeartbeat({ url: PING, ok: true, fetcher: async () => response })).toBeNull()
+      expect(cancelled).toBe(1)
+      expect(read).toBe(0)
+    })
+  })
+
+  describe('the exit code and the backup do not depend on the heartbeat', () => {
+    const outcomes = {
+      'a good ping': () => fetchStub(),
+      'a 404': () => fetchStub(status(404)),
+      'a 503 for ever': () => fetchStub(status(503)),
+      'a network error': () => fetchStub(down),
+      'a 301': () => fetchStub(status(301)),
+    }
+
+    it('is the same, for a good and for a failed backup, whatever the heartbeat does (also an address that is not https)', async () => {
+      const plain = await run({ url: null })
+      fs.rmSync(dir, { recursive: true, force: true })
+      const plainFailed = await run({ url: null, runner: failingDump() })
+      for (const [what, make] of [...Object.entries(outcomes), ['an address that is not https', () => fetchStub()]]) {
+        const url = what.startsWith('an address') ? 'http://hc-ping.example/x' : PING
+        fs.rmSync(dir, { recursive: true, force: true })
+        const good = await run({ url, fetcher: make(), sleep: sleepStub() })
+        expect(good.exitCode, what).toBe(plain.exitCode)
+        expect(good.ok, what).toBe(true)
+        expect(good.file, what).toBe(plain.file)
+        expect(good.size, what).toBe(plain.size)
+        expect(good.removed, what).toBe(plain.removed)
+        expect(good.issue, what).toBeUndefined()
+        expect(good.files, what).toEqual(['backup.log', FINAL])
+        fs.rmSync(dir, { recursive: true, force: true })
+        const bad = await run({ url, fetcher: make(), sleep: sleepStub(), runner: failingDump() })
+        expect(bad.exitCode, what).toBe(plainFailed.exitCode)
+        expect(bad.ok, what).toBe(false)
+        expect(bad.message, what).toBe(plainFailed.message)
+        expect(bad.files, what).toEqual(['backup.log'])
+      }
+    })
+
+    it('never opens an issue by itself: a good backup with a failing heartbeat makes no gh call at all', async () => {
+      const r = await run({ fetcher: fetchStub(down), sleep: sleepStub(), options: { reportIssue: 'owner/repo' } })
+      expect(r.exitCode).toBe(0)
+      expect(r.runner.of('gh')).toEqual([])
+      expect(r.issue).toBeUndefined()
+      expect(r.log).not.toContain('issue=')
+    })
+
+    it('and an issue after a failed backup is the usual one: it does not say anything about the heartbeat', async () => {
+      let body = ''
+      const runner = makeRunner({
+        pg_dump: () => ({ status: 1, stdout: '', stderr: 'nope' }),
+        gh: (call) => {
+          if (call.args[1] === 'create') body = call.args[call.args.indexOf('--body') + 1]
+          return defaults.gh(call)
+        },
+      })
+      const r = await run({ fetcher: fetchStub(down), sleep: sleepStub(), runner, options: { reportIssue: 'owner/repo' } })
+      expect(r.issue).toBe('opened')
+      expect(body).toBe(issueBody(NOW))
+      expect(body.toLowerCase()).not.toContain('heartbeat')
+    })
+
+    it('is a failure of nothing when the fetch itself throws on the first call (an exception is never let out)', async () => {
+      const r = await run({
+        fetcher: () => {
+          throw new Error('synchronous')
+        },
+        sleep: sleepStub(),
+      })
+      expect(r.exitCode).toBe(0)
+      expect(r.warning).toBe('heartbeat-failed')
+    })
+  })
+
+  describe('the address is a secret', () => {
+    it('is never in an output, a log line, an error, an issue, a result or the environment of a child, whatever happens to it', async () => {
+      const leaky = () => {
+        throw new TypeError(`fetch failed for ${PING}`) // an error that carries the address
+      }
+      const scenarios = {
+        'a good ping': {},
+        'a ping that fails on the network, with an error that names the address': { fetcher: fetchStub(leaky) },
+        'a 404': { fetcher: fetchStub(status(404)) },
+        'a failed backup': { runner: failingDump(), options: { reportIssue: 'owner/repo' } },
+        'a failed backup and a failing heartbeat': { runner: failingDump(), fetcher: fetchStub(leaky), options: { reportIssue: 'owner/repo' } },
+        'an address that is not https': { url: `http://hc-ping.example/${UUID}` },
+        'an address with a password': { url: `https://user:pa55word@hc-ping.example/${UUID}` },
+        'a refusal before anything is made': { deps: { platform: 'darwin' }, options: { reportIssue: 'owner/repo' } },
+      }
+      for (const [what, scenario] of Object.entries(scenarios)) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        const r = await run({ sleep: sleepStub(), ...scenario })
+        const everything = [
+          visible(r),
+          JSON.stringify(r, (key, value) => (key === 'runner' ? undefined : value)),
+          r.out.join('\n'),
+          r.errs.join('\n'),
+          r.log,
+          JSON.stringify(r.runner.calls), // the arguments and the environment of every child process (gh, pg_dump, ...)
+        ].join('\n')
+        for (const secret of [PING, UUID, 'hc-ping', 'pa55word']) expect(everything, `${what}: ${secret}`).not.toContain(secret)
+      }
+    })
+
+    it('is not handed to any child process: cleanEnv drops it, in any case of the name', () => {
+      const env = cleanEnv({ PATH: '/usr/bin', BACKUP_HEARTBEAT_URL: PING, backup_heartbeat_url: PING, Backup_Heartbeat_Url: PING, BACKUP_OTHER: 'x' })
+      expect(env).toEqual({ PATH: '/usr/bin', BACKUP_OTHER: 'x' })
+    })
+
+    it('stays in the environment of the run only: no call of a tool sees it', async () => {
+      const r = await run({ deps: { env: { SystemRoot: 'C:\\Windows' }, platform: 'win32', exists: () => false }, options: { reportIssue: 'owner/repo' }, runner: failingDump() })
+      expect(r.runner.calls.length).toBeGreaterThan(3)
+      for (const call of r.runner.calls) expect(Object.keys(call.options.env ?? {}).map((key) => key.toUpperCase())).not.toContain('BACKUP_HEARTBEAT_URL')
+    })
+
+    it('is never named in the usage or the messages: the heartbeat is only "the heartbeat"', () => {
+      expect(USAGE).toMatch(/BACKUP_HEARTBEAT_URL/)
+      expect(USAGE).not.toMatch(/https:\/\//) // the name of the variable, and no address
+    })
+  })
+
+  describe('the timeout and the tries', () => {
+    it('has a timeout of 10 seconds for each try, and two retries', () => {
+      expect(HEARTBEAT_TIMEOUT_MS).toBe(10_000)
+      expect(HEARTBEAT_RETRIES).toBe(2)
+    })
+
+    it('gives every try its own AbortSignal.timeout of that length, and passes it to fetch', async () => {
+      const spy = vi.spyOn(AbortSignal, 'timeout')
+      const fetcher = fetchStub(down)
+      await run({ fetcher, sleep: sleepStub() })
+      expect(spy).toHaveBeenCalledTimes(3)
+      expect(spy.mock.calls).toEqual([[10_000], [10_000], [10_000]])
+      expect(fetcher.calls.map((call) => call.options.signal)).toEqual(spy.mock.results.map((result) => result.value))
+      expect(new Set(fetcher.calls.map((call) => call.options.signal)).size).toBe(3)
+    })
+
+    it('really gives up on a request that never answers: the signal aborts it, the tries are used up, and the warning is the usual one', async () => {
+      let tries = 0
+      const hangs = (url, options) =>
+        new Promise((resolve, reject) => {
+          tries++
+          options.signal.addEventListener('abort', () => reject(options.signal.reason))
+        })
+      const started = Date.now()
+      const result = await sendHeartbeat({ url: PING, ok: true, fetcher: hangs, sleep: sleepStub(), timeoutMs: 20 })
+      expect(result).toBe('heartbeat-failed')
+      expect(tries).toBe(3)
+      expect(Date.now() - started).toBeLessThan(5000)
+    })
+
+    it('returns the answer of the first try that is good, and does not ask again', async () => {
+      const fetcher = fetchStub(ok, down)
+      expect(await sendHeartbeat({ url: PING, ok: true, fetcher, sleep: sleepStub() })).toBeNull()
+      expect(fetcher.calls).toHaveLength(1)
+    })
   })
 })
 

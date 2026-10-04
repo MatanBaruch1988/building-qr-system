@@ -217,6 +217,8 @@ see below). It never holds the connection string, the user or the password.
   failure that lasts a week is one issue, not seven). The issue and the comment say only that it failed and when: no path,
   no host and no error text, which can hold personal data. The details are in `backup.log`, where the line ends with
   `issue=opened` or `issue=commented-<number>`. If `gh` is missing or fails, the run only logs that.
+- Optional: a heartbeat address (healthchecks.io), in the environment variable `BACKUP_HEARTBEAT_URL`: see "A heartbeat, so that
+  a missed backup is noticed" below.
 
 **How to check that it works.**
 
@@ -230,6 +232,57 @@ see below). It never holds the connection string, the user or the password.
   `COPY public.environment_marker (environment) FROM stdin;` block with the line `production` in it.
 - A run by hand is the same command as the task (below). It prints one line with the file, its size and how many old files
   it removed, and exits with 1 on a failure.
+
+**A heartbeat, so that a missed backup is noticed.** `backup.log` and `--report-issue` only tell about a run that happened and
+failed. Nothing tells about a run that never happened: the laptop was off for days, the task was disabled, or the script crashed
+before it could report anything. For that the script can ping a heartbeat address after every run, and a service such as
+healthchecks.io (the free plan is enough) raises an alert when no ping arrives in time.
+
+- **What is sent.** With `BACKUP_HEARTBEAT_URL` set to an `https:` address, the script sends one request, after the outcome of
+  the run is final: a plain GET to the address when the backup worked, and to the address with `/fail` added for any failure (a
+  failed dump, the marker refusal, a folder that is refused, a system that is not supported). The request has no body and no
+  query of its own and says nothing about the run: no host, file name, size or error. Without the variable nothing is sent, and
+  nothing else changes.
+- **Why it comes from the environment and is never an option.** The address is a secret: anyone who has it can mark the check up
+  or down, and the command line of a task is visible in Task Scheduler and to other programs. The script never prints it or
+  writes it in a log or an issue, does not hand it to any program that it starts, and calls it "the heartbeat" in every message.
+- **When a ping does not get through.** A network error, a timeout (10 seconds) or a 5xx is tried again, twice at most; a 4xx
+  is not. If it still fails, the line of `backup.log` and the screen get `warning=heartbeat-failed` (and `heartbeat-not-sent`
+  for an address that is not `https:`). That is all: the result of the backup, its exit code and its issue do not change, and a
+  heartbeat that fails never opens an issue. A normal line has no heartbeat field.
+- **Set up healthchecks.io.** Create a check, with Period 1 day and Grace Time 1 day, so that about 2 days without a ping raise an
+  alert (the laptop can be off for a night, and the task runs when it is next on). Under Integrations choose where the alert
+  goes (e-mail, or the phone app). Copy the ping URL of the check (it looks like `https://hc-ping.com/<a long id>`). A `/fail`
+  ping tells healthchecks.io about the failure straight away, so the alert does not wait for the period and the grace time, and
+  the next good ping brings the check up again.
+- **Save the address without typing it in a command** (the shell history keeps what is typed in a command: see "Why no secret
+  is typed in a command" below). In PowerShell, as a variable of your account:
+
+  ```
+  [Environment]::SetEnvironmentVariable('BACKUP_HEARTBEAT_URL', [System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Heartbeat URL')).Password, 'User')
+  ```
+
+  Paste the address at the prompt: nothing is shown on the screen and nothing is recorded. To remove it again:
+  `[Environment]::SetEnvironmentVariable('BACKUP_HEARTBEAT_URL', $null, 'User')`. A variable of your account is kept in the
+  registry as plain text, which only your account (and the administrators) can read. That is acceptable for a ping address, which
+  can do no more than mark a check up or down, and it is never acceptable for the connection string of the database: that never
+  goes into a variable that is kept.
+- **Does the scheduled task see it?** A program that Task Scheduler starts is given the variables of your account as they are when
+  the task starts, so the next run should see the address without signing out and in again. That has not been tested on a task
+  that was set up before the variable existed, so check it once: save the address, start the task from Task Scheduler (select it
+  and choose Run), and look at the check on healthchecks.io: its last ping must be from just now. If no ping arrived, sign out and
+  in again (or restart the computer) and run the task once more. A PowerShell window that was open before the variable was saved
+  has the old variables: open a new one to try the script by hand.
+- **Linux.** The same idea, in a file that only you can read, which the cron line loads (`read -rs` shows nothing and is not
+  recorded; in zsh it is `read -rs 'url?Heartbeat URL: '`):
+
+  ```
+  mkdir -p ~/.config && (umask 077; read -rs -p 'Heartbeat URL: ' url; echo; printf 'BACKUP_HEARTBEAT_URL=%s\n' "$url" > ~/.config/building-qr-backup.env)
+  ```
+
+  and the cron line starts with `set -a; . "$HOME/.config/building-qr-backup.env"; set +a; `, before `cd <repo> && node ...`.
+- The heartbeat says that a run happened and how it ended, and nothing more. It does not replace reading `backup.log`, and an
+  alert that says nothing arrived means: look at the computer, the task and `backup.log`.
 
 **How to restore from a dump.** The dump is a copy of the whole database at one moment. Do it the careful way.
 
