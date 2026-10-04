@@ -20,7 +20,7 @@ database is at ...` and `the database check failed`) to steps 3 to 5. Each line 
 4. **Vercel**: Deployments, the latest production deployment: did the build pass, did the migration print an error, is it the
    one that is promoted? Open **Logs** for runtime errors of `/api/*` (by rule they never contain personal data:
    `server/router.js` writes an unhandled error as one line with only the method, the path without its query string, the
-   error name, its code (for Postgres the SQLSTATE) and its message, never the raw error, and `tests/router-log.test.js`
+   error name, its code (for Postgres the SQLSTATE) and the stack frames, never the message or the raw error, and `tests/router-log.test.js`
    keeps it so; if one does, that is a second problem to fix).
 5. **Neon console**: is the project and its compute running (a compute that sleeps wakes in a few seconds), any limit reached
    (storage, compute hours), any outage notice?
