@@ -58,8 +58,58 @@ function fromDatabaseError(err) {
   return null
 }
 
+/**
+ * The one log line for an error that no route handled, built only from fields that cannot carry personal data.
+ * Never log the raw error: a Postgres error also carries `detail` (usually the values of the failing row, for example
+ * "Key (email)=(...) already exists."), `where`, `table`, `column` and `parameters`, and the runtime logs are kept and read
+ * by more people than the committee. What is safe: the route that matched, as it is written in the code (`/admin/
+ * providers/:id`, never the path that was asked for: a path segment or the query string can hold a QR code, a name or an
+ * e-mail), the error's `name`, its `code` (for Postgres the SQLSTATE, which says what went wrong) and the stack frames
+ * (where it happened). Not the `message`: a library or database error can quote an input or a row value in it (an
+ * e-mail, a name, a coordinate), and flattening or cutting it does not make it safe. Everything is flattened to one line
+ * and cut to a length.
+ */
+function describeUnhandled(matched, raw) {
+  const flat = (value, max) => String(value).replace(/\s+/g, ' ').trim().slice(0, max)
+  const parts = ['unhandled API error:', matched ? `${matched.method} /api/${matched.segments.join('/')}` : '(no route)']
+  if (!(raw instanceof Error)) {
+    // Anything can be thrown (a string, an object): its content is not known to be safe, so only its type is logged.
+    parts.push(`thrown ${typeof raw}`)
+    return parts.join(' ')
+  }
+  parts.push(flat(raw.name || 'Error', 60))
+  if (typeof raw.code === 'string' || typeof raw.code === 'number') parts.push(`code=${flat(raw.code, 40)}`)
+  const frames = stackFrames(raw).map((line) => flat(line, 300))
+  if (frames.length) parts.push(`stack: ${frames.join(' | ')}`)
+  return parts.join(' ')
+}
+
+/**
+ * The frame lines of an error's stack, without the message. V8 starts the stack with "<name>: <message>", and the message
+ * can hold newlines, so a line of it can look like a frame ("bad\n    at someone@example.com"). The header is cut off by
+ * finding the message in it; when the message is not there (it was changed after the stack was taken), no frame is
+ * trusted. After the header the frames are the lines that follow, up to the first line that is not a frame.
+ */
+function stackFrames(raw) {
+  const stack = String(raw.stack ?? '')
+  const message = String(raw.message ?? '')
+  let rest = stack
+  if (message) {
+    const start = stack.indexOf(message)
+    if (start < 0 || start > 200) return []
+    rest = stack.slice(start + message.length)
+  }
+  const frames = []
+  for (const line of rest.split('\n').slice(1)) {
+    if (!/^\s*at /.test(line) || frames.length === 10) break
+    frames.push(line)
+  }
+  return frames
+}
+
 /** Single entry point for every /api/* request (Vercel function and local dev server share it). */
 export async function handle(req, res) {
+  let matched = null
   try {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.replace(/^\/api/, '') || '/'
@@ -70,6 +120,7 @@ export async function handle(req, res) {
       if (!params) continue
       allowed = true
       if (r.method !== req.method) continue
+      matched = r
       assertSafeWrite(req)
       const out = await r.handler({
         req,
@@ -93,7 +144,7 @@ export async function handle(req, res) {
         json: { error: { code: err.code, message: err.message, ...(err.extra || {}) } },
       })
     }
-    console.error('unhandled API error:', raw)
+    console.error(describeUnhandled(matched, raw))
     return send(res, { status: 500, json: { error: { code: 'server_error', message: 'Something went wrong' } } })
   }
 }
