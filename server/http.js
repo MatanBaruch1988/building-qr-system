@@ -7,6 +7,18 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * A complete answer (`{ status, json }`, the shape that a handler returns) that is thrown instead of returned, and that the
+ * router sends as it is. It exists for a guard: a guard runs before the handler, so it cannot return the answer of its route,
+ * and a failure of the guard itself (a database that is down) has to be answered in the shape of that route. Only
+ * GET /api/health/db needs it (server/health.js). A refusal is still an ApiError.
+ */
+export class Answer {
+  constructor(out) {
+    this.out = out
+  }
+}
+
 export const bad = (code, message, extra) => new ApiError(400, code, message, extra)
 export const unauthorized = (code = 'unauthorized', message = 'Sign in required') =>
   new ApiError(401, code, message)

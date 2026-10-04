@@ -15,6 +15,18 @@ import {
 
 const TOUCH_EVERY_MS = 5 * 60 * 1000
 
+// The router runs the guard of a route before the handler (server/router.js, server/access.js), and a handler may call the
+// same guard again to learn who is signed in. A guard therefore answers once per request: the first call starts the lookup
+// and every later call for the same `req` gets the same promise, so the second call makes no query, touches nothing, and
+// gives the same answer (or the same refusal). Each guard has its own WeakMap, so the answers go away with the request.
+function oncePerRequest(guard) {
+  const answers = new WeakMap()
+  return (req) => {
+    if (!answers.has(req)) answers.set(req, guard(req))
+    return answers.get(req)
+  }
+}
+
 // Anything we minted starts with its prefix and is short (see config.js). Checking that first means a random string in
 // a header or a cookie is refused without a database round trip, which would otherwise cost a query and could wake the
 // Neon compute for anyone who asked.
@@ -26,7 +38,7 @@ export const isAdminToken = (token) => hasTokenShape(token, ADMIN_TOKEN_PREFIX)
  * Provider phone: `Authorization: Bearer <device token>`. Inactive provider or revoked device = 401.
  * A token that is not shaped like a device token gets the same answer as no token, without a query.
  */
-export async function requireProvider(req) {
+export const requireProvider = oncePerRequest(async function requireProvider(req) {
   const token = bearerToken(req)
   if (!token || !isProviderToken(token)) throw unauthorized('invalid_session', 'Sign in required')
   const { rows } = await query(
@@ -51,10 +63,10 @@ export async function requireProvider(req) {
       is_demo: row.is_demo,
     },
   }
-}
+})
 
 /** Committee member: HttpOnly session cookie. A cookie that is not shaped like a session token is refused without a query. */
-export async function requireAdmin(req) {
+export const requireAdmin = oncePerRequest(async function requireAdmin(req) {
   const token = getCookie(req, ADMIN_COOKIE)
   if (!token || !isAdminToken(token)) throw unauthorized('admin_required', 'Admin sign in required')
   const { rows } = await query(
@@ -66,10 +78,10 @@ export async function requireAdmin(req) {
   )
   if (!rows.length) throw unauthorized('admin_required', 'Admin session expired')
   return { admin: { id: rows[0].id, email: rows[0].email, name: rows[0].name }, sessionId: rows[0].session_id }
-}
+})
 
 /** External agent: `Authorization: Bearer qrk_…` (read-only). */
-export async function requireApiKey(req) {
+export const requireApiKey = oncePerRequest(async function requireApiKey(req) {
   const token = bearerToken(req)
   if (!token || !token.startsWith(API_KEY_PREFIX)) throw unauthorized('api_key_required', 'API key required')
   // Too long to be one of ours: the answer an unknown key gets, without a query.
@@ -81,7 +93,7 @@ export async function requireApiKey(req) {
   if (!rows.length) throw unauthorized('api_key_invalid', 'API key is invalid or revoked')
   query('update api_keys set last_used_at = now() where id = $1', [rows[0].id]).catch(() => {})
   return { apiKeyId: rows[0].id }
-}
+})
 
 // --- Login throttling, stored in the database so it works across serverless instances.
 
