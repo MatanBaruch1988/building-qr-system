@@ -30,6 +30,7 @@ import {
   neonCommand,
   nullDevice,
   parseArgs,
+  parseSddl,
   notProductionMessage,
   parseMarkerValues,
   aclProblem,
@@ -41,12 +42,18 @@ import {
   WINDOWS_PATH_LIMIT,
   WORK_PREFIX,
   pgTool,
+  powershellTool,
   READ_ONLY_OPTION,
   resolvePgBin,
   runBackup,
   runProcess,
   backupTime,
   selectOld,
+  SHARED_FOLDERS_ADVICE,
+  SHARED_FOLDERS_PREFIX,
+  SHARED_UNREADABLE_ERROR,
+  sharedAclProblem,
+  sharedFoldersMessage,
   windowsTool,
 } from '../scripts/backup-db.mjs'
 
@@ -92,6 +99,11 @@ const markerSql = (...rows) =>
 const NO_MARKER_SQL = "--\n-- PostgreSQL database dump\n--\n\nSET client_encoding = 'UTF8';\n\n-- PostgreSQL database dump complete\n"
 const isMarkerCall = (call) => call.args.includes('--data-only')
 
+/** The SDDL of a folder that only the system, the administrators and the (fake) user can change, as Get-Acl writes it. */
+const SAFE_SDDL = `O:BAG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;${SID})`
+/** What the PowerShell call prints for these descriptors: the index of the path, a tab, the SDDL, per line. */
+const sddlLines = (sddls) => sddls.map((sddl, index) => `${index}\t${sddl}\r\n`).join('')
+
 /** The account of the fake user that the whoami stub answers with, as icacls prints an entry for it on a directory. */
 const OWNER_ENTRY = 'PC\\user:(OI)(CI)(F)'
 /** What `icacls <name>` prints: the name and the first entry on one line, the others under it, then the summary. */
@@ -114,6 +126,13 @@ const defaults = {
   neon: () => ({ status: 0, stdout: `${URL_FAKE}\n`, stderr: '' }),
   // Windows only: the SID of the user (a fake one) and the owner-only access list of a file
   whoami: () => ({ status: 0, stdout: `"PC\\user","${SID}"\r\n`, stderr: '' }),
+  // Windows only: the security descriptors of the folders of the run, one line per path (the index of the path, a tab, the SDDL):
+  // every folder belongs to the system, the administrators and the user, and nobody else
+  powershell: ({ options }) => ({
+    status: 0,
+    stdout: sddlLines(options.env.BQR_ACL_PATHS.split('|').map(() => SAFE_SDDL)),
+    stderr: '#< CLIXML\r\n', // PowerShell writes this to stderr even when all is well
+  }),
   // a call that changes an access list says what it did; a call with the name alone reads the list, and it is the user's alone
   icacls: ({ args }) =>
     args.length === 1
@@ -188,7 +207,9 @@ function expectWorkCwd(cwd) {
  * everything else. The tests of that check pass their own `fs`.) It throws for a file that is not there, like the real one.
  */
 function fileStat(target, ...rest) {
-  return { size: fs.statSync(target, ...rest).size, mode: 0o100600 }
+  const real = fs.statSync(target, ...rest)
+  // a folder (the temp folder, the folders above the backup folder) is an ordinary one that others cannot write in
+  return { size: real.size, mode: real.isDirectory() ? 0o040755 : 0o100600 }
 }
 
 /** Runs one backup into `dir` with the stub, and collects the two kinds of output line. */
@@ -1628,7 +1649,7 @@ function recordingFs({ folderMode = 0o040700, workMode = 0o040700, fileMode = 0o
           return fs.mkdtempSync(prefix, ...rest)
         },
         statSync: (p, ...rest) =>
-          same(p) ? { mode: folderMode } : isWorkDir(p) ? { mode: workMode } : { ...fileStat(p, ...rest), mode: fileMode },
+          same(p) ? { mode: folderMode } : isWorkDir(p) ? { mode: workMode } : fileStat(p, ...rest).mode === 0o040755 ? fileStat(p, ...rest) : { ...fileStat(p, ...rest), mode: fileMode },
         chmodSync: (p, mode) => {
           self.chmods.push({ name: path.basename(String(p)), folder: same(p), mode })
           if (failChmod) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
@@ -2036,7 +2057,6 @@ describe('owner-only files on Windows', () => {
   const win = (deps = {}) => ({
     platform: 'win32',
     exists: () => false,
-    userName: () => 'Test User',
     ...deps,
     env: { SystemRoot: 'C:\\Windows', ...deps.env },
   })
@@ -2102,6 +2122,10 @@ describe('owner-only files on Windows', () => {
         events.push(`whoami (${where()})`)
         return defaults.whoami(call)
       },
+      powershell: (call) => {
+        events.push(`folders checked (${where()})`)
+        return defaults.powershell(call)
+      },
       icacls: (call) => {
         events.push(`icacls ${named(call.args[0])}${call.args.length === 1 ? ' read back' : ''} (${where()})`)
         return defaults.icacls(call)
@@ -2118,7 +2142,8 @@ describe('owner-only files on Windows', () => {
     const r = await go({ deps: win(), runner })
     expect(r.exitCode).toBe(0)
     expect(events).toEqual([
-      'whoami (out: empty, work: -)',
+      'whoami (out: -, work: -)', // before anything is made: the output folder does not exist yet
+      'folders checked (out: -, work: -)', // the access lists of the folders of the run are read before anything is made
       'icacls <work> (out: empty, work: )', // the directory exists and is empty when its list is set, and the output folder is empty
       'icacls <work> read back (out: empty, work: )', // and its list is read back before anything is written into it
       `icacls ${PARTIAL} (out: empty, work: ${PARTIAL})`,
@@ -2132,14 +2157,15 @@ describe('owner-only files on Windows', () => {
   })
 
   it('prefers the SID to the name: a name with a space or in another alphabet is never used', async () => {
-    const r = await go({ deps: win({ userName: () => 'Some Name \u05DE\u05EA\u05DF' }) })
+    const runner = makeRunner({ whoami: () => ({ status: 0, stdout: `"PC\\Some Name \u00E9\u00E8","${SID}"\r\n`, stderr: '' }) })
+    const r = await go({ deps: win(), runner })
     for (const call of r.runner.of('icacls').filter((c) => c.args.length > 1)) {
       expect(call.args.at(-1)).toMatch(new RegExp(`^\\*${SID}:(\\(OI\\)\\(CI\\))?F$`))
       expect(JSON.stringify(call.args)).not.toContain('Some Name')
     }
   })
 
-  it('falls back to the user name that Node knows when whoami gives no SID (it fails, is missing or prints something else)', async () => {
+  it('fails closed, before anything is made, when whoami gives no SID (it fails, is missing or prints something else): there is no fallback to the name', async () => {
     const answers = [
       noWho,
       { status: null, stdout: '', stderr: '', problem: 'ENOENT' },
@@ -2148,28 +2174,13 @@ describe('owner-only files on Windows', () => {
     for (const answer of answers) {
       fs.rmSync(dir, { recursive: true, force: true })
       const r = await go({ deps: win(), runner: makeRunner({ whoami: () => answer }) })
-      expect(r.exitCode, JSON.stringify(answer)).toBe(0)
-      expect(r.runner.of('icacls')[0].args.at(-1)).toBe('Test User:(OI)(CI)F') // the work directory, then the file
-    }
-  })
-
-  it('fails closed, before the file is made, when the user cannot be found at all', async () => {
-    const cases = [
-      () => '',
-      () => '   ',
-      () => 'bad:name',
-      () => {
-        throw new Error('no user')
-      },
-    ]
-    for (const userName of cases) {
-      fs.rmSync(dir, { recursive: true, force: true })
-      const r = await go({ deps: win({ userName }), runner: makeRunner({ whoami: () => noWho }) })
-      expect(r.exitCode).toBe(1)
+      expect(r.exitCode, JSON.stringify(answer)).toBe(1)
       expect(r.message).toBe('the current Windows user could not be found, so a dump cannot be made owner-only')
-      expect(r.runner.of('pg_dump')).toEqual([])
+      expect(r.runner.of('powershell')).toEqual([]) // the folders cannot be judged without the SID of the user
       expect(r.runner.of('icacls')).toEqual([])
-      expect(r.files).toEqual(['backup.log'])
+      expect(r.runner.of('pg_dump')).toEqual([])
+      expect(r.files).toEqual([]) // not even the output folder was made, and no log is written in a folder that is not known
+      expect(workDirsNow()).toEqual([])
     }
   })
 
@@ -2570,7 +2581,7 @@ describe('the private work directory', () => {
     const r = await go({
       options: { keep: 1 },
       runner,
-      deps: { fs: files, platform: 'win32', exists: () => false, userName: () => 'Test User', env: { SystemRoot: 'C:\\Windows' } },
+      deps: { fs: files, platform: 'win32', exists: () => false, env: { SystemRoot: 'C:\\Windows' } },
     })
     expect(r.exitCode).toBe(1)
     expect(r.message).toBe('icacls failed (exit code 5), so a dump cannot be made owner-only')
@@ -2612,7 +2623,7 @@ describe('the private work directory', () => {
   })
 
   describe('on Windows, with the limit of 260 characters of its tools', () => {
-    const win = { platform: 'win32', exists: () => false, userName: () => 'Test User', env: { SystemRoot: 'C:\\Windows' } }
+    const win = { platform: 'win32', exists: () => false, env: { SystemRoot: 'C:\\Windows' } }
     /** An output folder whose longest path (the final file) is exactly `length` characters. */
     const folderFor = (length) => path.join(tmp, 'x'.repeat(length - FINAL.length - 1 - tmp.length - 1))
     /** A temp folder whose longest path (the file in the work directory) is exactly `length` characters. */
@@ -2752,7 +2763,6 @@ describe('the access list of the work directory is read back on Windows', () => 
   const win = (deps = {}) => ({
     platform: 'win32',
     exists: () => false,
-    userName: () => 'Test User',
     ...deps,
     env: { SystemRoot: 'C:\\Windows', ...deps.env },
   })
@@ -2893,23 +2903,6 @@ describe('the access list of the work directory is read back on Windows', () => 
       expect(r.exitCode).toBe(0)
     })
 
-    it('when only the name of the user is known (whoami failed), checks the shape of the list and cannot say whose it is', async () => {
-      const whoamiFails = { status: 1, stdout: '', stderr: 'ERROR: nope' }
-      const alone = makeRunner({
-        whoami: () => whoamiFails,
-        icacls: (call) => (call.args.length === 1 ? { status: 0, stdout: aclListing(call.args[0], 'PC\\Some Name:(OI)(CI)(F)'), stderr: '' } : defaults.icacls(call)),
-      })
-      expect((await go({ runner: alone, deps: win() })).exitCode).toBe(0)
-      fs.rmSync(dir, { recursive: true, force: true })
-      const shared = makeRunner({
-        whoami: () => whoamiFails,
-        icacls: (call) => (call.args.length === 1 ? { status: 0, stdout: aclListing(call.args[0], 'PC\\Some Name:(OI)(CI)(F)', 'Everyone:(OI)(CI)(R)'), stderr: '' } : defaults.icacls(call)),
-      })
-      const r = await go({ runner: shared, deps: win() })
-      expect(r.exitCode).toBe(1)
-      expect(r.message).toBe(NOT_ALONE('more than one entry'))
-    })
-
     it('is not done on macOS and Linux, where the mode of the work directory is read back instead', async () => {
       const r = await go()
       expect(r.runner.of('icacls')).toEqual([])
@@ -3023,6 +3016,637 @@ describe('a backup.log that is a link or has another name', () => {
 
   it('has a message that holds no path', () => {
     expect(LOG_NOT_REGULAR_ERROR).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\//)
+  })
+})
+
+// ---- a folder that another account can change ----------------------------------------------------------------------------------------------
+
+describe('a folder that another account can change', () => {
+  // Every SID here is invented (the real ones of a machine are never in the repository): the user is SID, another user is OTHER,
+  // and APP stands for the capability SID that Windows gives to application packages.
+  const OTHER = 'S-1-5-21-111-222-333-1002'
+  const GROUP = 'S-1-5-21-111-222-333-513'
+  const APP = 'S-1-15-3-1-2-3-4-5-6-7'
+  const INSTALLER = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+  const CHANGES = 'another account is allowed to change it'
+  const acl = (...entries) => `O:BAG:SYD:PAI${entries.map((entry) => `(${entry})`).join('')}`
+  const asFolder = (sddl) => sharedAclProblem(sddl, { user: SID, kind: 'folder' })
+  const asAncestor = (sddl) => sharedAclProblem(sddl, { user: SID, kind: 'ancestor' })
+  const hex = (mask) => `0x${mask.toString(16)}`
+
+  // The access lists that Windows writes by default, as Get-Acl prints them, with the SIDs of this test.
+  const TEMP_DEFAULT = `O:${SID}G:${GROUP}D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;${SID})`
+  const DOCUMENTS_WITH_READER = `O:${SID}G:${GROUP}D:AI(A;OICI;0x1200a9;;;${OTHER})(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;${SID})`
+  const PROFILE_DEFAULT = `O:SYG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;${SID})(A;;0x100020;;;${APP})`
+  const USERS_DEFAULT = `O:SYG:SYD:PAI(A;OICIIO;GXGR;;;WD)(A;;0x1200a9;;;WD)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x1200a9;;;BU)(A;OICIIO;GXGR;;;BU)(A;;0x100021;;;${APP})`
+  const ROOT_DEFAULT = `O:${INSTALLER}G:${INSTALLER}D:PAI(A;;LC;;;AU)(A;OICIIO;SDGXGWGR;;;AU)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)(A;;0x1000a1;;;${APP})`
+  // The temp folder of a machine where a second user and a group have Modify through an explicit entry that is inherited
+  const TEMP_WITH_MODIFY = `${TEMP_DEFAULT}(A;OICI;0x1301bf;;;${OTHER})(A;OICI;0x1301bf;;;${GROUP})`
+  // A folder above, with full control for an application package that applies to the folder itself (and is inherited)
+  const LOCAL_WITH_APP = `O:${SID}G:${GROUP}D:AI(A;ID;FA;;;${APP})(A;OICIIOID;GA;;;${APP})(A;OICIID;FA;;;${SID})(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)`
+
+  describe('reading a security descriptor', () => {
+    it('reads the owner, the flags, the rights (aliases and hex) and the trustee of every entry', () => {
+      const parsed = parseSddl(`O:${SID}G:${GROUP}D:PAI(A;OICI;FA;;;SY)(D;;0x2;;;WD)(A;OICIIOID;GRGX;;;${OTHER})S:AI(AU;SAFA;FA;;;WD)`)
+      expect(parsed.owner).toBe(SID)
+      expect(parsed.nullDacl).toBe(false)
+      expect(parsed.aces).toEqual([
+        { type: 'A', flags: ['OI', 'CI'], mask: 0x1f01ff, sid: 'SY' },
+        { type: 'D', flags: [], mask: 0x2, sid: 'WD' },
+        { type: 'A', flags: ['OI', 'CI', 'IO', 'ID'], mask: 0xa0000000, sid: OTHER },
+      ])
+    })
+
+    it('reads a hex mask in any case, a list of aliases, an object entry, an empty list, and a descriptor with no owner', () => {
+      expect(parseSddl('D:(A;;0X1301BF;;;BU)').aces[0].mask).toBe(0x1301bf)
+      expect(parseSddl('D:(A;;SDWDWO;;;BU)').aces[0].mask).toBe(0x10000 | 0x40000 | 0x80000)
+      expect(parseSddl(`D:(OA;;0x2;bf967aba-0de6-11d0-a285-00aa003049e2;;${OTHER})`).aces).toEqual([{ type: 'OA', flags: [], mask: 0x2, sid: OTHER }])
+      expect(parseSddl('O:BAG:SYD:PAI')).toEqual({ owner: 'BA', aces: [], nullDacl: false })
+      expect(parseSddl('D:(A;;FA;;;SY)').owner).toBeNull()
+    })
+
+    it('reads a descriptor with no access list at all (a NULL DACL) as that', () => {
+      expect(parseSddl('O:BAG:SYD:NO_ACCESS_CONTROL')).toEqual({ owner: 'BA', aces: [], nullDacl: true })
+    })
+
+    it('throws for everything that it cannot read: nothing is guessed', () => {
+      const unreadable = [
+        '',
+        undefined,
+        null,
+        'garbage',
+        'O:SYG:SY', // no list
+        'D:(A;;FA;;;SY', // a bracket is not closed
+        'D:(A;;FA;;;SY)(', // a bracket is left open
+        'D:(XA;;FA;;;WD;(Member_of {SID(BA)}))', // a conditional entry
+        'D:(XD;;FA;;;WD;(Member_of {SID(BA)}))',
+        'D:(A;;FA;;;WD;(Member_of {SID(BA)}))', // an allow entry with a condition after the trustee
+        'D:(AU;;FA;;;WD)', // an audit entry in the list
+        'D:(RA;;;;;WD;("Department",TS,0,"Sales"))', // a resource attribute
+        'D:(ZA;;FA;;;WD)', // a type that does not exist
+        'D:(A;;ZZ;;;WD)', // a right that does not exist
+        'D:(A;;FA0x2;;;WD)', // an alias and a hex number mixed
+        'D:(A;;2;;;WD)', // a decimal number
+        'D:(A;;;;;WD)', // no right
+        'D:(A;;FA;;;)', // no trustee
+        'D:(A;;FA;;;x)', // a trustee that is neither a SID nor an alias
+        'D:(A;;FA;;WD)', // too few fields
+        'D:(A;;FA;;;WD;)', // too many fields
+        'O:xyG:SYD:(A;;FA;;;SY)', // an owner that is not a SID or an alias
+      ]
+      for (const text of unreadable) {
+        expect(() => parseSddl(text), String(text)).toThrow()
+        expect(() => sharedAclProblem(text, { user: SID, kind: 'folder' }), String(text)).toThrow()
+        expect(() => sharedAclProblem(text, { user: SID, kind: 'ancestor' }), String(text)).toThrow()
+      }
+    })
+  })
+
+  describe('what makes a folder one that another account can change', () => {
+    // each of the rights that let an account add, delete, rename or re-permission: add file, add subdirectory, delete child,
+    // delete, write DAC, write owner, generic write, generic all
+    const ON_FOLDER = [0x2, 0x4, 0x40, 0x10000, 0x40000, 0x80000, 0x40000000, 0x10000000]
+    const ON_ANCESTOR = [0x40, 0x10000, 0x40000, 0x80000, 0x40000000, 0x10000000]
+
+    it('refuses a folder where an unknown SID has any one of the rights that change it, as a hex mask (alone or with others)', () => {
+      for (const mask of ON_FOLDER) {
+        expect(asFolder(acl(`A;OICI;${hex(mask)};;;${OTHER}`)), hex(mask)).toBe(CHANGES)
+        expect(asFolder(acl(`A;;${hex(mask | 0x1200a9)};;;${OTHER}`)), hex(mask | 0x1200a9)).toBe(CHANGES)
+      }
+      for (const mask of [0x1301bf, 0x1f01ff, 0x1e01ff, 0x1201bf, 0x120116]) expect(asFolder(acl(`A;OICI;${hex(mask)};;;${OTHER}`)), hex(mask)).toBe(CHANGES)
+    })
+
+    it('refuses a folder where an unknown SID has one of the aliases that contain those rights', () => {
+      for (const rights of ['FA', 'FW', 'GA', 'GW', 'WD', 'WO', 'SD', 'DC', 'CC', 'LC', 'DT', 'KA', 'KW', 'FRFW', 'GRGW', 'SDGR', 'RCWD', 'FXWO']) {
+        expect(asFolder(acl(`A;OICI;${rights};;;${OTHER}`)), rights).toBe(CHANGES)
+      }
+    })
+
+    it('refuses an entry for any untrusted trustee: a SID, a group alias, or an application package', () => {
+      for (const trustee of [OTHER, GROUP, APP, 'WD', 'BU', 'AU', 'IU', 'NU', 'LS', 'NS', 'CO', 'S-1-1-0', 'S-1-5-11', 'S-1-5-32-545']) {
+        expect(asFolder(acl(`A;OICI;FA;;;${trustee}`)), trustee).toBe(CHANGES)
+      }
+    })
+
+    it('allows a folder where another account can only read, list, execute or write attributes', () => {
+      for (const mask of [0x1200a9, 0x120089, 0x1200a0, 0x100020, 0x1, 0x8, 0x10, 0x20, 0x80, 0x100, 0x20000, 0x80000000, 0x20000000, 0x1000a1, 0x100021]) {
+        expect(asFolder(acl(`A;OICI;${hex(mask)};;;${OTHER}`)), hex(mask)).toBeNull()
+      }
+      for (const rights of ['GR', 'GX', 'GRGX', 'FR', 'FX', 'FRFX', 'RC', 'KR', 'KX', 'SW', 'RP', 'WP', 'LO', 'CR']) {
+        expect(asFolder(acl(`A;OICI;${rights};;;${OTHER}`)), rights).toBeNull()
+      }
+    })
+
+    it('judges a folder ABOVE by the rights that move or replace the subtree: delete, delete child, re-permission, take ownership, generic write and all', () => {
+      for (const mask of ON_ANCESTOR) expect(asAncestor(acl(`A;OICI;${hex(mask)};;;${OTHER}`)), hex(mask)).toBe(CHANGES)
+      for (const rights of ['FA', 'GA', 'GW', 'WD', 'WO', 'SD', 'DT', 'KA', 'GRGW']) expect(asAncestor(acl(`A;OICI;${rights};;;${OTHER}`)), rights).toBe(CHANGES)
+      // Modify has delete (0x10000), and so is not allowed above either
+      expect(asAncestor(acl(`A;OICI;0x1301bf;;;${OTHER}`))).toBe(CHANGES)
+    })
+
+    it('allows add file and add subdirectory on a folder ABOVE: the root of the system drive gives the second to every signed-in account', () => {
+      for (const mask of [0x2, 0x4, 0x6, 0x100116, 0x20006]) expect(asAncestor(acl(`A;;${hex(mask)};;;${OTHER}`)), hex(mask)).toBeNull()
+      for (const rights of ['LC', 'DC', 'CC', 'FW', 'KW']) expect(asAncestor(acl(`A;;${rights};;;${OTHER}`)), rights).toBeNull()
+      // and the same rights are refused on the folder itself
+      for (const mask of [0x2, 0x4, 0x6, 0x100116, 0x20006]) expect(asFolder(acl(`A;;${hex(mask)};;;${OTHER}`)), hex(mask)).toBe(CHANGES)
+    })
+
+    it('ignores an entry that is inherit-only (IO): it does not apply to the folder, only to what is made in it', () => {
+      for (const flags of ['OICIIO', 'CIIO', 'OIIO', 'OICIIOID', 'IO']) {
+        expect(asFolder(acl(`A;${flags};FA;;;${OTHER}`)), flags).toBeNull()
+        expect(asAncestor(acl(`A;${flags};GA;;;${OTHER}`)), flags).toBeNull()
+      }
+    })
+
+    it('does not ignore an entry that is only inherited (ID) or only applies to the folder: those apply', () => {
+      for (const flags of ['ID', 'OICIID', '', 'OICI', 'CI', 'OI']) {
+        expect(asFolder(acl(`A;${flags};FA;;;${OTHER}`)), flags).toBe(CHANGES)
+        expect(asAncestor(acl(`A;${flags};FA;;;${OTHER}`)), flags).toBe(CHANGES)
+      }
+    })
+
+    it('ignores a deny entry: it only takes rights away', () => {
+      expect(asFolder(acl(`D;;FA;;;${OTHER}`))).toBeNull()
+      expect(asFolder(acl(`D;OICI;0x1301bf;;;WD`))).toBeNull()
+      expect(asAncestor(acl(`D;;GA;;;${OTHER}`))).toBeNull()
+      expect(asFolder(acl(`OD;;0x2;bf967aba-0de6-11d0-a285-00aa003049e2;;${OTHER}`))).toBeNull()
+      expect(asFolder(acl(`OA;;0x2;bf967aba-0de6-11d0-a285-00aa003049e2;;${OTHER}`))).toBe(CHANGES) // an object entry that allows counts
+    })
+
+    it('trusts the system, the administrators, TrustedInstaller and the current user, by SID or by alias, and nobody else', () => {
+      for (const trustee of ['SY', 'BA', 'S-1-5-18', 'S-1-5-32-544', INSTALLER, SID]) {
+        expect(asFolder(acl(`A;OICI;FA;;;${trustee}`)), trustee).toBeNull()
+        expect(asAncestor(acl(`A;OICI;FA;;;${trustee}`)), trustee).toBeNull()
+      }
+      // a SID that differs from the user's in one digit is another account
+      expect(asFolder(acl(`A;OICI;FA;;;S-1-5-21-111-222-333-1011`))).toBe(CHANGES)
+      expect(asFolder(acl(`A;OICI;FA;;;${INSTALLER}0`))).toBe(CHANGES)
+      // the user is the one that the caller says: with another user, the old user is not trusted
+      expect(sharedAclProblem(acl(`A;OICI;FA;;;${OTHER}`), { user: OTHER, kind: 'folder' })).toBeNull()
+      expect(sharedAclProblem(acl(`A;OICI;FA;;;${SID}`), { user: OTHER, kind: 'folder' })).toBe(CHANGES)
+    })
+
+    it('refuses a folder that another account owns (an owner can change the list whatever it says), and accepts the trusted owners', () => {
+      expect(asFolder(`O:${OTHER}G:SYD:PAI(A;OICI;FA;;;SY)`)).toBe('it is owned by another account')
+      expect(asAncestor(`O:${OTHER}G:SYD:PAI(A;OICI;FA;;;SY)`)).toBe('it is owned by another account')
+      expect(asFolder('O:WDG:SYD:PAI(A;OICI;FA;;;SY)')).toBe('it is owned by another account')
+      for (const owner of ['SY', 'BA', 'S-1-5-18', 'S-1-5-32-544', INSTALLER, SID]) expect(asFolder(`O:${owner}G:SYD:PAI(A;OICI;FA;;;SY)`), owner).toBeNull()
+    })
+
+    it('refuses a folder with no access list at all (a NULL DACL gives every account full control)', () => {
+      expect(asFolder('O:BAG:SYD:NO_ACCESS_CONTROL')).toMatch(/no access list at all/)
+      expect(asAncestor('O:BAG:SYD:NO_ACCESS_CONTROL')).toMatch(/no access list at all/)
+    })
+
+    it('accepts an empty list: nobody has access', () => {
+      expect(asFolder('O:BAG:SYD:PAI')).toBeNull()
+    })
+
+    it('judges the default access lists of Windows, with invented SIDs, the way the finding needs', () => {
+      // the temp folder and the Documents folder of a normal profile (a reader with Read and Execute is fine)
+      expect(asFolder(TEMP_DEFAULT)).toBeNull()
+      expect(asFolder(DOCUMENTS_WITH_READER)).toBeNull()
+      // the profile folder, C:\Users and C:\ as folders above
+      expect(asAncestor(TEMP_DEFAULT)).toBeNull()
+      expect(asAncestor(PROFILE_DEFAULT)).toBeNull()
+      expect(asAncestor(USERS_DEFAULT)).toBeNull()
+      expect(asAncestor(ROOT_DEFAULT)).toBeNull()
+      // and as the folder itself, the profile folder and C:\Users (nobody else can add to them)
+      expect(asFolder(PROFILE_DEFAULT)).toBeNull()
+      expect(asFolder(USERS_DEFAULT)).toBeNull()
+      // C:\ lets every signed-in account create a folder in it (LC is 0x4): fine above, not as the folder itself
+      expect(asFolder(ROOT_DEFAULT)).toBe(CHANGES)
+    })
+
+    it('judges the shapes of a shared machine: a temp folder with an explicit Modify for another user, a folder above with full control for an application package', () => {
+      expect(asFolder(TEMP_WITH_MODIFY)).toBe(CHANGES)
+      expect(asAncestor(TEMP_WITH_MODIFY)).toBe(CHANGES)
+      expect(asAncestor(LOCAL_WITH_APP)).toBe(CHANGES)
+      expect(asFolder(LOCAL_WITH_APP)).toBe(CHANGES)
+    })
+
+    it('says which folder in a message that holds no account, no SID and no path', () => {
+      const all = [
+        [[{ which: 'output', level: 'itself' }], 'the backup folder itself'],
+        [[{ which: 'temp', level: 'itself' }], 'the temp folder itself'],
+        [[{ which: 'output', level: 'above' }], 'a folder above the backup folder'],
+        [[{ which: 'temp', level: 'above' }], 'a folder above the temp folder'],
+        [
+          [
+            { which: 'output', level: 'itself' },
+            { which: 'temp', level: 'above' },
+          ],
+          'the backup folder itself, a folder above the temp folder',
+        ],
+      ]
+      for (const [problems, which] of all) {
+        const message = sharedFoldersMessage(problems)
+        expect(message).toBe(`${SHARED_FOLDERS_PREFIX}${which}${SHARED_FOLDERS_ADVICE}`)
+        expect(message).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\/|S-1-|\\/)
+      }
+      expect(SHARED_FOLDERS_ADVICE).toMatch(/your own profile/)
+      expect(SHARED_FOLDERS_ADVICE).toMatch(/TEMP/)
+      expect(SHARED_FOLDERS_ADVICE).toMatch(/TMPDIR/)
+      expect(SHARED_UNREADABLE_ERROR).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\//)
+    })
+  })
+
+  // ---- in a run --------------------------------------------------------------------------------------------------------------------------
+
+  /**
+   * The folders of one test: the output folder (dir) inside out-root and the temp folder inside temp-root, two folders that have
+   * nothing in common but the folder of the test and what is above it, so that "a folder above the backup folder" and "a folder
+   * above the temp folder" can be told apart. The output folder is made unless `outExists` is false.
+   */
+  function layout({ outExists = true } = {}) {
+    const outRoot = path.join(tmp, 'out-root')
+    const tempRoot = path.join(tmp, 'temp-root')
+    const temp = path.join(tempRoot, 'private')
+    dir = path.join(outRoot, 'backups')
+    fs.mkdirSync(temp, { recursive: true })
+    fs.mkdirSync(outRoot, { recursive: true })
+    if (outExists) fs.mkdirSync(dir, { recursive: true })
+    return { outRoot, tempRoot, temp }
+  }
+  const same = (a, b) => path.resolve(String(a)).toLowerCase() === path.resolve(String(b)).toLowerCase()
+  /** A runner whose PowerShell answers with `pick(path)` for every path that it is asked about (and the rest as the defaults do). */
+  const where = (pick, extra = {}) =>
+    makeRunner({
+      powershell: ({ options }) => ({
+        status: 0,
+        stdout: sddlLines(options.env.BQR_ACL_PATHS.split('|').map(pick)),
+        stderr: '#< CLIXML\r\n',
+      }),
+      ...extra,
+    })
+  /** A runner whose PowerShell says that these folders are shared (a Modify for another user) and everything else is private. */
+  const sharing = (...folders) => where((folder) => (folders.some((shared) => same(folder, shared)) ? TEMP_WITH_MODIFY : SAFE_SDDL))
+  const fakeWindows = (deps = {}) => ({ platform: 'win32', exists: () => false, ...deps, env: { SystemRoot: 'C:\\Windows', ...deps.env } })
+  const refusal = (which) => `${SHARED_FOLDERS_PREFIX}${which}${SHARED_FOLDERS_ADVICE}`
+
+  describe('on Windows', () => {
+    /** One run with everything made visible: the work done before the check, the temp folder, the output folder. */
+    async function runWith(runner, { temp, keep = 1 } = {}) {
+      const rec = recordingFs()
+      const r = await go({ options: { keep }, runner, deps: fakeWindows({ tmpdir: temp, fs: rec.fs }) })
+      return { ...r, rec }
+    }
+
+    it('refuses an output folder that another account can change, before anything is made: no work directory, no tool, no log, nothing rotated', async () => {
+      const { temp } = layout()
+      seed(oldBackups)
+      const r = await runWith(sharing(dir), { temp })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(refusal('the backup folder itself'))
+      expect(r.runner.calls.map((call) => call.tool)).toEqual(['whoami', 'powershell']) // not icacls, not the Neon CLI, not pg_dump
+      expect(r.rec.events).toEqual([]) // no mkdir, no mkdtemp
+      expect(fs.readdirSync(temp)).toEqual([]) // no work directory
+      expect(r.files).toEqual(oldBackups) // no backup.log, no rotation
+      expect(r.log).toBe('')
+      expect(r.errs).toEqual([LOG_SKIPPED, `backup failed: ${refusal('the backup folder itself')}`])
+      expect(r.message).not.toContain(OTHER)
+      expect(visible(r)).not.toContain(tmp)
+    })
+
+    it('refuses a temp folder that another account can change, before anything is made, and still writes the log in the output folder', async () => {
+      const { temp } = layout()
+      seed(oldBackups)
+      const r = await runWith(sharing(temp), { temp })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(refusal('the temp folder itself'))
+      // the one call after the check is the owner-only list of the new backup.log, the log of this failure
+      expect(r.runner.calls.map((call) => `${call.tool} ${call.tool === 'icacls' ? call.args[0] : ''}`.trim())).toEqual(['whoami', 'powershell', 'icacls backup.log'])
+      expect(r.rec.events).toEqual([])
+      expect(fs.readdirSync(temp)).toEqual([])
+      expect(r.files.filter((name) => BACKUP_NAME.test(name))).toEqual(oldBackups) // nothing rotated
+      expect(r.log).toMatch(/ failed host=/) // the output folder is private, so this failure is logged like the others
+      expect(r.errs).toEqual([`backup failed: ${refusal('the temp folder itself')}`])
+    })
+
+    it('makes the output folder for that log when it is not there yet (it was judged private, through the folder that it will be made in)', async () => {
+      const { temp } = layout({ outExists: false })
+      const r = await runWith(sharing(temp), { temp })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(refusal('the temp folder itself'))
+      expect(r.files).toEqual(['backup.log'])
+      expect(r.log).toMatch(/ failed host=/)
+    })
+
+    it('refuses a folder above the output folder: no log, because the output folder could have been replaced', async () => {
+      const { outRoot, temp } = layout()
+      seed(oldBackups)
+      const r = await runWith(sharing(outRoot), { temp })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(refusal('a folder above the backup folder'))
+      expect(r.files).toEqual(oldBackups)
+      expect(r.log).toBe('')
+      expect(r.errs).toEqual([LOG_SKIPPED, `backup failed: ${refusal('a folder above the backup folder')}`])
+      expect(r.rec.events).toEqual([])
+      expect(r.runner.of('pg_dump')).toEqual([])
+    })
+
+    it('refuses a folder above the temp folder, and still writes the log', async () => {
+      const { tempRoot, temp } = layout()
+      const r = await runWith(sharing(tempRoot), { temp })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(refusal('a folder above the temp folder'))
+      expect(r.log).toMatch(/ failed host=/)
+      expect(r.rec.events).toEqual([])
+      expect(fs.readdirSync(temp)).toEqual([])
+    })
+
+    it('refuses a folder above both (the folder of the test, shared by the two): says so for both, and writes no log', async () => {
+      const { temp } = layout()
+      const r = await runWith(sharing(tmp), { temp })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(refusal('a folder above the backup folder, a folder above the temp folder'))
+      expect(r.log).toBe('')
+      expect(r.errs[0]).toBe(LOG_SKIPPED)
+    })
+
+    it('refuses the output folder and the temp folder together, and names both', async () => {
+      const { temp } = layout()
+      const r = await runWith(sharing(dir, temp), { temp })
+      expect(r.message).toBe(refusal('the backup folder itself, the temp folder itself'))
+      expect(r.rec.events).toEqual([])
+    })
+
+    it('refuses an ancestor with any one of the dangerous rights (and accepts the one that only adds a subfolder), for every ancestor that there is', async () => {
+      const { outRoot, tempRoot, temp } = layout()
+      const everyFolder = []
+      for (let cur = path.resolve(dir); ; cur = path.win32.dirname(cur)) {
+        everyFolder.push(cur)
+        if (path.win32.dirname(cur) === cur) break
+      }
+      expect(everyFolder.length).toBeGreaterThan(3)
+      for (const rights of ['0x10000', '0x40', '0x40000', '0x80000', 'GW', 'GA']) {
+        for (const ancestor of [...everyFolder.slice(1), tempRoot]) {
+          fs.rmSync(path.join(dir, 'backup.log'), { force: true })
+          const risky = acl(`A;OICI;${rights};;;${OTHER}`)
+          const runner = where((folder) => (same(folder, ancestor) ? risky : SAFE_SDDL))
+          const r = await runWith(runner, { temp })
+          expect(r.exitCode, `${rights} on ${path.basename(ancestor)}`).toBe(1)
+          expect(r.message, `${rights} on ${path.basename(ancestor)}`).toMatch(/^nothing was dumped, because another account can change a folder that the backup relies on: /)
+          expect(r.rec.events).toEqual([])
+        }
+      }
+      for (const ancestor of [outRoot, tempRoot, tmp]) {
+        const runner = where((folder) => (same(folder, ancestor) ? acl(`A;;LC;;;${OTHER}`) : SAFE_SDDL))
+        const r = await runWith(runner, { temp })
+        expect(r.exitCode, path.basename(ancestor)).toBe(0)
+      }
+    })
+
+    it('refuses a folder that another account owns', async () => {
+      const { outRoot, temp } = layout()
+      const runner = where((folder) => (same(folder, outRoot) ? `O:${OTHER}G:SYD:PAI(A;OICI;FA;;;SY)` : SAFE_SDDL))
+      const r = await runWith(runner, { temp })
+      expect(r.message).toBe(refusal('a folder above the backup folder'))
+    })
+
+    it('refuses a folder that is not made yet through the nearest folder that exists (the one that the new folder is made in)', async () => {
+      const { outRoot, temp } = layout({ outExists: false })
+      const r = await runWith(sharing(outRoot), { temp })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(refusal('the backup folder itself'))
+      expect(fs.existsSync(dir)).toBe(false) // not made
+      expect(r.log).toBe('')
+      expect(r.errs[0]).toBe(LOG_SKIPPED)
+      expect(r.rec.events).toEqual([])
+    })
+
+    it('accepts the default access lists of Windows (the temp folder, the profile folder, C:\\Users and C:\\, with invented SIDs)', async () => {
+      const { temp } = layout()
+      const runner = where((folder) => {
+        const parent = path.win32.dirname(folder)
+        if (parent === folder) return ROOT_DEFAULT
+        if (path.win32.dirname(parent) === parent) return USERS_DEFAULT
+        return same(folder, tmp) ? DOCUMENTS_WITH_READER : PROFILE_DEFAULT
+      })
+      const r = await runWith(runner, { temp })
+      expect(r.exitCode).toBe(0)
+      expect(r.log).toContain(' ok host=')
+    })
+
+    it('accepts entries that do not apply (inherit-only, deny) for another account on every folder', async () => {
+      const { temp } = layout()
+      const quiet = `${SAFE_SDDL}(A;OICIIO;GA;;;${OTHER})(A;CIIOID;FA;;;WD)(D;;FA;;;${OTHER})(D;OICI;0x1301bf;;;WD)`
+      const r = await runWith(where(() => quiet), { temp })
+      expect(r.exitCode).toBe(0)
+    })
+
+    it('refuses when the access lists cannot be read: PowerShell fails, is missing, does not finish, or gives too little or something odd', async () => {
+      const lines = (...sddls) => ({ status: 0, stdout: sddlLines(sddls), stderr: '' })
+      const conditional = `O:BAG:SYD:PAI(XA;;FA;;;WD;(Member_of {SID(BA)}))`
+      const answers = {
+        'a failing PowerShell': () => ({ status: 1, stdout: '', stderr: 'Get-Acl : cannot find the path' }),
+        'a PowerShell that is missing': () => ({ status: null, stdout: '', stderr: '', problem: 'ENOENT' }),
+        'a PowerShell that does not finish': () => ({ status: null, stdout: '', stderr: '', problem: 'TIMEOUT' }),
+        'no output': () => ({ status: 0, stdout: '', stderr: '' }),
+        // a call that did not end well is not trusted, whatever it printed before
+        'an exit code that is not 0, after a full output': ({ options }) => ({ status: 1, stdout: sddlLines(options.env.BQR_ACL_PATHS.split('|').map(() => SAFE_SDDL)), stderr: '' }),
+        'a call that was stopped, after a full output': ({ options }) => ({ status: null, problem: 'TIMEOUT', stdout: sddlLines(options.env.BQR_ACL_PATHS.split('|').map(() => SAFE_SDDL)), stderr: '' }),
+        'the first path only': () => lines(SAFE_SDDL),
+        'a line that is not "index TAB sddl"': () => ({ status: 0, stdout: 'garbage\r\n', stderr: '' }),
+        'a descriptor that cannot be read': ({ options }) => lines(...options.env.BQR_ACL_PATHS.split('|').map(() => 'not an sddl')),
+        'a conditional entry': ({ options }) => lines(...options.env.BQR_ACL_PATHS.split('|').map((_, index) => (index === 0 ? conditional : SAFE_SDDL))),
+        'a conditional entry on a folder above': ({ options }) => lines(...options.env.BQR_ACL_PATHS.split('|').map((_, index, all) => (index === all.length - 1 ? conditional : SAFE_SDDL))),
+      }
+      for (const [what, answer] of Object.entries(answers)) {
+        const { temp } = layout({ outExists: false })
+        const r = await runWith(makeRunner({ powershell: answer }), { temp })
+        expect(r.exitCode, what).toBe(1)
+        expect(r.message, what).toBe(SHARED_UNREADABLE_ERROR)
+        expect(r.runner.of('pg_dump'), what).toEqual([])
+        expect(r.rec.events, what).toEqual([])
+        expect(fs.readdirSync(temp), what).toEqual([])
+        expect(fs.existsSync(dir), what).toBe(false) // the output folder is not even made, and no log is written in a folder that is not known
+        expect(r.errs, what).toEqual([`backup failed: ${SHARED_UNREADABLE_ERROR}`])
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+    it('refuses a descriptor with no access list at all (a NULL DACL)', async () => {
+      const { temp } = layout()
+      const r = await runWith(where((folder) => (same(folder, temp) ? 'O:BAG:SYD:NO_ACCESS_CONTROL' : SAFE_SDDL)), { temp })
+      expect(r.message).toBe(refusal('the temp folder itself'))
+    })
+
+    it('reads every path with ONE PowerShell call: a full path to the tool, an encoded script, the paths in an environment variable', async () => {
+      const { outRoot, tempRoot, temp } = layout()
+      const r = await runWith(makeRunner(), { temp })
+      expect(r.exitCode).toBe(0)
+      expect(r.runner.calls.map((call) => call.tool).slice(0, 2)).toEqual(['whoami', 'powershell'])
+      const calls = r.runner.of('powershell')
+      expect(calls).toHaveLength(1)
+      const [call] = calls
+      expect(call.command).toBe(powershellTool({ SystemRoot: 'C:\\Windows' }))
+      expect(call.command).toBe(path.win32.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))
+      expect(call.args).toHaveLength(5)
+      expect(call.args.slice(0, 4)).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand'])
+      const script = Buffer.from(call.args[4], 'base64').toString('utf16le')
+      expect(script).toContain('Get-Acl -LiteralPath')
+      expect(script).toContain('.Sddl')
+      expect(script).toContain('$env:BQR_ACL_PATHS')
+      expect(script).not.toContain(path.basename(tmp)) // no path in the script, so nothing to quote
+      // the paths: the output folder and what is above it, then the temp folder and what is above it, each once, in that order
+      const paths = call.options.env.BQR_ACL_PATHS.split('|')
+      expect(new Set(paths.map((p) => p.toLowerCase())).size).toBe(paths.length)
+      expect(paths.slice(0, 3).map((p) => p.toLowerCase())).toEqual([dir, outRoot, tmp].map((p) => path.resolve(p).toLowerCase()))
+      expect(paths.slice(-2).map((p) => p.toLowerCase())).toEqual([temp, tempRoot].map((p) => path.resolve(p).toLowerCase()))
+      expect(path.win32.dirname(paths.at(-3))).toBe(paths.at(-3)) // the root of the drive is the last of the shared chain
+      // the environment of the call holds no database address and no PG variable
+      expect(call.options.env.BACKUP_DATABASE_URL).toBeUndefined()
+      expect(call.options.env.SystemRoot).toBe('C:\\Windows')
+      expect(call.options.timeoutMs).toBeGreaterThan(0)
+      expect(JSON.stringify(call.args)).not.toContain(PASSWORD)
+    })
+
+    it('reads for the nearest existing folder when the output folder is not made yet, and does not make it first', async () => {
+      const { outRoot, temp } = layout({ outExists: false })
+      const seen = []
+      const runner = where((folder) => {
+        seen.push(folder)
+        return SAFE_SDDL
+      })
+      const r = await runWith(runner, { temp })
+      expect(r.exitCode).toBe(0)
+      expect(r.runner.of('powershell')).toHaveLength(1)
+      const paths = r.runner.of('powershell')[0].options.env.BQR_ACL_PATHS.split('|')
+      expect(paths[0].toLowerCase()).toBe(path.resolve(outRoot).toLowerCase())
+      expect(paths.map((p) => p.toLowerCase())).not.toContain(path.resolve(dir).toLowerCase())
+    })
+
+    it('does the check once per run, before the connection string is asked for', async () => {
+      const { temp } = layout()
+      const r = await runWith(makeRunner(), { temp })
+      const tools = r.runner.calls.map((call) => call.tool)
+      expect(tools.filter((tool) => tool === 'powershell')).toHaveLength(1)
+      expect(tools.indexOf('powershell')).toBeLessThan(tools.indexOf('pg_dump'))
+    })
+
+    it('does not ask the folders of a run that is refused for another reason first (the path is too long): no PowerShell', async () => {
+      const { temp } = layout()
+      const long = path.join(temp, 'x'.repeat(240))
+      const r = await go({ options: { out: long }, runner: makeRunner(), deps: fakeWindows({ tmpdir: temp }) })
+      expect(r.message).toBe(PATH_TOO_LONG_ERROR)
+      expect(r.runner.of('powershell')).toEqual([])
+    })
+  })
+
+  describe('on macOS and Linux', () => {
+    const modeOf = (modes) => (target, ...rest) => {
+      const key = path.resolve(String(target))
+      for (const [folder, mode] of modes) {
+        if (path.resolve(folder) !== key) continue
+        if (mode === null) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+        return { mode }
+      }
+      return privateStat(target, ...rest)
+    }
+    async function runWith(modes, { temp, keep = 1 } = {}) {
+      const rec = recordingFs()
+      const stat = modeOf(modes)
+      const r = await go({ options: { keep }, deps: { tmpdir: temp, fs: { ...rec.fs, statSync: stat } } })
+      return { ...r, rec }
+    }
+
+    it('refuses a temp folder that others (or the group) can write in, unless it has the sticky bit', async () => {
+      const { temp } = layout()
+      for (const mode of [0o040777, 0o040770, 0o040775, 0o040757, 0o040722, 0o040720, 0o040702]) {
+        const r = await runWith([[temp, mode]], { temp })
+        expect(r.exitCode, mode.toString(8)).toBe(1)
+        expect(r.message, mode.toString(8)).toBe(refusal('the temp folder itself'))
+        expect(r.runner.calls, mode.toString(8)).toEqual([])
+        expect(r.rec.events, mode.toString(8)).toEqual([])
+        expect(fs.readdirSync(temp), mode.toString(8)).toEqual([])
+      }
+      for (const mode of [0o041777, 0o041770, 0o040700, 0o040750, 0o040755, 0o040705]) {
+        const r = await runWith([[temp, mode]], { temp })
+        expect(r.exitCode, mode.toString(8)).toBe(0)
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+    it('writes the log of that refusal in the output folder when it is private, and not when it is not', async () => {
+      const { temp } = layout()
+      const ok = await runWith([[temp, 0o040777]], { temp })
+      expect(ok.log).toMatch(/ failed host=/)
+      expect(ok.errs).toEqual([`backup failed: ${refusal('the temp folder itself')}`])
+      fs.rmSync(path.join(dir, 'backup.log'), { force: true })
+      const open = await runWith([[temp, 0o040777], [dir, 0o040777]], { temp })
+      expect(open.log).toBe('')
+      expect(open.errs).toEqual([LOG_SKIPPED, `backup failed: ${refusal('the temp folder itself')}`])
+      // an output folder that cannot be inspected is not known to be private: that is refused as a whole, and nothing is logged
+      const unknown = await runWith([[temp, 0o040777], [dir, null]], { temp })
+      expect(unknown.message).toBe(SHARED_UNREADABLE_ERROR)
+      expect(unknown.log).toBe('')
+    })
+
+    it('refuses a folder above the temp folder or the output folder that others can write in, unless it has the sticky bit', async () => {
+      const { outRoot, tempRoot, temp } = layout()
+      const above = await runWith([[tempRoot, 0o040777]], { temp })
+      expect(above.message).toBe(refusal('a folder above the temp folder'))
+      expect(above.rec.events).toEqual([])
+      fs.rmSync(path.join(dir, 'backup.log'), { force: true })
+      const aboveOut = await runWith([[outRoot, 0o040777]], { temp })
+      expect(aboveOut.message).toBe(refusal('a folder above the backup folder'))
+      expect(aboveOut.log).toBe('')
+      expect(aboveOut.errs[0]).toBe(LOG_SKIPPED)
+      const both = await runWith([[tmp, 0o040777]], { temp })
+      expect(both.message).toBe(refusal('a folder above the backup folder, a folder above the temp folder'))
+      fs.rmSync(path.join(dir, 'backup.log'), { force: true })
+      for (const mode of [0o041777, 0o040775, 0o040770, 0o040755]) {
+        for (const folder of [outRoot, tempRoot, tmp]) {
+          const r = await runWith([[folder, mode]], { temp })
+          expect(r.exitCode, `${mode.toString(8)} on ${path.basename(folder)}`).toBe(0) // sticky: this is /tmp. Group only: its members are not known
+          fs.rmSync(dir, { recursive: true, force: true })
+          fs.mkdirSync(dir, { recursive: true })
+        }
+      }
+    })
+
+    it('judges the nearest folder that exists for an output folder that is not made yet, and makes nothing when it is shared', async () => {
+      const { outRoot, temp } = layout({ outExists: false })
+      const r = await runWith([[outRoot, 0o040777]], { temp })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(refusal('the backup folder itself'))
+      expect(fs.existsSync(dir)).toBe(false)
+      expect(r.errs[0]).toBe(LOG_SKIPPED)
+      expect(r.rec.events).toEqual([])
+      const sticky = await runWith([[outRoot, 0o041777]], { temp })
+      expect(sticky.exitCode).toBe(0)
+    })
+
+    it('refuses when a folder of the chain cannot be inspected: a folder that is not known is not trusted', async () => {
+      const { tempRoot, temp } = layout({ outExists: false })
+      for (const folder of [temp, tempRoot, tmp]) {
+        const r = await runWith([[folder, null]], { temp })
+        expect(r.exitCode).toBe(1)
+        expect(r.message).toBe(SHARED_UNREADABLE_ERROR)
+        expect(r.errs).toEqual([`backup failed: ${SHARED_UNREADABLE_ERROR}`])
+        expect(r.runner.calls).toEqual([])
+        expect(fs.existsSync(dir)).toBe(false)
+      }
+    })
+
+    it('does not run PowerShell, and does not read an access list', async () => {
+      const { temp } = layout()
+      const r = await runWith([], { temp })
+      expect(r.exitCode).toBe(0)
+      expect(r.runner.of('powershell')).toEqual([])
+      expect(r.runner.of('whoami')).toEqual([])
+    })
+  })
+
+  it('keeps the per-path checks as a second net: the work directory list and the checks of backup.log are still made', async () => {
+    // (tests above: "the access list of the work directory is read back on Windows", "a backup.log that is a link or has another name")
+    const { temp } = layout()
+    const r = await go({ runner: makeRunner(), deps: fakeWindows({ tmpdir: temp, fs: { ...fs, statSync: privateStat } }) })
+    expect(r.exitCode).toBe(0)
+    const icacls = r.runner.of('icacls')
+    expect(icacls.some((call) => call.args.length === 1 && call.args[0].startsWith('bqr-work-'))).toBe(true) // the read-back of the work directory
+    expect(icacls.length).toBeGreaterThan(3)
   })
 })
 

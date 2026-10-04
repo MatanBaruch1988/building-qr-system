@@ -13,7 +13,15 @@
 //   1. Gets the DIRECT connection string (never the pooled one: pg_dump needs a session) from BACKUP_DATABASE_URL, or from
 //      the Neon CLI (`neon connection-string`) when --neon-project is given. It lives in memory only. Giving both is an
 //      error (exit 1, nothing dumped): the environment must not silently win over what the command line says.
-//   2. Makes this run's private WORK DIRECTORY in the user's own temp folder (os.tmpdir(): %TEMP% on Windows, $TMPDIR or /tmp
+//   2. Before anything is made, REFUSES to work in a folder that another account can change: the output folder, the temp
+//      folder and every folder above each of them (checkFoldersNotShared). Every check of a path before it is used has a gap
+//      in which an account that can write in that folder could rename a directory away and put its own at the same path, swap
+//      a file for a link, or add an access entry of its own; so the races are not won one by one, the folders in which they
+//      could happen are refused. On Windows the access lists are read as SDDL, with one PowerShell call, and only the user, the
+//      system, the administrators and TrustedInstaller may change a folder; elsewhere the modes are read (the temp folder must
+//      not be writable by group or others unless it has the sticky bit, a folder above not by others unless it has it). What
+//      cannot be read or understood is refused. The checks of the next steps stay as a second net.
+//   3. Makes this run's private WORK DIRECTORY in the user's own temp folder (os.tmpdir(): %TEMP% on Windows, $TMPDIR or /tmp
 //      elsewhere), with fs.mkdtemp (`bqr-work-<random>`): the name is unpredictable, and the directory is made with mode 700
 //      in one step on macOS and Linux, and inside the profile of the user, which only that user can write in, on Windows.
 //      It is not made in the output folder on purpose: an account that can write in the output folder could add an access
@@ -30,7 +38,7 @@
 //      is what makes it safe to point at production. It is the one sanctioned local READ of a deployment's database, next
 //      to `db:create-admin`, the one sanctioned write (AGENTS.md "Safety", ADR 0005). It does not use the production guard
 //      (server/dbGuard.js): reading production is its job.
-//   3. Checks the file twice, in the work directory. `pg_restore --list` prints the table of contents, which must name the
+//   4. Checks the file twice, in the work directory. `pg_restore --list` prints the table of contents, which must name the
 //      data of the tables `scans` and `points`; but it does not read the data blocks, so a dump that was cut off after its
 //      table of contents would pass. A full read (`pg_restore --file=<the null device>`) writes the SQL of the whole archive
 //      to nowhere, which reads and decompresses every data block, and must exit with 0. Then the mode is set and read back
@@ -47,13 +55,13 @@
 //      kept, and nothing is rotated, because it would pass the two checks above and could push the real dumps out. Every
 //      production database has the marker: the production build of the first deploy sets it. Whoever backs up another database
 //      has to give it that table with the value `production`.
-//   4. Keeps the newest --keep files that match that exact name and deletes the older ones. ALL of them are sorted together
+//   5. Keeps the newest --keep files that match that exact name and deletes the older ones. ALL of them are sorted together
 //      by the UTC time in their names, so a run that started earlier and finishes later than a newer one never deletes the
 //      newer dump: when its own file is older than the kept ones, its own file is removed (the run still ends with 0, with
 //      the warning `own-dump-older-than-kept`, because a newer verified dump exists). A name with a time in the future (a
 //      clock that was wrong) is not counted and not deleted. Any other file in the folder is left alone, and nothing is
 //      rotated after a failed backup.
-//   5. An existing backup.log must be a regular file with one name (lstat: not a symbolic link, nlink 1), checked before
+//   6. An existing backup.log must be a regular file with one name (lstat: not a symbolic link, nlink 1), checked before
 //      anything is dumped and again right before the append: a link that another account planted in a folder it can write in
 //      would send the append to another file of the owner, and a hard link is the same trick. The run refuses (nothing is
 //      dumped or written); delete the file. Appends one line to backup.log in the folder (the time, ok or failed, the masked host, the file and its size, or a
@@ -74,11 +82,11 @@
 // So the work directory, which is in the private temp folder of the user, gets an owner-only access list with icacls
 // (inheritance removed, full control for the SID of the current user, found with `whoami /user`, inherited by what is made
 // inside), and the empty temporary file gets one of its own. pg_dump then overwrites the file in place, which keeps the
-// access list, and so does the rename into the output folder. If whoami and the user name both fail, or icacls is missing or
+// access list, and so does the rename into the output folder. If whoami fails, or icacls is missing or
 // fails, the backup fails before pg_dump writes anything. backup.log gets the same treatment when it is created (best
-// effort: it holds no personal data, so a failure there is only a warning). Windows has no refusal for a writable folder (the
-// access list of a folder is not read here): choose a folder under the user profile and never a shared or a synced one. A
-// sync client copies the file somewhere else, and no access list can stop that. The tools of Windows cannot open a path of
+// effort: it holds no personal data, so a failure there is only a warning). Choose a folder under the user profile and never a
+// shared or a synced one: the folders are checked (step 2), but a sync client copies the file somewhere else, and no access
+// list can stop that. The tools of Windows cannot open a path of
 // more than about 260 characters, so on Windows the run refuses, before it makes anything, an output folder or a temp folder
 // whose paths would go over 245 (the names inside the work directory are short).
 //
@@ -132,7 +140,14 @@ export const MARKER_TABLE = 'environment_marker'
 // account planted in a folder it can write in would make an append go to another file of the owner.
 export const LOG_NOT_REGULAR_ERROR =
   'backup.log in the backup folder is not a regular file (it is a link, or it has more than one name), so nothing was dumped and nothing was written to it: delete it or move it away'
-export const LOG_SKIPPED = 'backup: backup.log was not written, because other users can write in the backup folder'
+// A folder that the backup relies on can be changed by another account (see checkFoldersNotShared). The message names which one,
+// never an account and never a path.
+export const SHARED_FOLDERS_PREFIX = 'nothing was dumped, because another account can change a folder that the backup relies on: '
+export const SHARED_FOLDERS_ADVICE =
+  ' (use a backup folder in your own profile, and set TEMP on Windows or TMPDIR on macOS and Linux to a private folder in your own profile)'
+export const SHARED_UNREADABLE_ERROR =
+  'nothing was dumped, because the access lists of the backup folder and of the temp folder (and of the folders above them) could not be read, and a folder that is not known to be private is not trusted'
+export const LOG_SKIPPED = 'backup: backup.log was not written, because other accounts can change the backup folder or a folder above it'
 
 const NEON_TIMEOUT_MS = 2 * 60_000
 const DUMP_TIMEOUT_MS = 30 * 60_000
@@ -141,6 +156,7 @@ const LIST_TIMEOUT_MS = 5 * 60_000
 const READ_TIMEOUT_MS = 30 * 60_000
 const GH_TIMEOUT_MS = 60_000
 const ICACLS_TIMEOUT_MS = 60_000
+const SDDL_TIMEOUT_MS = 60_000
 // Owner only: read and write for the owner on a file, and all rights for the owner on a folder.
 const PRIVATE_FILE = 0o600
 const PRIVATE_FOLDER = 0o700
@@ -293,7 +309,7 @@ export function parseWhoamiAccount(stdout) {
 /**
  * The arguments of icacls that make `fileName` readable and writable by `owner` alone: /inheritance:r drops every access
  * that the file got from its folder (the copies are removed, not kept), and /grant:r gives that one user full control.
- * `owner` is `*<SID>` (see parseWhoamiSid) or, when the SID cannot be found, the name of the user.
+ * `owner` is `*<SID>` (see parseWhoamiSid).
  */
 export function icaclsArgs(fileName, owner, { directory = false } = {}) {
   // For a directory (OI)(CI) makes the files and folders made inside it inherit the same owner-only list.
@@ -301,23 +317,18 @@ export function icaclsArgs(fileName, owner, { directory = false } = {}) {
 }
 
 /**
- * Who the files belong to: { id (in the form icacls takes: the SID of the current user from `whoami /user`, and when that
- * cannot be read, the user name that Node knows), account (`DOMAIN\name` when the SID was found, else null) }. Throws an
- * Error with a message that is safe to print when there is neither.
+ * Who the files belong to: { id (in the form icacls takes: the SID of the current user from `whoami /user`), account (`DOMAIN\name`,
+ * or null) }. Throws an Error with a message that is safe to print when the SID cannot be found.
  */
-async function windowsOwner({ runner, env, userName }) {
+async function windowsOwner({ runner, env }) {
   const who = await runner(windowsTool('whoami.exe', env), ['/user', '/fo', 'csv', '/nh'], {
     env: cleanEnv(env),
     timeoutMs: ICACLS_TIMEOUT_MS,
   })
   const sid = !who.problem && who.status === 0 ? parseWhoamiSid(who.stdout) : null
+  // The SID is needed twice: to give the files to the user alone, and to know which entries of the folders of the run are the user's
+  // own (checkFoldersNotShared). A user name would not do for the second, so there is no fallback to it.
   if (sid) return { id: sid, account: parseWhoamiAccount(who.stdout) }
-  let name = ''
-  attempt(() => {
-    name = String(userName() ?? '').trim()
-  })
-  // Only the name is known: the access list can be checked for its shape, but not for whose it is.
-  if (name && !/[:/*?"<>|]/.test(name)) return { id: name, account: null }
   throw new Error('the current Windows user could not be found, so a dump cannot be made owner-only')
 }
 
@@ -383,6 +394,206 @@ async function checkOwnerOnly({ name, cwd, owner, runner, env }) {
       `the access list of the work directory is not the user's alone (${problem}), so nothing was dumped: is the temp folder shared with another account?`,
     )
   }
+}
+
+// ---- a folder that another account can change ------------------------------------------------------------------------
+
+// Every check-then-use on a path has a window: a folder that another account can write in lets that account rename a directory
+// away and put its own at the same path, swap a file for a link, or add an entry to a list. So the backup does not try to
+// win those races one by one. It REFUSES to work in a folder that another account can change: the output folder, the temp
+// folder (where the work directory is made) and every folder above each of them. The per-path checks that came before (the
+// access list of the work directory read back, the two lstat checks of backup.log, the mode checks) stay as a second net,
+// and the races they cover need write access to one of these folders, which is refused here.
+
+// The rights of an allow entry that let an account ADD, DELETE, RENAME or RE-PERMISSION entries of a folder: add file / write
+// data (0x2), add subdirectory / append (0x4), delete child (0x40), delete (0x10000), write DAC (0x40000), write owner
+// (0x80000), generic write (0x40000000) and generic all (0x10000000).
+const DANGEROUS_ON_FOLDER = 0x2 | 0x4 | 0x40 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000
+// For a folder ABOVE: the rights that let an account move or replace the whole subtree. Creating a new folder in it (0x4) is
+// fine: the root of the system drive grants that to every signed-in account by default.
+const DANGEROUS_ON_ANCESTOR = 0x40 | 0x10000 | 0x40000 | 0x80000 | 0x40000000 | 0x10000000
+
+// The two-letter codes of SDDL for access rights, as the bits they stand for. The directory service codes (DC, LC, SW, RP, WP,
+// DT, LO, CR) are the bit that they share with the file rights, because Windows writes a mask of that one bit with that code:
+// the default access list of the system drive has LC (0x4, add subdirectory) for every signed-in account, and DC is 0x2 (add
+// file) and DT is 0x40 (delete child). CC (0x1, which for a file system is only "list the folder") is read the careful way, as
+// the right to add: the same code means "create child" in the directory service.
+const SDDL_RIGHTS = {
+  GA: 0x10000000, GR: 0x80000000, GW: 0x40000000, GX: 0x20000000,
+  RC: 0x20000, SD: 0x10000, WD: 0x40000, WO: 0x80000,
+  FA: 0x1f01ff, FR: 0x120089, FW: 0x100116, FX: 0x1200a0,
+  KA: 0xf003f, KR: 0x20019, KW: 0x20006, KX: 0x20019,
+  CC: 0x1 | 0x2 | 0x4, DC: 0x2, LC: 0x4, SW: 0x8, RP: 0x10, WP: 0x20, DT: 0x40, LO: 0x80, CR: 0x100,
+}
+// The trustees that may change a folder: the system, the administrators, TrustedInstaller (the owner of the system drive) and the
+// current user. Administrators and the system can read everything on the machine anyway, so trusting them loses nothing.
+const SDDL_ALIASES = { SY: 'S-1-5-18', BA: 'S-1-5-32-544' }
+const TRUSTED_SIDS = ['S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464']
+
+/**
+ * Reads a security descriptor in SDDL (as Get-Acl writes it, with SIDs, which do not depend on the language of Windows) into
+ * { owner (a SID or an alias, or null), aces: [{ type, flags (a list like ['OI', 'CI', 'IO']), mask (a number), sid }],
+ * nullDacl }. Throws an Error when something cannot be read: a missing DACL section, an entry that is not a plain allow or
+ * deny (a conditional one, an audit one, one with a resource attribute), a right that is not known. Nothing is guessed.
+ */
+export function parseSddl(sddl) {
+  const text = String(sddl ?? '').trim()
+  const parts = /^(?:O:(S-1-[\d-]+|[A-Z]{2}))?(?:G:(?:S-1-[\d-]+|[A-Z]{2}))?D:([A-Z_]*?)((?:\([^()]*\))*)(?:S:.*)?$/.exec(text)
+  if (!parts) throw new Error('the security descriptor cannot be read')
+  const [, owner = null, daclFlags, list] = parts
+  if (/NO_ACCESS_CONTROL/.test(daclFlags)) return { owner, aces: [], nullDacl: true }
+  const aces = []
+  for (const [, body] of list.matchAll(/\(([^()]*)\)/g)) {
+    const fields = body.split(';')
+    const [type, flags = '', rights = '', , , trustee = ''] = fields
+    if (!['A', 'D', 'OA', 'OD'].includes(type) || fields.length !== 6) throw new Error('an entry of the security descriptor cannot be read')
+    let mask
+    if (/^0x[0-9a-f]+$/i.test(rights)) mask = Number.parseInt(rights, 16)
+    else if (/^(?:[A-Z]{2})+$/.test(rights)) {
+      mask = 0
+      for (const code of rights.match(/[A-Z]{2}/g)) {
+        if (!(code in SDDL_RIGHTS)) throw new Error('a right of the security descriptor is not known')
+        mask |= SDDL_RIGHTS[code]
+      }
+    } else throw new Error('a right of the security descriptor cannot be read')
+    if (!/^(?:S-1-[\d-]+|[A-Z]{2})$/.test(trustee)) throw new Error('a trustee of the security descriptor cannot be read')
+    aces.push({ type, flags: flags.match(/[A-Z]{2}/g) ?? [], mask: mask >>> 0, sid: trustee })
+  }
+  return { owner, aces, nullDacl: false }
+}
+
+/**
+ * What lets another account change a folder, from its SDDL, as a short reason, or null when only the trusted ones can.
+ * `kind` is 'folder' (the output folder, the temp folder: no right to add, delete, rename or re-permission entries) or
+ * 'ancestor' (a folder above one of them: no right to delete, delete a child, re-permission, or take ownership: any of those
+ * can move or replace the subtree). `user` is the SID of the current user. A deny entry is ignored (it only takes rights
+ * away), an inherit-only entry is ignored (it does not apply to the folder), and the owner counts, because an owner can
+ * re-permission the folder whatever its list says. Throws like parseSddl: an unreadable descriptor is a refusal.
+ */
+export function sharedAclProblem(sddl, { user, kind }) {
+  const trusted = new Set([...TRUSTED_SIDS, user])
+  const sidOf = (id) => SDDL_ALIASES[id] ?? id
+  const { owner, aces, nullDacl } = parseSddl(sddl)
+  if (nullDacl) return 'it has no access list at all, which gives every account full control'
+  if (owner && !trusted.has(sidOf(owner))) return 'it is owned by another account'
+  const dangerous = kind === 'folder' ? DANGEROUS_ON_FOLDER : DANGEROUS_ON_ANCESTOR
+  for (const ace of aces) {
+    if (ace.type === 'D' || ace.type === 'OD') continue
+    if (ace.flags.includes('IO')) continue
+    if (trusted.has(sidOf(ace.sid))) continue
+    if ((ace.mask & dangerous) !== 0) return 'another account is allowed to change it'
+  }
+  return null
+}
+
+/** The folders that a run relies on, as { path, kind }: the nearest existing one of `base` is a 'folder', each folder above it an 'ancestor'. */
+function folderChain(base, files, pathApi) {
+  let first = base // as it is: the callers pass absolute paths, and resolving a Windows path on another system would change it
+  while (!files.existsSync(first) && pathApi.dirname(first) !== first) first = pathApi.dirname(first)
+  const chain = [{ path: first, kind: 'folder' }]
+  for (let cur = first; pathApi.dirname(cur) !== cur; ) {
+    cur = pathApi.dirname(cur)
+    chain.push({ path: cur, kind: 'ancestor' })
+  }
+  return chain
+}
+
+/** The message of a refusal: which of the folders is not private, and what to do. No account and no path. */
+export function sharedFoldersMessage(problems) {
+  const names = { output: 'the backup folder', temp: 'the temp folder' }
+  const parts = problems.map(({ which, level }) => (level === 'itself' ? `${names[which]} itself` : `a folder above ${names[which]}`))
+  return `${SHARED_FOLDERS_PREFIX}${[...new Set(parts)].join(', ')}${SHARED_FOLDERS_ADVICE}`
+}
+
+/** powershell.exe by its full path in System32 (the bare name could be another program, and a scheduled task has another PATH). */
+export function powershellTool(env = {}) {
+  return windowsTool('WindowsPowerShell\\v1.0\\powershell.exe', env)
+}
+
+// Reads the security descriptors of all the paths in ONE call: the paths go in an environment variable, joined with | (which no
+// file name has), so there is no quoting and nothing to inject; the script is passed encoded, so there is no quoting there either;
+// the output is "index TAB sddl" per path, in ASCII, so the language and the code page of the console do not matter. -Command and
+// -EncodedCommand are not subject to the execution policy. icacls /save would write a file, which is something to swap.
+const SDDL_SCRIPT =
+  "$ErrorActionPreference = 'Stop'; $paths = $env:BQR_ACL_PATHS.Split('|'); " +
+  'for ($i = 0; $i -lt $paths.Length; $i++) { Write-Output ([string]$i + [char]9 + (Get-Acl -LiteralPath $paths[$i]).Sddl) }'
+
+async function readSddls({ paths, runner, env }) {
+  const encoded = Buffer.from(SDDL_SCRIPT, 'utf16le').toString('base64')
+  const result = await runner(powershellTool(env), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
+    env: { ...cleanEnv(env), BQR_ACL_PATHS: paths.join('|') },
+    timeoutMs: SDDL_TIMEOUT_MS,
+  })
+  if (result.problem || result.status !== 0) return null
+  const found = new Map()
+  for (const line of String(result.stdout ?? '').split(/\r?\n/)) {
+    const match = /^(\d+)\t(.+)$/.exec(line.trim())
+    if (match) found.set(Number(match[1]), match[2])
+  }
+  return paths.map((_, index) => found.get(index) ?? null)
+}
+
+/**
+ * Before anything is created: is a folder of this run one that another account can change? Returns { problems ([{ which
+ * ('output' or 'temp'), level ('itself' or 'above') }]) } or { unreadable: true } when the access lists could not be read.
+ * On Windows the security descriptors of the output folder (or, for one that is not made yet, the nearest folder that exists:
+ * what is made in it inherits from it), of the temp folder, and of every folder above each, are read with one PowerShell call
+ * and judged by sharedAclProblem. On macOS and Linux the temp folder must not be writable by group or others unless it has
+ * the sticky bit (then nobody else can rename our 0700 directory away: this is /tmp), and no folder above the output folder or
+ * above the temp folder may be writable by others without the sticky bit. (A folder above that only a GROUP can write in is not
+ * refused: the group is usually the user's own, and its members are not known here. The output folder itself is checked, with
+ * group and others, once it exists.)
+ */
+async function checkFoldersNotShared({ platform, outDir, tmpdir, files, runner, env, owner }) {
+  const targets = [
+    { which: 'output', base: outDir },
+    { which: 'temp', base: tmpdir },
+  ]
+  const problems = []
+  const add = (which, level) => {
+    if (!problems.some((problem) => problem.which === which && problem.level === level)) problems.push({ which, level })
+  }
+  if (platform === 'win32') {
+    const user = /^\*(S-1-[\d-]+)$/.exec(owner?.id ?? '')?.[1]
+    if (!user) return { unreadable: true } // (windowsOwner always gives a SID: this is only for a stub that does not)
+    const chains = targets.map(({ which, base }) => ({ which, chain: folderChain(base, files, path.win32) }))
+    const paths = [...new Set(chains.flatMap(({ chain }) => chain.map(({ path: folder }) => folder)))]
+    const sddls = await readSddls({ paths, runner, env })
+    if (!sddls || sddls.some((sddl) => sddl === null)) return { unreadable: true }
+    for (const { which, chain } of chains) {
+      for (const { path: folder, kind } of chain) {
+        let reason
+        try {
+          reason = sharedAclProblem(sddls[paths.indexOf(folder)], { user, kind })
+        } catch {
+          return { unreadable: true }
+        }
+        if (reason) add(which, kind === 'folder' ? 'itself' : 'above')
+      }
+    }
+    return { problems }
+  }
+  const modeOf = (folder) => {
+    try {
+      return files.statSync(folder).mode
+    } catch {
+      return undefined
+    }
+  }
+  for (const { which, base } of targets) {
+    for (const { path: folder, kind } of folderChain(base, files, path)) {
+      const mode = modeOf(folder)
+      if (mode === undefined) return { unreadable: true }
+      const sticky = (mode & 0o1000) !== 0
+      if (kind === 'folder' && which === 'temp' && (mode & 0o022) !== 0 && !sticky) add(which, 'itself')
+      // A folder above is refused when OTHERS can write in it. For an output folder that is not made yet, the nearest folder that
+      // exists stands in for it (the new folder will be made in it), under the same rule: the folder itself is judged by its own
+      // mode, with group and others, as soon as it exists.
+      const standsIn = kind === 'folder' && which === 'output' && folder !== base
+      if ((kind === 'ancestor' || standsIn) && (mode & 0o002) !== 0 && !sticky) add(which, standsIn ? 'itself' : 'above')
+    }
+  }
+  return { problems }
 }
 
 // ---- the connection string -----------------------------------------------------------------------------------------
@@ -891,7 +1102,6 @@ export async function runBackup(options, deps = {}) {
     tmpdir = os.tmpdir(),
     fs: files = fs,
     umask = setProcessUmask,
-    userName = () => os.userInfo().username,
     out = console.log,
     err = console.error,
   } = deps
@@ -929,7 +1139,7 @@ export async function runBackup(options, deps = {}) {
   let scrub = makeScrubber(undefined, hiddenFolders)
   // The user that owns the files, for icacls on Windows: asked once, when the first file needs it.
   let ownerAsked
-  const ownerOf = () => (ownerAsked ??= windowsOwner({ runner, env, userName }))
+  const ownerOf = () => (ownerAsked ??= windowsOwner({ runner, env }))
   let host = '-'
   let folderIsOpen = false
   let result
@@ -945,6 +1155,36 @@ export async function runBackup(options, deps = {}) {
     if (windows && Math.max(longestInTemp, path.join(outDir, finalName).length) > WINDOWS_PATH_LIMIT) {
       logSkipped = '' // the folder is not made, so there is no place for a log, and the message of the failure says it all
       throw new Error(PATH_TOO_LONG_ERROR)
+    }
+    // Nothing is made before the folders that the run relies on are known not to be changeable by another account (see
+    // checkFoldersNotShared): the output folder, the temp folder and every folder above each. On Windows this needs the SID of the user.
+    let early
+    if (windows) {
+      try {
+        early = await ownerOf()
+      } catch (error) {
+        logSkipped = '' // nothing is known about the folders yet, so no log is written in the output folder
+        throw error
+      }
+    }
+    const shared = await checkFoldersNotShared({ platform, outDir, tmpdir, files, runner, env, owner: early })
+    if (shared.unreadable) {
+      logSkipped = '' // the output folder is not known to be private, so no log is written in it, and the message says it all
+      throw new Error(SHARED_UNREADABLE_ERROR)
+    }
+    if (shared.problems.length) {
+      // The log lives in the output folder: when that is the one that is not private, nothing is written there.
+      if (shared.problems.some(({ which }) => which === 'output')) logSkipped = LOG_SKIPPED
+      else if (posix && files.existsSync(outDir)) {
+        // Only the temp folder is the problem, and the log of this failure goes in the output folder, which on macOS and Linux is
+        // judged by its own mode only later: judge it now, so that a log is never written in a folder that others can change.
+        let mode
+        attempt(() => {
+          mode = files.statSync(outDir).mode
+        })
+        if (mode === undefined || (mode & 0o022) !== 0) logSkipped = LOG_SKIPPED
+      }
+      throw new Error(sharedFoldersMessage(shared.problems))
     }
     files.mkdirSync(outDir, { recursive: true, mode: PRIVATE_FOLDER })
     if (posix) {
@@ -1143,6 +1383,13 @@ export async function runBackup(options, deps = {}) {
   // in between: then nothing is written, and the screen says why.
   if (logSkipped === null && !logIsRegular(files, logPath)) logSkipped = LOG_NOT_REGULAR_ERROR
   const logAllowed = logSkipped === null // (a log in a folder that others can write could be a link to another file of the owner)
+  // A refusal before anything was made (a temp folder that others can change) leaves the output folder missing. That folder was
+  // judged private, so it is made now, to have a place for the line of the failure.
+  if (logAllowed) {
+    attempt(() => {
+      if (!files.existsSync(outDir)) files.mkdirSync(outDir, { recursive: true, mode: PRIVATE_FOLDER })
+    })
+  }
   if (windows && logAllowed) {
     try {
       if (!files.existsSync(logPath)) {

@@ -96,6 +96,31 @@ and its size, or a short error. It never holds the connection string, the user o
 
 **Who can read them.** Only the owner, because the dump holds attendance data.
 
+- **A folder that another account can change is refused.** Every check of a path before the path is used has a short gap in
+  which an account that can write in that folder could rename a directory away and put its own at the same path, swap a file
+  for a link, or add an access entry of its own. So the script does not try to win those races one by one: before it makes
+  anything, it looks at the backup folder, at the temp folder (where the work directory is made) and at every folder above each
+  of them up to the root, and it stops (exit code 1, nothing made, nothing dumped, nothing rotated) when another account can
+  change one of them. On Windows it reads the access lists as SDDL (with SIDs, so the language of Windows does not matter) with
+  one `powershell.exe` call (`Get-Acl`, the paths in an environment variable, a few tenths of a second in all), and trusts
+  only your own account, the system (`S-1-5-18`), the administrators (`S-1-5-32-544`) and TrustedInstaller. For the backup
+  folder and the temp folder themselves, an allow entry for any other account that gives add file, add subfolder, delete a
+  child, delete, change the permissions, take ownership, or generic write or all (also through an alias such as `FA`, `FW`,
+  `GA`, `GW`, `WD`, `WO` or `SD`) refuses the run; for the folders above them the same, except add file and add subfolder (the
+  root of the system drive lets every signed-in account create a folder, and that is fine). An entry that only applies to what
+  is made inside (inherit-only) and a deny entry are ignored. A folder owned by another account is refused. An access list that
+  cannot be read, or has an entry that is not understood (a conditional one), is refused too: nothing that is not understood is
+  trusted. On macOS and Linux the temp folder must not be writable by the group or others unless it has the sticky bit (this is
+  `/tmp`), no folder above the backup folder or the temp folder may be writable by others without the sticky bit, and the
+  backup folder itself is judged as before (the group or others can write in it: refused). A folder above that only the group
+  can write in is not refused, because its members are not known. The message says which one is the problem (the backup
+  folder or the temp folder, itself or a folder above it), never an account or a path, and what to do: use a backup folder in
+  your own profile, and set `TEMP` (Windows) or `TMPDIR` (macOS and Linux) to a private folder in your own profile. When the
+  backup folder is the problem, `backup.log` is not written (the screen says so); when only the temp folder is, the failure is
+  logged as usual, and `--report-issue` opens its issue. On a shared computer, where `%TEMP%` has an explicit Modify entry for
+  another account, the default `%TEMP%` is refused: give the scheduled task a `TEMP` of its own. The checks below stay as a
+  second net (the work directory's access list read back, the two looks at `backup.log`, the mode checks), and the races that
+  they cover need write access to one of these folders, which this check refuses.
 - **A private work directory in your own temp folder.** Every run makes its own directory there (`bqr-work-<random>`, in
   `%TEMP%` on Windows, `$TMPDIR` or `/tmp` on macOS and Linux), with a name nobody can guess, and does all of its work in it:
   the dump is written there, both checks run there, and the mode or access list is set and checked there. Only then is the
@@ -103,9 +128,8 @@ and its size, or a short error. It never holds the connection string, the user o
   made inside the backup folder. Somebody who can write in the backup folder could add an access entry of their own to a
   directory made there (an inheritable one, which neither removing inheritance nor granting your account replaces) in the
   moment between its creation and the moment it is closed, or swap a file's path for a file of their own, because the program
-  that dumps (`pg_dump`) opens a file by its path. The temp folder of your account can be written only by your account (on
-  Windows it is inside your profile; on macOS and Linux the directory is made with mode 700 in one step), so none of that is
-  possible there. At most somebody who can write in the backup folder can replace the finished file afterwards, and the data
+  that dumps (`pg_dump`) opens a file by its path. The temp folder is checked, as above, not to be changeable by another
+  account (and on macOS and Linux the directory is made with mode 700 in one step), so none of that is possible there. At most somebody who can write in the backup folder can replace the finished file afterwards, and the data
   in it was never readable by them. A leftover work directory (a run that was killed) is only ever removed by hand: the
   script never touches the work directory of another run.
 - **The backup folder must be on the same drive as the temp folder.** The finished file is moved with a rename, which keeps its
@@ -133,9 +157,8 @@ and its size, or a short error. It never holds the connection string, the user o
   so a name with a space or in another alphabet does not matter. The rename into the backup folder keeps the list (checked on
   Windows 11), and `backup.log` gets the same list when it is created. If `icacls` is missing or fails, the backup stops
   before anything is dumped, `backup.log` says why, and nothing is rotated. You can look at the result with `icacls <file>`: it
-  must list only your own account (the administrators and the system are not on the list either, on purpose). Windows has no
-  refusal for a backup folder that others can write in, because the access list of a folder is not read there, so the choice
-  of the folder matters more. The tools of Windows (`icacls`, and many others) cannot open a path of more than about 260
+  must list only your own account (the administrators and the system are not on the list either, on purpose). The tools of
+  Windows (`icacls`, and many others) cannot open a path of more than about 260
   characters, so the script refuses, before it makes anything, a backup folder or a temp folder whose paths would be longer
   than 245 characters (the names inside the work directory are short): use a short backup folder, such as
   `C:\backups\building-qr` or one directly under your profile.
@@ -235,6 +258,9 @@ Register-ScheduledTask -TaskName 'Building QR daily backup' -Action $action -Tri
 makes the backup when it is next on. Without `-User` and `-Password` the task runs as the signed-in user, only while that user
 is signed in. In the Task Scheduler window the same settings are on the **Settings** tab and under **Security options**
 ("Run only when user is logged on"). Run the task once by hand from the window and read `backup.log` before you rely on it.
+If the run is refused because another account can change a folder that it relies on (the first item of "Who can read
+them"), the backup folder must move into your own profile, and on a shared computer the task must start with a `TEMP` of its
+own (for example from a small `.cmd` file in your profile that sets `TEMP` to a private folder and then runs `node`).
 
 **On macOS or Linux** a cron line does the same (`crontab -e`). Cron has a short `PATH`, so use full paths, or set `PATH` at
 the top of the crontab so that `node`, `neon`, `pg_dump` and `gh` are found:
