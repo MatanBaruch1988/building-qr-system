@@ -1,27 +1,34 @@
 // Authorization is opt-in per handler: every committee route calls requireAdmin(req) itself, every provider route
 // requireProvider(req), every agent route requireApiKey(req). A forgotten call would leave a route open and nothing
 // would notice, so this test walks EVERY registered route (server/router.js, routeTable()) and proves that each route
-// that is not on the PUBLIC list below refuses a request that carries no usable credentials.
+// that is not on the PUBLIC list below is guarded, and guarded by the right check.
 //
 // How it works:
 //   - A route is protected unless it is on PUBLIC. A new route does not need an edit here when it checks authorization
-//     first: it is picked up from the table and tested automatically.
-//   - A new route that is meant to be open, and a protected route that forgets its check, both fail the same test:
-//     the route answers something other than 401. The fix is the authorization call at the top of the handler, or an
-//     entry in PUBLIC with the reason (a reviewer reads that line).
+//     first with the right guard: it is picked up from the table and tested automatically.
+//   - The guard a protected route must use comes from its path (GUARDS below): /admin/ routes need a committee session,
+//     /agent/v1/ routes and /health/db an agent key, the provider routes a provider device token. A protected route
+//     that fits none of those rules fails loudly, so a new route group needs a rule here.
 //   - Each protected route is called with no credentials, and with every kind of malformed credential (a cookie or a
 //     bearer token that does not exist, with and without the prefixes qra_, qrp_ and qrk_). All of them must get a 401
-//     that comes from an authorization check, and must not leak data or set a cookie.
-//   - The last describe block proves that the check itself notices an open route, and one that validates its input
-//     before it checks authorization.
-// Some checks look the credential up in the database, so this runs against the throwaway schema like the other API
-// tests. Random UUIDs stand in for path parameters, so even a route that was left open would find nothing to change.
+//     with the code of THAT route's guard (not just any guard's), and must not leak data or set a cookie.
+//   - Each protected route is also called with VALID credentials of the other two roles (a real committee session, a
+//     real provider device token, a real agent key, all made in the throwaway schema), sent the usual way and the wrong
+//     way round (a bearer token in the cookie, a cookie value as a bearer token). It must refuse them with the 401 of
+//     its own guard, so a route that is switched to another role's guard is noticed.
+//   - A new route that is meant to be open, a protected route that forgets its check, and one that uses the wrong
+//     check all fail. The fix is the right authorization call at the top of the handler, or, for a route that is meant
+//     to be open, an entry in PUBLIC with the reason (a reviewer reads that line).
+//   - The last describe block proves that the checks notice these mistakes (an open route, a route that validates its
+//     input before it checks authorization, and a route guarded by another role's check).
+// Credentials are looked up in the database, so this runs against the throwaway schema like the other API tests.
+// Random UUIDs stand in for path parameters, so even a route that was left open would find nothing to change.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { setupDb, call } from './helpers.js'
+import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
 import '../server/index.js' // importing it registers every route file with the router
 import { route, routeTable } from '../server/router.js'
-import { requireAdmin } from '../server/auth.js'
+import { requireAdmin, requireProvider, requireApiKey } from '../server/auth.js'
 import { bad, unauthorized } from '../server/http.js'
 import { ADMIN_COOKIE } from '../server/config.js'
 
@@ -30,6 +37,7 @@ import { ADMIN_COOKIE } from '../server/config.js'
 const PUBLIC = [
   { method: 'GET', path: '/health', why: 'Uptime monitor liveness check; answers ok and the commit, never queries the database.' },
   { method: 'GET', path: '/public/providers', why: 'Names for the provider login tiles, shown before anyone has signed in (company, contact name, service type only).' },
+  { method: 'GET', path: '/public/building', why: 'The building address for the header of the provider app, shown before sign-in; only the address, nothing else about the building.' },
   { method: 'GET', path: '/public/points/resolve', why: 'Lets the phone show the name of a point before sign-in; returns name, description, active flag and GPS mode, never the token or the coordinates.' },
   { method: 'POST', path: '/session', why: 'Provider sign-in: the password in the body is the credential, and attempts are throttled.' },
   { method: 'POST', path: '/admin/google', why: 'Committee sign-in: the Google ID token in the body is the credential, checked with Google and against the committee list.' },
@@ -38,21 +46,41 @@ const PUBLIC = [
   { method: 'POST', path: '/admin/logout', why: 'Ends the session named by the cookie, if there is one, and clears the cookie; works the same without a cookie and reveals nothing.' },
 ]
 
+// The three guards of server/auth.js. `owns` says which paths must use it. `missing` is the exact 401 code for a request
+// that carries nothing of that kind (also what a valid credential of another role gets); `codes` is every 401 code the
+// guard may give (an agent key that does not exist is api_key_invalid, one that is missing or has no qrk_ prefix is
+// api_key_required). A 401 with any other code does not prove that this guard ran.
+const GUARDS = {
+  committee: { owns: /^\/admin\//, missing: 'admin_required', codes: ['admin_required'] },
+  provider: { owns: /^\/(session|scan|scans\/sync|my\/.*)$/, missing: 'invalid_session', codes: ['invalid_session'] },
+  agent: { owns: /^\/(agent\/v1\/.*|health\/db)$/, missing: 'api_key_required', codes: ['api_key_required', 'api_key_invalid'] },
+}
+
+/** The guard a protected route must use, from its path. Throws for a path that no rule owns (or that two rules own). */
+function guardOf(path) {
+  const owners = Object.keys(GUARDS).filter((name) => GUARDS[name].owns.test(path))
+  if (owners.length !== 1) {
+    throw new Error(
+      `${path} fits ${owners.length === 0 ? 'no guard rule' : `several guard rules (${owners.join(', ')})`}. ` +
+        'If the route is meant to answer without credentials, add it to PUBLIC (tests/route-auth.test.js) with the reason. ' +
+        'Otherwise add or fix its rule in GUARDS so that the test knows which role it needs.',
+    )
+  }
+  return owners[0]
+}
+
 // Read once, before any test registers a route of its own, so that the generated tests are the routes of the real API.
 const ROUTES = routeTable()
 const keyOf = (r) => `${r.method} ${r.path}`
 const publicKeys = new Set(PUBLIC.map(keyOf))
 const PROTECTED = ROUTES.filter((r) => !publicKeys.has(keyOf(r)))
 
-// The 401 codes that server/auth.js throws: a 401 for any other reason (a bad Google token, a wrong password) does not
-// prove that an authorization check ran.
-const GUARD_CODES = new Set(['admin_required', 'invalid_session', 'api_key_required', 'api_key_invalid'])
-
 const token = (prefix = '') => prefix + randomBytes(32).toString('base64url')
 
 // What a request can carry that is not a valid credential. Each entry builds fresh values, so no two routes share one.
+// The third item is true for the request with nothing at all, which must get the guard's exact `missing` code.
 const CREDENTIALS = [
-  ['no credentials at all', () => ({})],
+  ['no credentials at all', () => ({}), true],
   ['an admin cookie that does not exist', () => ({ cookie: `${ADMIN_COOKIE}=${token()}` })],
   ['an admin cookie with the qra_ prefix that does not exist', () => ({ cookie: `${ADMIN_COOKIE}=${token('qra_')}` })],
   ['an admin cookie that cannot be decoded', () => ({ cookie: `${ADMIN_COOKIE}=%` })],
@@ -64,27 +92,61 @@ const CREDENTIALS = [
   ['an Authorization header of another scheme', () => ({ headers: { authorization: `Basic ${token('qrk_')}` } })],
 ]
 
-const HOW_TO_FIX =
-  'A route that is not on the PUBLIC list of tests/route-auth.test.js must call requireAdmin, requireProvider or ' +
-  'requireApiKey as the first thing its handler does (before it reads the body or looks anything up). If the route is ' +
-  'meant to answer without credentials, add it to PUBLIC with the reason.'
+// The secret of each role, made in beforeAll: the value of the committee session cookie, the provider device token
+// from POST /session, and the agent key from POST /admin/api-keys.
+let VALID = {}
+const asCookie = (value) => ({ cookie: `${ADMIN_COOKIE}=${value}` })
+const asBearer = (value) => ({ token: value })
+// Where a role's secret normally travels, then the wrong place (it is still a valid secret, but sent the wrong way).
+const PLACES = {
+  committee: [['', asCookie], [' sent as a bearer token', asBearer]],
+  provider: [['', asBearer], [' sent in the admin cookie', asCookie]],
+  agent: [['', asBearer], [' sent in the admin cookie', asCookie]],
+}
 
-/** Every way that `r` fails to refuse a request without usable credentials, as a list of sentences (empty when it is fine). */
-async function authProblems(r) {
+const HOW_TO_FIX =
+  'A route that is not on the PUBLIC list of tests/route-auth.test.js must call its guard as the first thing its ' +
+  'handler does (before it reads the body or looks anything up): requireAdmin for /admin/ routes, requireApiKey for ' +
+  '/agent/v1/ routes and /health/db, requireProvider for the provider routes (see GUARDS). If the route is meant to ' +
+  'answer without credentials, add it to PUBLIC with the reason.'
+
+const urlOf = (r) => '/api' + r.path.replace(/:[A-Za-z_]\w*/g, () => randomUUID())
+const bodyOf = (r) => (r.method !== 'GET' && r.method !== 'HEAD' ? { body: {} } : {})
+
+/** One request that must be refused with the 401 of `guard`: the sentence that says how it was not, or null. */
+async function refusal(r, guard, label, creds, exact) {
+  const res = await call(r.method, urlOf(r), { ...bodyOf(r), ...creds })
+  const code = res.json?.error?.code
+  const want = exact ? [GUARDS[guard].missing] : GUARDS[guard].codes
+  if (res.status !== 401) return `with ${label} it answered ${res.status}${code ? ` (${code})` : ''}, expected 401`
+  if (!want.includes(code)) {
+    return `with ${label} it answered 401 (${code}), expected ${want.join(' or ')} (the code of the ${guard} guard)`
+  }
+  if (res.json && Object.keys(res.json).some((k) => k !== 'error')) {
+    return `with ${label} the 401 holds more than an error: ${Object.keys(res.json).join(', ')}`
+  }
+  if (res.headers['set-cookie'] !== undefined) return `with ${label} it set a cookie`
+  return null
+}
+
+/** Every way that `r` fails to refuse a request without a valid credential of its own role, as sentences (empty when fine). */
+async function authProblems(r, guard = guardOf(r.path)) {
   const problems = []
-  const path = '/api' + r.path.replace(/:[A-Za-z_]\w*/g, () => randomUUID())
-  const withBody = r.method !== 'GET' && r.method !== 'HEAD'
-  for (const [label, build] of CREDENTIALS) {
-    const res = await call(r.method, path, { ...(withBody ? { body: {} } : {}), ...build() })
-    const code = res.json?.error?.code
-    if (res.status !== 401) {
-      problems.push(`with ${label} it answered ${res.status}${code ? ` (${code})` : ''}, expected 401`)
-    } else if (!GUARD_CODES.has(code)) {
-      problems.push(`with ${label} it answered 401 (${code}), which is not an authorization check's code`)
-    } else if (res.json && Object.keys(res.json).some((k) => k !== 'error')) {
-      problems.push(`with ${label} the 401 holds more than an error: ${Object.keys(res.json).join(', ')}`)
+  for (const [label, build, exact] of CREDENTIALS) {
+    const problem = await refusal(r, guard, label, build(), exact)
+    if (problem) problems.push(problem)
+  }
+  return problems
+}
+
+/** Every way that `r` fails to refuse the VALID credentials of the other two roles, as sentences (empty when fine). */
+async function crossRoleProblems(r, guard = guardOf(r.path)) {
+  const problems = []
+  for (const role of Object.keys(GUARDS).filter((name) => name !== guard)) {
+    for (const [how, place] of PLACES[role]) {
+      const problem = await refusal(r, guard, `a valid ${role} credential${how}`, place(VALID[role]), true)
+      if (problem) problems.push(problem)
     }
-    if (res.headers['set-cookie'] !== undefined) problems.push(`with ${label} it set a cookie`)
   }
   return problems
 }
@@ -93,6 +155,25 @@ let db
 
 beforeAll(async () => {
   db = await setupDb()
+  await seedAdmin(db.pool)
+  const cookie = await adminCookie()
+  const provider = await call('POST', '/api/admin/providers', {
+    cookie,
+    body: { company: 'Route auth test company', contact_name: 'Route auth tester', password: 'route-auth-pass-1' },
+  })
+  const signedIn = await call('POST', '/api/session', {
+    body: { provider_id: provider.json.provider.id, password: 'route-auth-pass-1' },
+  })
+  const key = await call('POST', '/api/admin/api-keys', { cookie, body: { name: 'route-auth' } })
+  VALID = {
+    committee: cookie.slice(cookie.indexOf('=') + 1),
+    provider: signedIn.json.token,
+    agent: key.json.key,
+  }
+  // The three secrets must be real ones, or the cross-role tests below would prove nothing.
+  expect(VALID.committee).toMatch(/^qra_/)
+  expect(VALID.provider).toMatch(/^qrp_/)
+  expect(VALID.agent).toMatch(/^qrk_/)
 })
 afterAll(async () => db?.teardown())
 
@@ -149,6 +230,39 @@ describe('the PUBLIC list', () => {
   })
 })
 
+describe('the guards', () => {
+  it('every protected route belongs to exactly one guard, which says what credential it needs', () => {
+    const unowned = []
+    for (const r of PROTECTED) {
+      try {
+        guardOf(r.path)
+      } catch (err) {
+        unowned.push(`${keyOf(r)}: ${err.message}`)
+      }
+    }
+    expect(unowned, `a protected route fits no single guard rule:\n${unowned.join('\n')}\n`).toEqual([])
+  })
+
+  it('fails loudly for a path that no rule owns', () => {
+    expect(() => guardOf('/canary/unknown-group')).toThrow(/fits no guard rule/)
+  })
+
+  it('has a real committee session, provider device token and agent key, each accepted by its own routes', async () => {
+    const sample = (guard) => PROTECTED.find((r) => r.method === 'GET' && !r.path.includes(':') && guardOf(r.path) === guard)
+    const plain = {
+      committee: asCookie(VALID.committee),
+      provider: asBearer(VALID.provider),
+      agent: asBearer(VALID.agent),
+    }
+    for (const guard of Object.keys(GUARDS)) {
+      const r = sample(guard)
+      expect(r, `no protected GET route without a parameter for the ${guard} guard`).toBeDefined()
+      const res = await call(r.method, urlOf(r), plain[guard])
+      expect(res.status, `${keyOf(r)} with a valid ${guard} credential: ${res.text}`).toBe(200)
+    }
+  })
+})
+
 describe('every protected route refuses a request without usable credentials', () => {
   for (const r of PROTECTED) {
     it(`${r.method} ${r.path}`, async () => {
@@ -158,45 +272,86 @@ describe('every protected route refuses a request without usable credentials', (
   }
 })
 
-describe('the check itself', () => {
-  it('shows a route that is added later in the table', () => {
+describe('every protected route refuses the valid credentials of the other roles', () => {
+  for (const r of PROTECTED) {
+    it(`${r.method} ${r.path}`, async () => {
+      const problems = await crossRoleProblems(r)
+      expect(problems, `${keyOf(r)} accepts a credential of another role (it needs the ${guardOf(r.path)} guard).\n${HOW_TO_FIX}\n`).toEqual([])
+    })
+  }
+})
+
+describe('the checks themselves', () => {
+  it('show a route that is added later in the table', () => {
     route('GET', '/canary/new-route', async () => ({ ok: true }))
     expect(routeTable().map(keyOf)).toContain('GET /canary/new-route')
     expect(ROUTES.map(keyOf)).not.toContain('GET /canary/new-route') // the generated tests do not move under it
   })
 
-  it('catches a route that was added without an authorization check', async () => {
+  it('catch a route that was added without an authorization check', async () => {
     route('GET', '/canary/open/:id', async () => ({ ok: true }))
-    const problems = await authProblems({ method: 'GET', path: '/canary/open/:id' })
+    const r = { method: 'GET', path: '/canary/open/:id' }
+    const problems = await authProblems(r, 'committee')
     expect(problems.length).toBe(CREDENTIALS.length) // every kind of request got a 200
     expect(problems[0]).toMatch(/no credentials at all it answered 200, expected 401/)
+    expect((await crossRoleProblems(r, 'committee')).length).toBe(4) // and so did every credential of the other roles
   })
 
-  it('catches a route that validates its input before it checks authorization', async () => {
+  it('catch a route that validates its input before it checks authorization', async () => {
     route('POST', '/canary/validates-first', async ({ req, body }) => {
       if (!body.name) throw bad('missing_field', 'name is required')
       await requireAdmin(req)
       return { ok: true }
     })
-    const problems = await authProblems({ method: 'POST', path: '/canary/validates-first' })
+    const r = { method: 'POST', path: '/canary/validates-first' }
+    const problems = await authProblems(r, 'committee')
     expect(problems.length).toBe(CREDENTIALS.length)
     expect(problems[0]).toMatch(/answered 400 \(missing_field\), expected 401/)
+    expect((await crossRoleProblems(r, 'committee')).length).toBe(4)
   })
 
-  it('catches a 401 that does not come from an authorization check', async () => {
+  it('catch a 401 that does not come from an authorization check', async () => {
     route('GET', '/canary/other-401', async () => {
       throw unauthorized('google_invalid')
     })
-    const problems = await authProblems({ method: 'GET', path: '/canary/other-401' })
+    const problems = await authProblems({ method: 'GET', path: '/canary/other-401' }, 'committee')
     expect(problems.length).toBe(CREDENTIALS.length)
-    expect(problems[0]).toMatch(/answered 401 \(google_invalid\), which is not an authorization check's code/)
+    expect(problems[0]).toMatch(/answered 401 \(google_invalid\), expected admin_required/)
   })
 
-  it('passes a route that checks authorization first, with a path parameter', async () => {
-    route('POST', '/canary/guarded/:id', async ({ req }) => {
-      await requireAdmin(req)
-      return { ok: true }
+  // A route that is guarded, but by another role's check: the case that every credential being invalid cannot show.
+  const checks = { committee: requireAdmin, provider: requireProvider, agent: requireApiKey }
+  for (const needs of Object.keys(GUARDS)) {
+    for (const uses of Object.keys(GUARDS).filter((name) => name !== needs)) {
+      it(`catch a route of the ${needs} role that is guarded by the ${uses} check`, async () => {
+        const path = `/canary/${needs}-route-with-${uses}-check`
+        route('GET', path, async ({ req }) => {
+          await checks[uses](req)
+          return { ok: true }
+        })
+        const r = { method: 'GET', path }
+        // With no credentials it still answers 401, but with the wrong guard's code.
+        const missing = await authProblems(r, needs)
+        expect(missing.length).toBeGreaterThan(0)
+        expect(missing[0]).toMatch(new RegExp(`expected ${GUARDS[needs].missing} \\(the code of the ${needs} guard\\)`))
+        // And a valid credential of the role that the route really checks gets in (a 200), which is the real danger.
+        const cross = await crossRoleProblems(r, needs)
+        expect(cross.length).toBeGreaterThan(0)
+        expect(cross.some((p) => p.includes(`valid ${uses} credential`) && /answered 200/.test(p))).toBe(true)
+      })
+    }
+  }
+
+  for (const guard of Object.keys(GUARDS)) {
+    it(`pass a route of the ${guard} role that checks the ${guard} guard first, with a path parameter`, async () => {
+      const path = `/canary/guarded-${guard}/:id`
+      route('POST', path, async ({ req }) => {
+        await checks[guard](req)
+        return { ok: true }
+      })
+      const r = { method: 'POST', path }
+      expect(await authProblems(r, guard)).toEqual([])
+      expect(await crossRoleProblems(r, guard)).toEqual([])
     })
-    expect(await authProblems({ method: 'POST', path: '/canary/guarded/:id' })).toEqual([])
-  })
+  }
 })

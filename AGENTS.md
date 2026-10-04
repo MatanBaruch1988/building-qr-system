@@ -170,7 +170,9 @@ The same holds for the API and the offline sync payload (`POST /api/scans/sync`,
 Authorization is checked by each handler, so a new route must either refuse a request without credentials (its handler
 starts with `requireAdmin`, `requireProvider` or `requireApiKey`, before it reads the body or looks anything up) or be
 on the `PUBLIC` list of `tests/route-auth.test.js` with a one-line reason. That test walks every registered route
-(`routeTable()` in `server/router.js`) and fails for a route that answers anything but 401 without credentials.
+(`routeTable()` in `server/router.js`) and fails for a route that answers anything but 401 without credentials, or that
+accepts a valid credential of another role (committee session, provider device token, agent key). The guard that a route
+must use comes from its path (`GUARDS` in that test), so a new group of routes needs a rule there.
 
 ## Git and pull requests
 
