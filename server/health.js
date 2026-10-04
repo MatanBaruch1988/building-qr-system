@@ -6,8 +6,12 @@
 // it runs out (deadlines), and the handler races its query against what is left (timeLeft).
 import { requireApiKey } from './auth.js'
 import { Answer, ApiError } from './http.js'
+import { failureLabel } from './logSafe.js'
 
 export const DB_HEALTH_TIMEOUT_MS = 5_000
+
+/** The error of a request that used up its time limit. It has a code, because the log says only the code or name of an error. */
+export const healthTimeout = () => Object.assign(new Error('timed out'), { code: 'timeout' })
 
 // The first 7 characters of the commit that Vercel built (only a deployment from Git has one), else null.
 export const commit = () => (process.env.VERCEL_GIT_COMMIT_SHA ? process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 7) : null)
@@ -25,7 +29,7 @@ export function timeLeft(req) {
  * `requireApiKey` for GET /api/health/db. A missing, malformed or unknown key is refused exactly as by the plain guard (a
  * 401, and no query for a key that is not shaped like ours). When the lookup fails or does not finish within
  * DB_HEALTH_TIMEOUT_MS, the request is answered with the 503 of this route (`{ ok: false, commit }`) and nothing of the
- * cause: that goes to the log.
+ * cause: its code or name goes to the log, never its message (server/logSafe.js).
  */
 export async function requireApiKeyForHealth(req) {
   let timer
@@ -34,12 +38,12 @@ export async function requireApiKeyForHealth(req) {
     return await Promise.race([
       requireApiKey(req),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('timed out')), DB_HEALTH_TIMEOUT_MS)
+        timer = setTimeout(() => reject(healthTimeout()), DB_HEALTH_TIMEOUT_MS)
       }),
     ])
   } catch (err) {
     if (err instanceof ApiError) throw err // a refused key is a 401, not a database failure
-    console.error('health/db failed:', err.message)
+    console.error(`health/db failed: ${failureLabel(err)}`)
     throw new Answer({ status: 503, json: { ok: false, commit: commit() } })
   } finally {
     clearTimeout(timer)
