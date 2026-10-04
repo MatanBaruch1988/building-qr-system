@@ -123,7 +123,7 @@ export function useTodayVisits({ session, queue, refreshKey }) {
       .filter((q) => !known.has(q.id))
       .map((q) => ({ id: q.id, time: q.client_time, point: q.point_name ?? '', pending: true })),
   ]
-  return rows.sort((a, b) => new Date(b.time) - new Date(a.time))
+  return rows.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
 }
 
 /**

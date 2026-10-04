@@ -1,0 +1,46 @@
+{
+  // The type checker for the JavaScript of this project: `npm run typecheck` (CI runs it in the guards job).
+  // TypeScript only CHECKS the .js and .jsx files that are there, and JSDoc typedefs help it where it cannot infer a type.
+  // Nothing is converted, emitted or built with it. It is a jsconfig.json and not a tsconfig.json on purpose: Vite and Vitest
+  // look for a tsconfig.json and would apply its options (jsx, target, ...) to the .jsx files of the build, while an editor
+  // treats a jsconfig.json as "this is a JavaScript project". Nothing in the build or the tests depends on this file
+  // (Playwright reads `paths` and `baseUrl` from it, and there are none).
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+
+    // Not strict yet: `strict: true` reports 585 errors in this scope (469 of them noImplicitAny, 109 strictNullChecks). The
+    // strict flags that report nothing here are on already, so that they stay clean. The next steps are noImplicitAny and
+    // strictNullChecks, one at a time, and then the files that are not in "include" yet.
+    "strict": false,
+    "alwaysStrict": true,
+    "noImplicitThis": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictBuiltinIteratorReturn": true,
+
+    // Vite bundles the app, so an import resolves the way a bundler resolves it. The server runs on Node 24 as it is (ES
+    // modules). `target` and `lib` only decide which syntax and which names the checker knows (Vite sets the real target,
+    // see build.target in vite.config.js).
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "es2022",
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "jsx": "react-jsx",
+
+    // The global types: Node's (the server) and Vite's (import.meta, and the side-effect import of a .css file in the app).
+    // The types of a package come from the package itself (jose, vite) or from @types/* (pg, react, react-dom).
+    "types": ["node", "vite/client"],
+    "skipLibCheck": true,
+
+    // Do not check the JavaScript of packages. TypeScript 7 loads node_modules/punycode/punycode.js (through @types/node) and
+    // checks it, with ten errors, unless this is 0. TypeScript 5 did not.
+    "maxNodeModuleJsDepth": 0
+  },
+
+  // The first scope: the server, the code that the phone and the server share, and the provider's app (the phone). The
+  // committee's app (src/admin, src/pages/AdminApp.jsx, src/App.jsx, src/main.jsx) and the scripts come later. Until then
+  // nothing outside this list is checked, and an editor shows no new errors there.
+  "include": ["api", "server", "shared", "src/api", "src/worker", "src/i18n", "src/ui", "src/pages/WorkerApp.jsx"]
+}

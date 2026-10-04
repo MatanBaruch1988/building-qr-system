@@ -87,6 +87,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Type-check
+        run: npm run typecheck
+
       - name: Audit the production dependencies
         run: npm audit --omit=dev --audit-level=high
 

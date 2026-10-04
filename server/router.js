@@ -2,6 +2,9 @@ import { Answer, ApiError, assertSafeWrite, bad } from './http.js'
 import { accessFor } from './access.js'
 import { oneLine } from './logSafe.js'
 
+/** @import { ApiRequest, SendResult } from './http.js' */
+/** @import { ErrorEnvelope } from '../shared/types.js' */
+
 const routes = []
 
 function compile(pattern) {
@@ -62,6 +65,10 @@ function paramsOf(segments, path) {
   return params
 }
 
+/**
+ * @param {import('node:http').ServerResponse} res
+ * @param {SendResult} result
+ */
 function send(res, { status = 200, json, text, headers = {} }) {
   res.statusCode = status
   res.setHeader('Cache-Control', 'no-store')
@@ -75,7 +82,11 @@ function send(res, { status = 200, json, text, headers = {} }) {
   }
 }
 
-/** On Vercel `req.body` is a lazy getter that throws on malformed JSON; the dev server sets it eagerly. */
+/**
+ * On Vercel `req.body` is a lazy getter that throws on malformed JSON; the dev server sets it eagerly.
+ * @param {ApiRequest} req
+ * @returns {Record<string, any>}
+ */
 function readBody(req) {
   let body
   try {
@@ -104,6 +115,10 @@ function fromDatabaseError(err) {
  * (where it happened). Not the `message`: a library or database error can quote an input or a row value in it (an
  * e-mail, a name, a coordinate), and flattening or cutting it does not make it safe. Everything is flattened to one line
  * and cut to a length.
+ *
+ * @param {{ method: string, segments: string[] } | null} matched  the route that matched, if any
+ * @param {Error & { code?: unknown }} raw  whatever was thrown: anything can be, so the first check below handles a value
+ *   that is not an Error
  */
 function describeUnhandled(matched, raw) {
   const parts =['unhandled API error:', matched ? `${matched.method} /api/${matched.segments.join('/')}` : '(no route)']
@@ -124,6 +139,8 @@ function describeUnhandled(matched, raw) {
  * can hold newlines, so a line of it can look like a frame ("bad\n    at someone@example.com"). The header is cut off by
  * finding the message in it; when the message is not there (it was changed after the stack was taken), no frame is
  * trusted. After the header the frames are the lines that follow, up to the first line that is not a frame.
+ *
+ * @param {Error} raw
  */
 function stackFrames(raw) {
   const stack = String(raw.stack ?? '')
@@ -142,7 +159,11 @@ function stackFrames(raw) {
   return frames
 }
 
-/** Single entry point for every /api/* request (Vercel function and local dev server share it). */
+/**
+ * Single entry point for every /api/* request (Vercel function and local dev server share it).
+ * @param {ApiRequest} req
+ * @param {import('node:http').ServerResponse} res
+ */
 export async function handle(req, res) {
   let matched = null
   try {
@@ -184,10 +205,13 @@ export async function handle(req, res) {
     if (err) {
       return send(res, {
         status: err.status,
-        json: { error: { code: err.code, message: err.message, ...(err.extra || {}) } },
+        json: /** @type {ErrorEnvelope} */ ({ error: { code: err.code, message: err.message, ...(err.extra || {}) } }),
       })
     }
     console.error(describeUnhandled(matched, raw))
-    return send(res, { status: 500, json: { error: { code: 'server_error', message: 'Something went wrong' } } })
+    return send(res, {
+      status: 500,
+      json: /** @type {ErrorEnvelope} */ ({ error: { code: 'server_error', message: 'Something went wrong' } }),
+    })
   }
 }
