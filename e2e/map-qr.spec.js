@@ -70,7 +70,7 @@ test('the point form shows the map with the marker and the circle at the point, 
   await expect.poll(async () => (await marker.boundingBox()).x).not.toBe(before.x)
 
   // every image of the map was answered here, none came from the internet
-  expect(served.some((url) => url.includes('.tile.openstreetmap.org/')), 'tiles were requested').toBe(true)
+  expect(served.some((url) => new URL(url).hostname.endsWith('.tile.openstreetmap.org')), 'tiles were requested').toBe(true)
   expect(served.some((url) => url.includes('/images/marker-icon')), 'the marker picture was requested').toBe(true)
 
   // leave without saving: the other specs rely on the point staying where the seed put it
