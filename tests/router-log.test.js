@@ -78,6 +78,9 @@ afterEach(() => vi.restoreAllMocks())
 /** Calls a route that throws and returns the response and everything that was passed to console.error. */
 async function boom(path) {
   const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+  // Since Vitest 4, spying on a method that is already spied returns the same spy, so a second call in one test would still
+  // hold what the first one logged. Start every call from an empty record.
+  logged.mockClear()
   const r = await call('GET', path)
   return { r, calls: logged.mock.calls }
 }
