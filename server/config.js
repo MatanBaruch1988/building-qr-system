@@ -59,3 +59,6 @@ export const PASSWORD_MIN_LENGTH = 8
 
 export const DEFAULT_PAGE_SIZE = 100
 export const MAX_PAGE_SIZE = 500
+
+// The text filters of the scan listing (service_type, flag) are cut to this many characters before they are compared.
+export const FILTER_TEXT_MAX_LENGTH = 60

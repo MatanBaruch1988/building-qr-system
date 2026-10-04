@@ -10,6 +10,13 @@ import {
   CLOCK_MAX_FUTURE_MS,
   CLOCK_SKEW_FLAG_MS,
 } from './config.js'
+import {
+  FLAG_LOCATION_UNVERIFIED,
+  FLAG_LOCATION_OUTSIDE_RADIUS,
+  FLAG_LOCATION_STALE,
+  FLAG_OFFLINE_SYNC,
+  FLAG_CLOCK_SKEW,
+} from '../shared/flags.js'
 
 const TOKEN_RE = /^BQR-[A-Za-z0-9-]{6,80}$/
 
@@ -75,7 +82,7 @@ export function evaluateGps({ mode, point, gps }) {
   if (!hasPointCoords) {
     // We were asked to check a location but the point has none configured: say so instead of
     // silently passing everyone (the committee can fix the point; the agent can see the flag).
-    result.flags.push('location_unverified')
+    result.flags.push(FLAG_LOCATION_UNVERIFIED)
     return result
   }
 
@@ -84,7 +91,7 @@ export function evaluateGps({ mode, point, gps }) {
 
   if (!usable) {
     if (mode === 'required') return { ...result, outcome: 'rejected_no_location' }
-    result.flags.push('location_unverified')
+    result.flags.push(FLAG_LOCATION_UNVERIFIED)
     return result
   }
 
@@ -98,8 +105,8 @@ export function evaluateGps({ mode, point, gps }) {
   const walked = mode === 'optional' && stale ? Math.min(age, GPS_MAX_STALE_AGE_S) * GPS_WALKING_SPEED_MPS : 0
   const outside = result.distance_m - credit - walked - point.radius_m
   if (outside > GPS_PIN_TOLERANCE_M) return { ...result, outcome: 'rejected_far' }
-  if (outside > 0) result.flags.push('location_outside_radius')
-  if (stale) result.flags.push('location_stale')
+  if (outside > 0) result.flags.push(FLAG_LOCATION_OUTSIDE_RADIUS)
+  if (stale) result.flags.push(FLAG_LOCATION_STALE)
   return result
 }
 
@@ -114,20 +121,20 @@ export function resolveClock({ source, clientTime, now }) {
   const clientOk = client && !Number.isNaN(client.getTime()) && client.getUTCFullYear() >= 2000 && client.getUTCFullYear() <= 2100
 
   if (source === 'offline_sync') {
-    flags.push('offline_sync')
+    flags.push(FLAG_OFFLINE_SYNC)
     if (clientOk) {
       const age = now.getTime() - client.getTime()
       if (age >= -CLOCK_MAX_FUTURE_MS && age <= CLOCK_MAX_AGE_MS) {
         return { checkedInAt: age < 0 ? now : client, clientTime: client, flags }
       }
     }
-    flags.push('clock_skew')
+    flags.push(FLAG_CLOCK_SKEW)
     return { checkedInAt: now, clientTime: clientOk ? client : null, flags }
   }
 
   // A phone that sent a time we cannot believe (or one far from the server's) is worth a flag.
   if ((clientTime && !clientOk) || (clientOk && Math.abs(now.getTime() - client.getTime()) > CLOCK_SKEW_FLAG_MS)) {
-    flags.push('clock_skew')
+    flags.push(FLAG_CLOCK_SKEW)
   }
   return { checkedInAt: now, clientTime: clientOk ? client : null, flags }
 }
