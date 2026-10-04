@@ -10,7 +10,7 @@
 //     /agent/v1/ routes and /health/db an agent key, the provider routes a provider device token. A protected route
 //     that fits none of those rules fails loudly, so a new route group needs a rule here.
 //   - Each protected route is called with no credentials, and with every kind of malformed credential (a cookie or a
-//     bearer token that does not exist, with and without the prefixes qra_, qrp_ and qrk_). All of them must get a 401
+//     bearer token that does not exist, with and without the prefixes of server/config.js). All of them must get a 401
 //     with the code of THAT route's guard (not just any guard's), and must not leak data or set a cookie.
 //   - The request with no credentials at all must also make ZERO database statements. Every guard refuses such a request
 //     before it touches the database, so a handler that runs a query or a write before its guard (and only then refuses
@@ -37,7 +37,7 @@ import { route, routeTable } from '../server/router.js'
 import { requireAdmin, requireProvider, requireApiKey } from '../server/auth.js'
 import { getPool, setPool, query, tx } from '../server/db.js'
 import { bad, unauthorized } from '../server/http.js'
-import { ADMIN_COOKIE } from '../server/config.js'
+import { ADMIN_COOKIE, ADMIN_TOKEN_PREFIX, PROVIDER_TOKEN_PREFIX, API_KEY_PREFIX } from '../server/config.js'
 
 // The routes that are meant to answer without credentials, each with the reason. Everything else must refuse a request
 // without credentials. Adding a route here, or making a protected route public, is a security decision: say why.
@@ -55,7 +55,7 @@ const PUBLIC = [
 
 // The three guards of server/auth.js. `owns` says which paths must use it. `missing` is the exact 401 code for a request
 // that carries nothing of that kind (also what a valid credential of another role gets); `codes` is every 401 code the
-// guard may give (an agent key that does not exist is api_key_invalid, one that is missing or has no qrk_ prefix is
+// guard may give (an agent key that does not exist is api_key_invalid, one that is missing or has no agent key prefix is
 // api_key_required). A 401 with any other code does not prove that this guard ran.
 const GUARDS = {
   committee: { owns: /^\/admin\//, missing: 'admin_required', codes: ['admin_required'] },
@@ -90,14 +90,14 @@ const token = (prefix = '') => prefix + randomBytes(32).toString('base64url')
 const CREDENTIALS = [
   ['no credentials at all', () => ({}), true],
   ['an admin cookie that does not exist', () => ({ cookie: `${ADMIN_COOKIE}=${token()}` })],
-  ['an admin cookie with the qra_ prefix that does not exist', () => ({ cookie: `${ADMIN_COOKIE}=${token('qra_')}` })],
+  ['an admin cookie with the committee prefix that does not exist', () => ({ cookie: `${ADMIN_COOKIE}=${token(ADMIN_TOKEN_PREFIX)}` })],
   ['an admin cookie that cannot be decoded', () => ({ cookie: `${ADMIN_COOKIE}=%` })],
   ['an empty admin cookie', () => ({ cookie: `${ADMIN_COOKIE}=` })],
   ['a bearer token that does not exist', () => ({ token: token() })],
-  ['a bearer token with the qrp_ prefix that does not exist', () => ({ token: token('qrp_') })],
-  ['a bearer token with the qrk_ prefix that does not exist', () => ({ token: token('qrk_') })],
+  ['a bearer token with the provider prefix that does not exist', () => ({ token: token(PROVIDER_TOKEN_PREFIX) })],
+  ['a bearer token with the agent key prefix that does not exist', () => ({ token: token(API_KEY_PREFIX) })],
   ['an Authorization header with no token', () => ({ headers: { authorization: 'Bearer' } })],
-  ['an Authorization header of another scheme', () => ({ headers: { authorization: `Basic ${token('qrk_')}` } })],
+  ['an Authorization header of another scheme', () => ({ headers: { authorization: `Basic ${token(API_KEY_PREFIX)}` } })],
 ]
 
 // The secret of each role, made in beforeAll: the value of the committee session cookie, the provider device token
@@ -232,9 +232,9 @@ beforeAll(async () => {
     agent: key.json.key,
   }
   // The three secrets must be real ones, or the cross-role tests below would prove nothing.
-  expect(VALID.committee).toMatch(/^qra_/)
-  expect(VALID.provider).toMatch(/^qrp_/)
-  expect(VALID.agent).toMatch(/^qrk_/)
+  expect(VALID.committee.startsWith(ADMIN_TOKEN_PREFIX)).toBe(true)
+  expect(VALID.provider.startsWith(PROVIDER_TOKEN_PREFIX)).toBe(true)
+  expect(VALID.agent.startsWith(API_KEY_PREFIX)).toBe(true)
 })
 afterAll(async () => db?.teardown())
 
