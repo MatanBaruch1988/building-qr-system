@@ -59,11 +59,14 @@ function recordingPool() {
   }
 }
 
-/** A real pool for the key lookup, and a failing one for the health query itself (the only one that reads schema_migrations). */
+/**
+ * A real pool for the key lookup, and a failing one for the health query itself (the only one that reads schema_migrations).
+ * The error has the shape of a `pg` error: a SQLSTATE in `code`, and a message that quotes a database user.
+ */
 const failingHealthQuery = {
   query: (text, params) =>
     /schema_migrations/.test(text)
-      ? Promise.reject(new Error('password authentication failed for user "secret-user"'))
+      ? Promise.reject(Object.assign(new Error('password authentication failed for user "secret-user"'), { code: '28P01' }))
       : db.pool.query(text, params),
 }
 
@@ -143,26 +146,35 @@ describe('GET /api/health/db', () => {
     expect(r.status).toBe(503)
     expect(r.json).toEqual({ ok: false, commit: SHA.slice(0, 7) })
     expect(r.text).not.toContain('secret-user')
-    // The cause goes to the log, not to the response.
-    expect(logged).toHaveBeenCalledWith('health/db failed:', expect.stringContaining('secret-user'))
+    // The cause goes to the log as its code (here the SQLSTATE), in one string. Never its message: it can quote a value, and
+    // the runtime logs are read by more people than the committee.
+    expect(logged).toHaveBeenCalledTimes(1)
+    expect(logged).toHaveBeenCalledWith('health/db failed: 28P01')
+    expect(JSON.stringify(logged.mock.calls)).not.toContain('secret-user')
+    expect(JSON.stringify(logged.mock.calls)).not.toContain('password authentication')
   })
 
   it('answers 503, not 500, when the database is down altogether (the key lookup fails too)', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     setPool(recordingPool())
     const r = await call('GET', '/api/health/db', { token: key })
     expect(r.status).toBe(503)
     expect(r.json).toEqual({ ok: false, commit: null })
+    // This failure happens in the guard (server/health.js), not in the handler: the same rule holds there. The error has a
+    // name and no code, so the log says its name and nothing of its message.
+    expect(logged).toHaveBeenCalledWith('health/db failed: Error')
+    expect(JSON.stringify(logged.mock.calls)).not.toContain('not reachable')
   })
 
   it('answers 503 when the database does not answer within about 5 seconds', { timeout: 20_000 }, async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     setPool({ query: () => new Promise(() => {}) })
     const started = Date.now()
     const r = await call('GET', '/api/health/db', { token: key })
     const took = Date.now() - started
     expect(r.status).toBe(503)
     expect(r.json).toEqual({ ok: false, commit: null })
+    expect(logged).toHaveBeenCalledWith('health/db failed: timeout')
     expect(took).toBeGreaterThan(4500)
     expect(took).toBeLessThan(8000)
   })

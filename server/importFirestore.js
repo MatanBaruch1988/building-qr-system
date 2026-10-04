@@ -2,6 +2,7 @@
 // Idempotent: rows are matched by legacy_id / deterministic ids, so running it twice is safe.
 import { createHash } from 'node:crypto'
 import { TIMEZONE } from './config.js'
+import { FLAG_LEGACY_IMPORT, FLAG_OFFLINE_SYNC } from '../shared/flags.js'
 
 // The Hebrew words in these patterns are DATA, not UI text: they match what the old Firestore records contain (the
 // Hebrew words for cleaning and gardening in company names), so they must stay in Hebrew.
@@ -159,8 +160,8 @@ export async function importFirestore(client, data) {
       return
     }
     const rejected = kind === 'failedScan'
-    const flags = ['legacy_import']
-    if (doc.syncedFromOffline) flags.push('offline_sync')
+    const flags = [FLAG_LEGACY_IMPORT]
+    if (doc.syncedFromOffline) flags.push(FLAG_OFFLINE_SYNC)
     const r = await client.query(
       `insert into scans (id, point_id, provider_id, point_name, provider_name, service_type,
           checked_in_at, client_time, local_date, source, outcome, distance_m, gps_accuracy_m, flags)

@@ -1,4 +1,5 @@
 import pg from 'pg'
+import { failureLabel } from './logSafe.js'
 
 // Return DATE columns as plain 'YYYY-MM-DD' strings (the default is a Date at local midnight).
 pg.types.setTypeParser(1082, (value) => value)
@@ -27,9 +28,12 @@ export function poolConfig(connectionString, schema) {
   }
 }
 
-/** Idle connections get dropped by Neon: without this handler the 'error' event would crash the function. */
+/**
+ * Idle connections get dropped by Neon: without this handler the 'error' event would crash the function. The log line
+ * holds the error's code or name and never its message (it can quote the database user or a value: server/logSafe.js).
+ */
 export function guardPool(p) {
-  p.on('error', (err) => console.error('idle database client error:', err.message))
+  p.on('error', (err) => console.error(`idle database client error: ${failureLabel(err)}`))
   return p
 }
 
