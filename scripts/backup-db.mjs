@@ -13,24 +13,29 @@
 //   1. Gets the DIRECT connection string (never the pooled one: pg_dump needs a session) from BACKUP_DATABASE_URL, or from
 //      the Neon CLI (`neon connection-string`) when --neon-project is given. It lives in memory only. Giving both is an
 //      error (exit 1, nothing dumped): the environment must not silently win over what the command line says.
-//   2. Before anything is made, REFUSES to work in a folder that another account can change: the output folder, the temp
-//      folder and every folder above each of them (checkFoldersNotShared). Every check of a path before it is used has a gap
-//      in which an account that can write in that folder could rename a directory away and put its own at the same path, swap
-//      a file for a link, or add an access entry of its own; so the races are not won one by one, the folders in which they
-//      could happen are refused. On Windows the access lists are read as SDDL, with one PowerShell call, and only the user, the
-//      system, the administrators and TrustedInstaller may change a folder; elsewhere the modes are read (the temp folder must
-//      not be writable by group or others unless it has the sticky bit, a folder above not by others unless it has it). What
-//      cannot be read or understood is refused. The checks of the next steps stay as a second net.
-//   3. Makes this run's private WORK DIRECTORY in the user's own temp folder (os.tmpdir(): %TEMP% on Windows, $TMPDIR or /tmp
-//      elsewhere), with fs.mkdtemp (`bqr-work-<random>`): the name is unpredictable, and the directory is made with mode 700
-//      in one step on macOS and Linux, and inside the profile of the user, which only that user can write in, on Windows.
-//      It is not made in the output folder on purpose: an account that can write in the output folder could add an access
-//      entry of its own (an explicit, inheritable one, which neither `icacls /inheritance:r` nor `/grant:r` removes) between
-//      the moment a directory is made there and the moment it is closed, or swap a path for its own. On Windows the directory
-//      then also gets an owner-only access list (icacls), and on macOS and Linux its mode is read back: a second net. On
-//      Windows the list is READ BACK too (`icacls <dir>`) and the run refuses unless it is exactly one entry, the user's, full
-//      control inherited by files and folders: an explicit, inheritable entry that another account added to the directory
-//      before the list was set survives `/inheritance:r` and `/grant:r`, and would be inherited by partial.dump.
+//   2. Before anything is made, REFUSES to work in a folder that another account can change: the output folder and every
+//      folder above it (checkFoldersNotShared). Every check of a path before it is used has a gap in which an account that can
+//      write in that folder could rename a directory away and put its own at the same path, swap a file for a link, or add an
+//      access entry of its own; so the races are not won one by one, the folders in which they could happen are refused. On
+//      Windows the access lists are read as SDDL, with one PowerShell call, and only the user, the system, the administrators
+//      and TrustedInstaller may change a folder; elsewhere the modes are read (no folder above may be writable by others
+//      without the sticky bit, and the output folder itself not by group or others). What cannot be read or understood is
+//      refused. This is the only folder rule: nothing depends on the temp folder of the user.
+//      The checks of the next steps stay as a second net.
+//   3. Makes this run's private WORK DIRECTORY inside the output folder, with fs.mkdtemp (`.bqr-work-<random>`), after the check
+//      above and after the folder exists: the name is unpredictable, the directory is made with mode 700 in one step on macOS
+//      and Linux, and on Windows it inherits the list of the folder, which only the trusted accounts can change. Nobody else
+//      can add an access entry of their own (an explicit, inheritable one, which neither `icacls /inheritance:r` nor `/grant:r`
+//      removes) between the moment the directory is made and the moment it is closed, or swap a path for their own: that
+//      needs write access to the folder, which step 2 refused. On Windows the directory then also gets an owner-only access list
+//      (icacls) and the list is READ BACK (`icacls <dir>`): the run refuses unless it is exactly one entry, the user's, full
+//      control inherited by files and folders. On macOS and Linux the mode is read back. A second net.
+//      The work directory is on the same volume as the finished file, so the last step is a rename. It is a directory, and
+//      retention only touches FILES with the exact name of a backup, so it is never counted, rotated or deleted by retention.
+//      A run that was killed leaves its work directory behind: at the start of the next run (after the checks) every directory
+//      of the output folder whose name is exactly `.bqr-work-` and six letters or digits, and that was last changed more than
+//      24 hours ago, is removed (younger ones may belong to a run that is still going), and the log line says how many
+//      (`stale-work-folders-removed=N`, never a path). Nothing else is removed that way, and no file.
 //      pg_dump (custom format) writes into a temporary file there (`partial.dump`, created empty and exclusively before
 //      pg_dump starts). The password goes to pg_dump through the environment (PGPASSWORD and friends), never on the command
 //      line, where other users of a machine can see it. The session is READ-ONLY on the server
@@ -44,12 +49,8 @@
 //      to nowhere, which reads and decompresses every data block, and must exit with 0. Then the mode is set and read back
 //      (macOS and Linux). Only then is the verified, owner-only file renamed from the work directory to
 //      building-qr-<UTC time>.dump in the output folder; a file of the same name from a run of the same minute is replaced
-//      by this verified one. A rename keeps the mode and the access list of the file, but only on one volume: when the output
-//      folder is on another drive than the temp folder the rename fails (EXDEV), the run fails with a message that says so,
-//      and the output folder must be moved to the drive of the temp folder (or TEMP, on macOS and Linux TMPDIR, pointed at a
-//      private folder on the drive of the output folder). The work directory is removed at the end, whatever happened, and
-//      nothing in it survives: another account can at most replace the FINAL file after the fact, and the data in it was
-//      never readable by that account.
+//      by this verified one. A rename keeps the mode and the access list of the file. The work directory is removed at the
+//      end, whatever happened, and nothing in it survives.
 //      A third check reads the marker out of the dump: the table public.environment_marker (server/dbGuard.js) must hold a row
 //      `production`. A dump of a database that does not say so (the wrong project or branch, a stale BACKUP_DATABASE_URL) is not
 //      kept, and nothing is rotated, because it would pass the two checks above and could push the real dumps out. Every
@@ -78,17 +79,17 @@
 // file of the owner, and the final file could be replaced) when group or others can WRITE in it, and warns (in backup.log
 // and on the screen) when they can only read it, because the files in it are owner-only anyway.
 //
-// On Windows a new file inherits the access list of its folder, and a shared, network or synced folder may let others in.
-// So the work directory, which is in the private temp folder of the user, gets an owner-only access list with icacls
-// (inheritance removed, full control for the SID of the current user, found with `whoami /user`, inherited by what is made
-// inside), and the empty temporary file gets one of its own. pg_dump then overwrites the file in place, which keeps the
-// access list, and so does the rename into the output folder. If whoami fails, or icacls is missing or
-// fails, the backup fails before pg_dump writes anything. backup.log gets the same treatment when it is created (best
-// effort: it holds no personal data, so a failure there is only a warning). Choose a folder under the user profile and never a
-// shared or a synced one: the folders are checked (step 2), but a sync client copies the file somewhere else, and no access
-// list can stop that. The tools of Windows cannot open a path of
-// more than about 260 characters, so on Windows the run refuses, before it makes anything, an output folder or a temp folder
-// whose paths would go over 245 (the names inside the work directory are short).
+// On Windows a new file inherits the access list of its folder, and a shared, network or synced folder may let others in. The
+// folder is checked first (step 2: only the user, the system, the administrators and TrustedInstaller may change it or a folder
+// above it). Then the work directory, which is inside it, gets an owner-only access list with icacls (inheritance removed, full
+// control for the SID of the current user, found with `whoami /user`, inherited by what is made inside) that is read back, and
+// the empty temporary file gets one of its own. pg_dump then overwrites the file in place, which keeps the access list, and so
+// does the rename into the output folder. If whoami fails, or icacls is missing or fails, the backup fails before pg_dump
+// writes anything. backup.log gets the same treatment when it is created (best effort: it holds no personal data, so a failure
+// there is only a warning). Choose a folder under the user profile and never a shared or a synced one: the folders are checked,
+// but a sync client copies the file somewhere else, and no access list can stop that. The tools of Windows cannot open a path of
+// more than about 260 characters, so on Windows the run refuses, before it makes anything, an output folder whose paths would go
+// over 245 (the names inside the work directory are short).
 //
 // On a failure, with --report-issue, it opens a GitHub issue with the gh CLI, or adds a comment to the issue with that
 // title that is already open (so a failure that lasts a week is one issue, not seven). The issue says only that the backup
@@ -127,26 +128,22 @@ export const FOLDER_UNKNOWN_ERROR = 'the backup folder could not be inspected, s
 // where Node itself can. The run refuses a folder whose paths would go over this, instead of failing later with "path not found".
 export const WINDOWS_PATH_LIMIT = 245
 export const PATH_TOO_LONG_ERROR =
-  'a path that the backup needs is too long for the tools of Windows (more than 245 characters with the names inside it): use a shorter backup folder, or a shorter TEMP folder'
+  'a path that the backup needs is too long for the tools of Windows (more than 245 characters with the names inside it): use a shorter backup folder'
 // One database source only: BACKUP_DATABASE_URL and --neon-project together are refused, not resolved by a rule.
 export const AMBIGUOUS_SOURCE_ERROR =
   'both BACKUP_DATABASE_URL and --neon-project were given, so it is not clear which database to dump: use only one of them'
-// The temp folder and the backup folder are on two drives: the verified file cannot be renamed into place (EXDEV).
-export const EXDEV_ERROR =
-  'the backup folder is on another drive than the temp folder, so the finished dump cannot be moved into it: put the backup folder on the same drive as the temp folder, or point TEMP (on macOS and Linux TMPDIR) at a private folder on the drive of the backup folder'
 // The table that says which database it is (server/dbGuard.js): `production` in the production database, `nonprod` in the other.
 export const MARKER_TABLE = 'environment_marker'
 // backup.log exists but is not a plain file with one name: a symbolic link (or another reparse point) or a hard link that another
 // account planted in a folder it can write in would make an append go to another file of the owner.
 export const LOG_NOT_REGULAR_ERROR =
   'backup.log in the backup folder is not a regular file (it is a link, or it has more than one name), so nothing was dumped and nothing was written to it: delete it or move it away'
-// A folder that the backup relies on can be changed by another account (see checkFoldersNotShared). The message names which one,
-// never an account and never a path.
+// The backup folder, or a folder above it, can be changed by another account (see checkFoldersNotShared). The message says which
+// of the two, never an account and never a path.
 export const SHARED_FOLDERS_PREFIX = 'nothing was dumped, because another account can change a folder that the backup relies on: '
-export const SHARED_FOLDERS_ADVICE =
-  ' (use a backup folder in your own profile, and set TEMP on Windows or TMPDIR on macOS and Linux to a private folder in your own profile)'
+export const SHARED_FOLDERS_ADVICE = ' (use a backup folder in your own profile)'
 export const SHARED_UNREADABLE_ERROR =
-  'nothing was dumped, because the access lists of the backup folder and of the temp folder (and of the folders above them) could not be read, and a folder that is not known to be private is not trusted'
+  'nothing was dumped, because the access lists of the backup folder and of the folders above it could not be read, and a folder that is not known to be private is not trusted'
 export const LOG_SKIPPED = 'backup: backup.log was not written, because other accounts can change the backup folder or a folder above it'
 
 const NEON_TIMEOUT_MS = 2 * 60_000
@@ -155,6 +152,9 @@ const LIST_TIMEOUT_MS = 5 * 60_000
 // Reading a dump to the end takes about as long as it takes to decompress it, so it gets as long as the dump itself.
 const READ_TIMEOUT_MS = 30 * 60_000
 const GH_TIMEOUT_MS = 60_000
+// A work folder that a crashed run left behind is removed by the next run once it is older than this (by its modification time).
+// Younger ones are left alone, because another run may be using one.
+export const STALE_WORK_MS = 24 * 60 * 60 * 1000
 const ICACLS_TIMEOUT_MS = 60_000
 const SDDL_TIMEOUT_MS = 60_000
 // Owner only: read and write for the owner on a file, and all rights for the owner on a folder.
@@ -391,7 +391,7 @@ async function checkOwnerOnly({ name, cwd, owner, runner, env }) {
   const problem = aclProblem(result.stdout, { name, account: owner.account })
   if (problem) {
     throw new Error(
-      `the access list of the work directory is not the user's alone (${problem}), so nothing was dumped: is the temp folder shared with another account?`,
+      `the access list of the work directory is not the user's alone (${problem}), so nothing was dumped: is the backup folder shared with another account?`,
     )
   }
 }
@@ -400,10 +400,10 @@ async function checkOwnerOnly({ name, cwd, owner, runner, env }) {
 
 // Every check-then-use on a path has a window: a folder that another account can write in lets that account rename a directory
 // away and put its own at the same path, swap a file for a link, or add an entry to a list. So the backup does not try to
-// win those races one by one. It REFUSES to work in a folder that another account can change: the output folder, the temp
-// folder (where the work directory is made) and every folder above each of them. The per-path checks that came before (the
-// access list of the work directory read back, the two lstat checks of backup.log, the mode checks) stay as a second net,
-// and the races they cover need write access to one of these folders, which is refused here.
+// win those races one by one. It REFUSES to work in a folder that another account can change: the output folder (the backup
+// folder, where the work directory is made too, so that nothing depends on the temp folder) and every folder above it. The
+// per-path checks that came before (the access list of the work directory read back, the two lstat checks of backup.log, the
+// mode checks) stay as a second net, and the races they cover need write access to one of these folders, which is refused here.
 
 // The rights of an allow entry that let an account ADD, DELETE, RENAME or RE-PERMISSION entries of a folder: add file / write
 // data (0x2), add subdirectory / append (0x4), delete child (0x40), delete (0x10000), write DAC (0x40000), write owner
@@ -464,8 +464,8 @@ export function parseSddl(sddl) {
 
 /**
  * What lets another account change a folder, from its SDDL, as a short reason, or null when only the trusted ones can.
- * `kind` is 'folder' (the output folder, the temp folder: no right to add, delete, rename or re-permission entries) or
- * 'ancestor' (a folder above one of them: no right to delete, delete a child, re-permission, or take ownership: any of those
+ * `kind` is 'folder' (the output folder: no right to add, delete, rename or re-permission entries) or
+ * 'ancestor' (a folder above it: no right to delete, delete a child, re-permission, or take ownership: any of those
  * can move or replace the subtree). `user` is the SID of the current user. A deny entry is ignored (it only takes rights
  * away), an inherit-only entry is ignored (it does not apply to the folder), and the owner counts, because an owner can
  * re-permission the folder whatever its list says. Throws like parseSddl: an unreadable descriptor is a refusal.
@@ -498,11 +498,11 @@ function folderChain(base, files, pathApi) {
   return chain
 }
 
-/** The message of a refusal: which of the folders is not private, and what to do. No account and no path. */
-export function sharedFoldersMessage(problems) {
-  const names = { output: 'the backup folder', temp: 'the temp folder' }
-  const parts = problems.map(({ which, level }) => (level === 'itself' ? `${names[which]} itself` : `a folder above ${names[which]}`))
-  return `${SHARED_FOLDERS_PREFIX}${[...new Set(parts)].join(', ')}${SHARED_FOLDERS_ADVICE}`
+/** The message of a refusal: is it the backup folder itself, or a folder above it, and what to do. No account and no path. */
+export function sharedFoldersMessage(levels) {
+  const names = { itself: 'the backup folder itself', above: 'a folder above the backup folder' }
+  const parts = ['itself', 'above'].filter((level) => levels.includes(level)).map((level) => names[level])
+  return `${SHARED_FOLDERS_PREFIX}${parts.join(', ')}${SHARED_FOLDERS_ADVICE}`
 }
 
 /** powershell.exe by its full path in System32 (the bare name could be another program, and a scheduled task has another PATH). */
@@ -534,64 +534,49 @@ async function readSddls({ paths, runner, env }) {
 }
 
 /**
- * Before anything is created: is a folder of this run one that another account can change? Returns { problems ([{ which
- * ('output' or 'temp'), level ('itself' or 'above') }]) } or { unreadable: true } when the access lists could not be read.
+ * Before anything is created: can another account change the backup folder, or a folder above it? Returns { problems (a list of
+ * 'itself' and 'above') } or { unreadable: true } when the access lists could not be read.
  * On Windows the security descriptors of the output folder (or, for one that is not made yet, the nearest folder that exists:
- * what is made in it inherits from it), of the temp folder, and of every folder above each, are read with one PowerShell call
- * and judged by sharedAclProblem. On macOS and Linux the temp folder must not be writable by group or others unless it has
- * the sticky bit (then nobody else can rename our 0700 directory away: this is /tmp), and no folder above the output folder or
- * above the temp folder may be writable by others without the sticky bit. (A folder above that only a GROUP can write in is not
- * refused: the group is usually the user's own, and its members are not known here. The output folder itself is checked, with
- * group and others, once it exists.)
+ * what is made in it inherits from it) and of every folder above it are read with one PowerShell call and judged by
+ * sharedAclProblem. On macOS and Linux no folder above the output folder may be writable by others without the sticky bit, and
+ * the same holds for the nearest existing folder of an output folder that is not made yet. (A folder above that only a GROUP can
+ * write in is not refused: the group is usually the user's own, and its members are not known here. The output folder itself is
+ * checked, with group and others, once it exists.)
  */
-async function checkFoldersNotShared({ platform, outDir, tmpdir, files, runner, env, owner }) {
-  const targets = [
-    { which: 'output', base: outDir },
-    { which: 'temp', base: tmpdir },
-  ]
+async function checkFoldersNotShared({ platform, outDir, files, runner, env, owner }) {
   const problems = []
-  const add = (which, level) => {
-    if (!problems.some((problem) => problem.which === which && problem.level === level)) problems.push({ which, level })
+  const add = (level) => {
+    if (!problems.includes(level)) problems.push(level)
   }
   if (platform === 'win32') {
     const user = /^\*(S-1-[\d-]+)$/.exec(owner?.id ?? '')?.[1]
     if (!user) return { unreadable: true } // (windowsOwner always gives a SID: this is only for a stub that does not)
-    const chains = targets.map(({ which, base }) => ({ which, chain: folderChain(base, files, path.win32) }))
-    const paths = [...new Set(chains.flatMap(({ chain }) => chain.map(({ path: folder }) => folder)))]
-    const sddls = await readSddls({ paths, runner, env })
+    const chain = folderChain(outDir, files, path.win32)
+    const sddls = await readSddls({ paths: chain.map(({ path: folder }) => folder), runner, env })
     if (!sddls || sddls.some((sddl) => sddl === null)) return { unreadable: true }
-    for (const { which, chain } of chains) {
-      for (const { path: folder, kind } of chain) {
-        let reason
-        try {
-          reason = sharedAclProblem(sddls[paths.indexOf(folder)], { user, kind })
-        } catch {
-          return { unreadable: true }
-        }
-        if (reason) add(which, kind === 'folder' ? 'itself' : 'above')
+    for (const [index, { kind }] of chain.entries()) {
+      let reason
+      try {
+        reason = sharedAclProblem(sddls[index], { user, kind })
+      } catch {
+        return { unreadable: true }
       }
+      if (reason) add(kind === 'folder' ? 'itself' : 'above')
     }
     return { problems }
   }
-  const modeOf = (folder) => {
+  for (const { path: folder, kind } of folderChain(outDir, files, path)) {
+    let mode
     try {
-      return files.statSync(folder).mode
+      mode = files.statSync(folder).mode
     } catch {
-      return undefined
+      return { unreadable: true }
     }
-  }
-  for (const { which, base } of targets) {
-    for (const { path: folder, kind } of folderChain(base, files, path)) {
-      const mode = modeOf(folder)
-      if (mode === undefined) return { unreadable: true }
-      const sticky = (mode & 0o1000) !== 0
-      if (kind === 'folder' && which === 'temp' && (mode & 0o022) !== 0 && !sticky) add(which, 'itself')
-      // A folder above is refused when OTHERS can write in it. For an output folder that is not made yet, the nearest folder that
-      // exists stands in for it (the new folder will be made in it), under the same rule: the folder itself is judged by its own
-      // mode, with group and others, as soon as it exists.
-      const standsIn = kind === 'folder' && which === 'output' && folder !== base
-      if ((kind === 'ancestor' || standsIn) && (mode & 0o002) !== 0 && !sticky) add(which, standsIn ? 'itself' : 'above')
-    }
+    // For an output folder that is not made yet, the nearest folder that exists stands in for it (the new folder will be made in
+    // it), under the same rule as a folder above: the folder itself is judged by its own mode, with group and others, as soon as
+    // it exists.
+    const standsIn = kind === 'folder' && folder !== outDir
+    if ((kind === 'ancestor' || standsIn) && (mode & 0o002) !== 0 && (mode & 0o1000) === 0) add(standsIn ? 'itself' : 'above')
   }
   return { problems }
 }
@@ -698,11 +683,45 @@ export function backupFileName(date) {
 
 /**
  * The start of the name of the private work directory of a run. fs.mkdtemp adds six random characters and makes the directory
- * (mode 700 on macOS and Linux) in one step, in the temp folder of the user, so two runs never share one and nobody can guess
- * the name. The name is short on purpose: icacls and the other tools of Windows cannot open a path of more than about 260
- * characters (see WINDOWS_PATH_LIMIT).
+ * (mode 700 on macOS and Linux) in one step, INSIDE the output folder, which the run has checked is not changeable by another
+ * account; so two runs never share one, nobody can guess the name, and it is on the same volume as the finished file. The name
+ * is short on purpose (icacls and the other tools of Windows cannot open a path of more than about 260 characters, see
+ * WINDOWS_PATH_LIMIT) and starts with a dot, so that a file manager hides it on macOS and Linux.
  */
-export const WORK_PREFIX = 'bqr-work-'
+export const WORK_PREFIX = '.bqr-work-'
+/** The exact name of a work directory: the prefix and the six random characters that fs.mkdtemp adds. Nothing else is ever removed as one. */
+export const WORK_NAME = /^\.bqr-work-[A-Za-z0-9]{6}$/
+
+/**
+ * Removes the work directories that a crashed run left in `dir`: a directory (not a link) whose name is exactly WORK_NAME and
+ * whose modification time is more than STALE_WORK_MS before `now` (a Date). Younger ones are left alone, because another run may
+ * be using one; any other name is left alone, and so is every file (a dump is never touched). The removal reaches only inside the
+ * directory that matched, and does not follow a link. Never throws. Returns { removed (a number), failed (a number), checked
+ * (false when the folder could not be listed) }.
+ */
+export function removeStaleWorkFolders(dir, now, files = fs) {
+  let entries
+  try {
+    entries = files.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return { removed: 0, failed: 0, checked: false }
+  }
+  let removed = 0
+  let failed = 0
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !WORK_NAME.test(entry.name)) continue
+    const folder = path.join(dir, entry.name)
+    try {
+      const info = files.lstatSync(folder)
+      if (!info.isDirectory() || info.isSymbolicLink() || !(now.getTime() - info.mtimeMs > STALE_WORK_MS)) continue
+      files.rmSync(folder, { recursive: true, force: true })
+      removed++
+    } catch {
+      failed++
+    }
+  }
+  return { removed, failed, checked: true }
+}
 
 /**
  * The temporary file inside the work directory. The directory is unique to the run, so the name does not have to be; it ends in
@@ -821,7 +840,7 @@ export function rotate(dir, keep, latest, files = fs) {
 export function makeScrubber(connectionString, folders = []) {
   const secrets = new Set()
   const hosts = new Map()
-  // Folders whose absolute path holds a person's name (the backup folder, the temp and home folders): a file system error
+  // Folders whose absolute path holds a person's name (the backup folder and the home folder): a file system error
   // names them in full. Each one becomes its label, in both slash styles, the longest first.
   const hidden = folders
     .filter(([folder]) => typeof folder === 'string' && folder.length > 3)
@@ -992,12 +1011,10 @@ export function findOpenIssue(json) {
  * when there is none. When the search fails, or the comment does, it opens a new issue: a duplicate is better than silence.
  * Never throws. Returns 'opened', 'commented-<number>', 'gh-missing' or 'failed'.
  */
-async function openIssue({ repo, runner, now, env, tmpdir, files = fs }) {
-  let dir
+async function openIssue({ repo, runner, now, env }) {
   try {
-    dir = files.mkdtempSync(path.join(tmpdir, 'bqr-backup-issue-'))
-    const bodyFile = path.join(dir, 'body.md')
-    files.writeFileSync(bodyFile, issueBody(now()), 'utf8')
+    // The text holds only the time and where to look (see issueBody), so it goes in the argument: no file, and so no temp folder.
+    const body = issueBody(now())
     const gh = (args) => runner('gh', args, { env: cleanEnv(env), timeoutMs: GH_TIMEOUT_MS })
     const succeeded = (result) => !result.problem && result.status === 0
 
@@ -1008,21 +1025,15 @@ async function openIssue({ repo, runner, now, env, tmpdir, files = fs }) {
     if (search.problem === 'ENOENT') return 'gh-missing'
     const existing = succeeded(search) ? findOpenIssue(search.stdout) : null
     if (existing !== null) {
-      const comment = await gh(['issue', 'comment', String(existing), '--repo', repo, '--body-file', bodyFile])
+      const comment = await gh(['issue', 'comment', String(existing), '--repo', repo, '--body', body])
       if (succeeded(comment)) return `commented-${existing}`
     }
 
-    const created = await gh([
-      'issue', 'create', '--repo', repo, '--title', ISSUE_TITLE, '--label', 'bug', '--body-file', bodyFile,
-    ])
+    const created = await gh(['issue', 'create', '--repo', repo, '--title', ISSUE_TITLE, '--label', 'bug', '--body', body])
     if (created.problem === 'ENOENT') return 'gh-missing'
     return succeeded(created) ? 'opened' : 'failed'
   } catch {
     return 'failed'
-  } finally {
-    // A cleanup must never throw: it runs after the answer is known, and an error here would hide that answer (and, from
-    // a finally block, replace the return value). A body file that cannot be deleted is left in the temporary folder.
-    if (dir) attempt(() => files.rmSync(dir, { recursive: true, force: true }))
   }
 }
 
@@ -1039,11 +1050,12 @@ export function formatSize(bytes) {
  * One line of backup.log: the time (DD/MM/YYYY HH:MM in the building's time, written by shared/datetime.js, because a
  * person reads this file), ok or failed, then key=value fields, and the error (the only free text) last.
  */
-export function logLine({ when, ok, host, file, size, removed, warning, issue, error }) {
+export function logLine({ when, ok, host, file, size, removed, stale, warning, issue, error }) {
   const parts = [formatDateTime(when), ok ? 'ok' : 'failed', `host=${host}`]
   if (file) parts.push(`file=${file}`)
   if (size !== undefined) parts.push(`size=${size}`)
   if (removed !== undefined) parts.push(`removed=${removed}`)
+  if (stale) parts.push(`stale-work-folders-removed=${stale}`)
   if (warning) parts.push(`warning=${warning}`)
   if (issue) parts.push(`issue=${issue}`)
   if (error) parts.push(`error=${error}`)
@@ -1087,8 +1099,7 @@ function setProcessUmask(mask) {
 /**
  * Makes one backup. Everything it needs from outside comes in through `deps`, so a test needs no database and no
  * PostgreSQL tools: `runner(command, args, { env, cwd, timeoutMs })` (see runProcess), `now`, `env`, `platform`, `exists`,
- * `tmpdir` (for the issue text), `fs` (the file system), `umask(mask)` (returns the old mask), and `out` and `err` for the
- * two kinds of line.
+ * `fs` (the file system), `umask(mask)` (returns the old mask), and `out` and `err` for the two kinds of line.
  * Returns { exitCode, ok, message, file, size, removed, issue, line }. It never throws: whatever a step does (a tool that
  * fails, a file that cannot be deleted), it ends by writing the line of backup.log and the cleaned output.
  */
@@ -1099,7 +1110,6 @@ export async function runBackup(options, deps = {}) {
     runner = runProcess,
     now = () => new Date(),
     exists = fs.existsSync,
-    tmpdir = os.tmpdir(),
     fs: files = fs,
     umask = setProcessUmask,
     out = console.log,
@@ -1111,7 +1121,7 @@ export async function runBackup(options, deps = {}) {
   const outDir = path.resolve(options.out)
   const finalName = backupFileName(started)
   const partialName = PARTIAL_NAME
-  // This run's own private work directory, made by fs.mkdtemp in the temp folder (see the header), and the file in it.
+  // This run's own private work directory, made by fs.mkdtemp inside the output folder (see the header), and the file in it.
   let workDir
   let partialPath
   let workCreated = false
@@ -1133,7 +1143,6 @@ export async function runBackup(options, deps = {}) {
   })
   const hiddenFolders = [
     [outDir, '<out dir>'],
-    [tmpdir, '<temp>'],
     [home, '~'],
   ]
   let scrub = makeScrubber(undefined, hiddenFolders)
@@ -1142,6 +1151,8 @@ export async function runBackup(options, deps = {}) {
   const ownerOf = () => (ownerAsked ??= windowsOwner({ runner, env }))
   let host = '-'
   let folderIsOpen = false
+  let staleRemoved = 0
+  const earlyWarnings = []
   let result
 
   // Before anything is created: every file that pg_dump (a child process, which inherits the mask) or this script makes is
@@ -1149,15 +1160,15 @@ export async function runBackup(options, deps = {}) {
   const previousMask = posix ? umask(PRIVATE_UMASK) : undefined
 
   try {
-    // The longest path of the run, before anything is made: the file in the work directory (in the temp folder, whose name
+    // The longest path of the run, before anything is made: the file in the work directory (in the output folder, whose name
     // mkdtemp will make with six more characters) or the final file (in the output folder).
-    const longestInTemp = path.join(path.resolve(tmpdir), `${WORK_PREFIX}xxxxxx`, partialName).length
-    if (windows && Math.max(longestInTemp, path.join(outDir, finalName).length) > WINDOWS_PATH_LIMIT) {
+    const longestInWork = path.join(outDir, `${WORK_PREFIX}xxxxxx`, partialName).length
+    if (windows && Math.max(longestInWork, path.join(outDir, finalName).length) > WINDOWS_PATH_LIMIT) {
       logSkipped = '' // the folder is not made, so there is no place for a log, and the message of the failure says it all
       throw new Error(PATH_TOO_LONG_ERROR)
     }
     // Nothing is made before the folders that the run relies on are known not to be changeable by another account (see
-    // checkFoldersNotShared): the output folder, the temp folder and every folder above each. On Windows this needs the SID of the user.
+    // checkFoldersNotShared): the output folder and every folder above it. On Windows this needs the SID of the user.
     let early
     if (windows) {
       try {
@@ -1167,23 +1178,13 @@ export async function runBackup(options, deps = {}) {
         throw error
       }
     }
-    const shared = await checkFoldersNotShared({ platform, outDir, tmpdir, files, runner, env, owner: early })
+    const shared = await checkFoldersNotShared({ platform, outDir, files, runner, env, owner: early })
     if (shared.unreadable) {
       logSkipped = '' // the output folder is not known to be private, so no log is written in it, and the message says it all
       throw new Error(SHARED_UNREADABLE_ERROR)
     }
     if (shared.problems.length) {
-      // The log lives in the output folder: when that is the one that is not private, nothing is written there.
-      if (shared.problems.some(({ which }) => which === 'output')) logSkipped = LOG_SKIPPED
-      else if (posix && files.existsSync(outDir)) {
-        // Only the temp folder is the problem, and the log of this failure goes in the output folder, which on macOS and Linux is
-        // judged by its own mode only later: judge it now, so that a log is never written in a folder that others can change.
-        let mode
-        attempt(() => {
-          mode = files.statSync(outDir).mode
-        })
-        if (mode === undefined || (mode & 0o022) !== 0) logSkipped = LOG_SKIPPED
-      }
+      logSkipped = LOG_SKIPPED // the log lives in the output folder, which is not private: nothing is written there
       throw new Error(sharedFoldersMessage(shared.problems))
     }
     files.mkdirSync(outDir, { recursive: true, mode: PRIVATE_FOLDER })
@@ -1208,6 +1209,12 @@ export async function runBackup(options, deps = {}) {
       logSkipped = '' // the message of the failure says it all, and no log is written
       throw new Error(LOG_NOT_REGULAR_ERROR)
     }
+    // The folder is known to be private, so this is the place to clear what a crashed run left (see removeStaleWorkFolders). The
+    // count goes in the log line, whatever the rest of this run does.
+    const stale = removeStaleWorkFolders(outDir, clock(), files)
+    staleRemoved = stale.removed
+    if (stale.failed) earlyWarnings.push(`${stale.failed}-stale-work-folders-not-removed`)
+    if (!stale.checked) earlyWarnings.push('stale-work-folders-not-checked')
     const connectionString = await connectionStringFor({ options, env, platform, runner })
     scrub = makeScrubber(connectionString, hiddenFolders)
     host = maskDatabaseHost(connectionString)
@@ -1215,18 +1222,19 @@ export async function runBackup(options, deps = {}) {
     const pgBin = resolvePgBin({ option: options.pgBin, env, platform, exists })
     const pgRestore = pgTool(pgBin, 'pg_restore', platform)
 
-    // THE WORK DIRECTORY. Everything that holds data happens in a private directory that this run makes with fs.mkdtemp in the
-    // temp folder of the user: an unpredictable name, mode 700 on macOS and Linux in the same step, and on Windows inside the
-    // profile, where only the user can add an entry. It is NOT made in the output folder: an account that can write there
-    // could add an explicit, inheritable access entry of its own between the moment the directory exists and the moment its
-    // list is set (`/inheritance:r` removes only inherited entries, and `/grant:r` replaces only the entries of the user), or
-    // swap a path. As a second net, on Windows the directory gets an owner-only list before anything is written into it, and
-    // on macOS and Linux its mode is read back. It is removed at the end in every case. The temporary file is made, dumped
-    // into, checked and closed there; the verified file is then renamed into the output folder. Another account that can
-    // write in the output folder can at most replace the FINAL file after the rename, and the data in it was never readable
-    // by it.
+    // THE WORK DIRECTORY. Everything that holds data happens in a private directory that this run makes with fs.mkdtemp INSIDE the
+    // output folder, after that folder (and every folder above it) was found not to be changeable by another account, and after
+    // the folder exists: an unpredictable name, mode 700 on macOS and Linux in the same step, and on Windows the list of the
+    // folder, which only the trusted accounts can change. Nobody else can add an explicit, inheritable access entry of their own
+    // between the moment the directory exists and the moment its list is set (`/inheritance:r` removes only inherited entries, and
+    // `/grant:r` replaces only the entries of the user), or swap a path: that needs write access to the folder, and that was
+    // refused above. As a second net, on Windows the directory gets an owner-only list and it is read back before anything is
+    // written into it, and on macOS and Linux its mode is read back. It is removed at the end in every case (and one that a
+    // crashed run left is removed by the next run, see removeStaleWorkFolders). The temporary file is made, dumped into, checked
+    // and closed there; the verified file is then renamed into the output folder, on the same volume. It is a directory and
+    // not a file with a dump name, so retention (which only touches files with the exact name of a backup) never sees it.
     const owner = windows ? await ownerOf() : undefined
-    workDir = files.mkdtempSync(path.join(tmpdir, WORK_PREFIX))
+    workDir = files.mkdtempSync(path.join(outDir, WORK_PREFIX))
     workCreated = true
     partialPath = path.join(workDir, partialName)
     if (windows) {
@@ -1318,17 +1326,12 @@ export async function runBackup(options, deps = {}) {
       }
     }
 
-    // Only now, verified and owner-only, after pg_dump has exited and both checks passed, the file is moved to its final name
+    // Only now, verified and owner-only, after pg_dump has exited and all the checks passed, the file is moved to its final name
     // in the output folder. The work directory is inside that folder, so this is a rename on one volume, which keeps the mode
     // and the access list of the file. When the final name exists (a second run in the same minute) the rename replaces it
     // with this verified dump, which is as good.
     const finalPath = path.join(outDir, finalName)
-    try {
-      files.renameSync(partialPath, finalPath)
-    } catch (error) {
-      if (error?.code === 'EXDEV') throw new Error(EXDEV_ERROR)
-      throw error
-    }
+    files.renameSync(partialPath, finalPath)
     const warnings = []
     const size = files.statSync(finalPath).size
 
@@ -1354,10 +1357,11 @@ export async function runBackup(options, deps = {}) {
   if (workCreated && !attempt(() => files.rmSync(workDir, { recursive: true, force: true }))) {
     result.warning = [result.warning, 'work-directory-not-removed'].filter(Boolean).join(',')
   }
+  if (earlyWarnings.length) result.warning = [result.warning, ...earlyWarnings].filter(Boolean).join(',')
 
   let issue
   if (!result.ok && options.reportIssue) {
-    issue = await openIssue({ repo: options.reportIssue, runner, now, env, tmpdir, files })
+    issue = await openIssue({ repo: options.reportIssue, runner, now, env })
   }
   const when = clock()
   const line = logLine({
@@ -1367,6 +1371,7 @@ export async function runBackup(options, deps = {}) {
     file: result.file,
     size: result.size,
     removed: result.removed,
+    stale: staleRemoved,
     warning: result.warning,
     issue,
     error: result.message,
@@ -1383,13 +1388,6 @@ export async function runBackup(options, deps = {}) {
   // in between: then nothing is written, and the screen says why.
   if (logSkipped === null && !logIsRegular(files, logPath)) logSkipped = LOG_NOT_REGULAR_ERROR
   const logAllowed = logSkipped === null // (a log in a folder that others can write could be a link to another file of the owner)
-  // A refusal before anything was made (a temp folder that others can change) leaves the output folder missing. That folder was
-  // judged private, so it is made now, to have a place for the line of the failure.
-  if (logAllowed) {
-    attempt(() => {
-      if (!files.existsSync(outDir)) files.mkdirSync(outDir, { recursive: true, mode: PRIVATE_FOLDER })
-    })
-  }
   if (windows && logAllowed) {
     try {
       if (!files.existsSync(logPath)) {

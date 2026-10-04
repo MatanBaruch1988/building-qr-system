@@ -68,7 +68,7 @@ check-ins, the e-mail addresses of the committee), so they never go to GitHub, i
 **What runs.** `scripts/backup-db.mjs` (`npm run db:backup`), once a day. It asks the Neon CLI for the direct connection
 string of the production branch (kept in memory, never written down) and runs `pg_dump` in a read-only session: the server
 refuses any write in it, so the backup cannot change production. This is the one sanctioned local read of production (see
-ADR 0005). The dump goes into a temporary file in a private work directory in your own temp folder that belongs to this run
+ADR 0005). The dump goes into a temporary file in a private work directory inside the backup folder that belongs to this run
 alone (see "Who can read them"), so two runs in the same minute never share a file. Then the file is checked three times: the
 table of contents (`pg_restore --list`) must name the data of `scans` and `points`; a full read (`pg_restore --file=` to the
 null device, `NUL` on Windows and `/dev/null` elsewhere) must get through every data block and exit with 0 (the first check
@@ -90,53 +90,52 @@ kept, it removes its own dump instead, ends with 0 and writes `warning=own-dump-
 verified dump exists). A file whose name says a time later than now (a clock that was wrong once) is not counted and not
 deleted, and the log says `backups-dated-in-the-future-ignored`; delete such a file by hand. One line
 per run is added to `backup.log` in the same folder: the time (DD/MM/YYYY HH:MM), ok or failed, the masked host, the file
-and its size, or a short error. It never holds the connection string, the user or the password.
+and its size, or a short error (and `stale-work-folders-removed=N` when the run cleared work folders that a crashed run left,
+see below). It never holds the connection string, the user or the password.
 
 **Where the files are.** A folder on the owner's computer, outside the repository, set with `--out` in the scheduled task.
 
 **Who can read them.** Only the owner, because the dump holds attendance data.
 
-- **A folder that another account can change is refused.** Every check of a path before the path is used has a short gap in
-  which an account that can write in that folder could rename a directory away and put its own at the same path, swap a file
-  for a link, or add an access entry of its own. So the script does not try to win those races one by one: before it makes
-  anything, it looks at the backup folder, at the temp folder (where the work directory is made) and at every folder above each
-  of them up to the root, and it stops (exit code 1, nothing made, nothing dumped, nothing rotated) when another account can
-  change one of them. On Windows it reads the access lists as SDDL (with SIDs, so the language of Windows does not matter) with
-  one `powershell.exe` call (`Get-Acl`, the paths in an environment variable, a few tenths of a second in all), and trusts
-  only your own account, the system (`S-1-5-18`), the administrators (`S-1-5-32-544`) and TrustedInstaller. For the backup
-  folder and the temp folder themselves, an allow entry for any other account that gives add file, add subfolder, delete a
-  child, delete, change the permissions, take ownership, or generic write or all (also through an alias such as `FA`, `FW`,
-  `GA`, `GW`, `WD`, `WO` or `SD`) refuses the run; for the folders above them the same, except add file and add subfolder (the
-  root of the system drive lets every signed-in account create a folder, and that is fine). An entry that only applies to what
-  is made inside (inherit-only) and a deny entry are ignored. A folder owned by another account is refused. An access list that
-  cannot be read, or has an entry that is not understood (a conditional one), is refused too: nothing that is not understood is
-  trusted. On macOS and Linux the temp folder must not be writable by the group or others unless it has the sticky bit (this is
-  `/tmp`), no folder above the backup folder or the temp folder may be writable by others without the sticky bit, and the
-  backup folder itself is judged as before (the group or others can write in it: refused). A folder above that only the group
-  can write in is not refused, because its members are not known. The message says which one is the problem (the backup
-  folder or the temp folder, itself or a folder above it), never an account or a path, and what to do: use a backup folder in
-  your own profile, and set `TEMP` (Windows) or `TMPDIR` (macOS and Linux) to a private folder in your own profile. When the
-  backup folder is the problem, `backup.log` is not written (the screen says so); when only the temp folder is, the failure is
-  logged as usual, and `--report-issue` opens its issue. On a shared computer, where `%TEMP%` has an explicit Modify entry for
-  another account, the default `%TEMP%` is refused: give the scheduled task a `TEMP` of its own. The checks below stay as a
-  second net (the work directory's access list read back, the two looks at `backup.log`, the mode checks), and the races that
-  they cover need write access to one of these folders, which this check refuses.
-- **A private work directory in your own temp folder.** Every run makes its own directory there (`bqr-work-<random>`, in
-  `%TEMP%` on Windows, `$TMPDIR` or `/tmp` on macOS and Linux), with a name nobody can guess, and does all of its work in it:
-  the dump is written there, both checks run there, and the mode or access list is set and checked there. Only then is the
-  verified file moved into the backup folder, and the work directory is removed, whatever happened. It is deliberately **not**
-  made inside the backup folder. Somebody who can write in the backup folder could add an access entry of their own to a
-  directory made there (an inheritable one, which neither removing inheritance nor granting your account replaces) in the
-  moment between its creation and the moment it is closed, or swap a file's path for a file of their own, because the program
-  that dumps (`pg_dump`) opens a file by its path. The temp folder is checked, as above, not to be changeable by another
-  account (and on macOS and Linux the directory is made with mode 700 in one step), so none of that is possible there. At most somebody who can write in the backup folder can replace the finished file afterwards, and the data
-  in it was never readable by them. A leftover work directory (a run that was killed) is only ever removed by hand: the
-  script never touches the work directory of another run.
-- **The backup folder must be on the same drive as the temp folder.** The finished file is moved with a rename, which keeps its
-  mode and access list but works on one drive only. When the backup folder is on another drive the run fails with a message
-  that says so (`EXDEV`), and nothing is kept. Put the backup folder on the drive of the temp folder (on Windows, the drive of
-  your profile), or point `TEMP` (on macOS and Linux `TMPDIR`) of the scheduled task at a private folder on the drive of the
-  backup folder. On many Linux systems `/tmp` is a separate disk (in memory): then set `TMPDIR`.
+- **The backup folder, and every folder above it, must not be changeable by another account. This is the only folder rule.**
+  Every check of a path before the path is used has a short gap in which an account that can write in that folder could
+  rename a directory away and put its own at the same path, swap a file for a link, or add an access entry of its own. So the
+  script does not try to win those races one by one: before it makes anything, it looks at the backup folder and at every
+  folder above it up to the root, and it stops (exit code 1, nothing made, nothing dumped, nothing rotated) when another
+  account can change one of them. On Windows it reads the access lists as SDDL (with SIDs, so the language of Windows does
+  not matter) with one `powershell.exe` call (`Get-Acl`, the paths in an environment variable, a few tenths of a second in
+  all), and trusts only your own account, the system (`S-1-5-18`), the administrators (`S-1-5-32-544`) and TrustedInstaller.
+  For the backup folder itself, an allow entry for any other account that gives add file, add subfolder, delete a child,
+  delete, change the permissions, take ownership, or generic write or all (also through an alias such as `FA`, `FW`, `GA`,
+  `GW`, `WD`, `WO` or `SD`) refuses the run; for the folders above it the same, except add file and add subfolder (the root
+  of the system drive lets every signed-in account create a folder, and that is fine). An entry that only applies to what is
+  made inside (inherit-only) and a deny entry are ignored. A folder owned by another account is refused. An access list that
+  cannot be read, or has an entry that is not understood (a conditional one), is refused too: nothing that is not understood
+  is trusted. On macOS and Linux no folder above the backup folder may be writable by others without the sticky bit, and the
+  backup folder itself must not be writable by the group or others (see the next item but one). A folder above that only the
+  group can write in is not refused, because its members are not known. If the backup folder does not exist yet, the nearest
+  folder that exists is judged in its place. The message says whether it is the backup folder itself or a folder above it,
+  never an account or a path, and what to do: use a backup folder in your own profile. When this refuses the run,
+  `backup.log` is not written (the screen says so), and `--report-issue` still opens its issue. **The scheduled task needs
+  nothing about `TEMP` or `TMPDIR`**: the script does not use the temp folder at all, so a shared temp folder (for example one
+  where another account has an explicit Modify entry) changes nothing. The checks below stay as a second net (the work
+  directory's access list read back, the two looks at `backup.log`, the mode checks), and the races that they cover need write
+  access to the backup folder or to a folder above it, which this check refuses.
+- **A private work directory inside the backup folder.** Every run makes its own directory there, after the check above and
+  after the folder exists (`.bqr-work-<random>`, a name nobody can guess, hidden on macOS and Linux), and does all of its work
+  in it: the dump is written there, the checks run there, and the mode or access list is set and checked there. Only then is
+  the verified file moved into the backup folder with a rename (on the same volume, so it cannot fail for that reason), and
+  the work directory is removed, whatever happened. It inherits the access list of the backup folder, which only the trusted
+  accounts can change (on macOS and Linux it is made with mode 700 in one step), and nobody else can add an access entry of
+  their own to it or swap its path, because that needs write access to the backup folder. A work directory is a directory,
+  and retention only ever touches files with the exact name of a backup, so it is never counted, rotated or deleted by
+  retention.
+- **Work folders that a killed run left behind are removed by the next run.** At the start of a run, after the checks, every
+  directory in the backup folder whose name is exactly `.bqr-work-` and six letters or digits, and that was last changed more
+  than 24 hours ago, is removed with what is in it. Younger ones are left alone, because another run may be using one, and so
+  is everything else: a file, a link, any other name, any backup. `backup.log` says how many were removed
+  (`stale-work-folders-removed=N`, never a path); a folder that cannot be removed is a warning
+  (`N-stale-work-folders-not-removed`) and the run goes on.
 - **On macOS and Linux** the script sets the umask to 077 before it creates anything (`pg_dump` makes its file with the
   umask it inherits, which is often 022 and would let every account of the machine read it), makes the backup folder with
   mode 700, and sets mode 600 on every dump and on `backup.log`; the mode of the dump is read back, and a dump that others
@@ -146,21 +145,21 @@ and its size, or a short error. It never holds the connection string, the user o
   write in it. Fix it with `chmod 700 <folder>`. When they can only read it, `backup.log` and the screen get a warning with
   the same advice, because the files in it are owner-only anyway and the others can see only their names.
 - **On Windows** a new file or folder inherits the access list of its parent, so the script closes each thing itself, with
-  `icacls`, as a second net inside the private temp folder: the work directory first (all inherited access removed, full
+  `icacls`, as a second net inside the checked backup folder: the work directory first (all inherited access removed, full
   control for your own account alone, inherited by what is made inside), then the empty temporary file in it the same way,
   then `pg_dump` overwrites that file in place (which keeps its list). Right after the first call the list of the work
   directory is read back (`icacls <dir>`), and the run stops, before anything is written into the directory, unless it is
   exactly one entry: yours, full control, inherited by what is inside (`(OI)(CI)(F)`). Another entry, an inherited one or a
   deny stops it. This catches an entry that another account added to the directory in the moment before its list was set,
   which neither removing inheritance nor granting your account removes (it could only happen if another account can write in
-  the temp folder). The account is found by its SID with `whoami /user`,
+  the backup folder, which the check above refuses). The account is found by its SID with `whoami /user`,
   so a name with a space or in another alphabet does not matter. The rename into the backup folder keeps the list (checked on
   Windows 11), and `backup.log` gets the same list when it is created. If `icacls` is missing or fails, the backup stops
   before anything is dumped, `backup.log` says why, and nothing is rotated. You can look at the result with `icacls <file>`: it
   must list only your own account (the administrators and the system are not on the list either, on purpose). The tools of
-  Windows (`icacls`, and many others) cannot open a path of more than about 260
-  characters, so the script refuses, before it makes anything, a backup folder or a temp folder whose paths would be longer
-  than 245 characters (the names inside the work directory are short): use a short backup folder, such as
+  Windows (`icacls`, and many others) cannot open a path of more than about 260 characters, so the script refuses, before it
+  makes anything, a backup folder whose paths would be longer than 245 characters (the names inside the work directory are
+  short): use a short backup folder, such as
   `C:\backups\building-qr` or one directly under your profile.
 - **`backup.log` must be a plain file with one name.** Before anything is dumped, and again right before the line is added,
   the script checks (without following a link) that an existing `backup.log` is a regular file and has no other name. A
@@ -258,9 +257,8 @@ Register-ScheduledTask -TaskName 'Building QR daily backup' -Action $action -Tri
 makes the backup when it is next on. Without `-User` and `-Password` the task runs as the signed-in user, only while that user
 is signed in. In the Task Scheduler window the same settings are on the **Settings** tab and under **Security options**
 ("Run only when user is logged on"). Run the task once by hand from the window and read `backup.log` before you rely on it.
-If the run is refused because another account can change a folder that it relies on (the first item of "Who can read
-them"), the backup folder must move into your own profile, and on a shared computer the task must start with a `TEMP` of its
-own (for example from a small `.cmd` file in your profile that sets `TEMP` to a private folder and then runs `node`).
+If the run is refused because another account can change the backup folder or a folder above it (the first item of "Who can
+read them"), the backup folder must move into your own profile. Nothing about `TEMP` is needed.
 
 **On macOS or Linux** a cron line does the same (`crontab -e`). Cron has a short `PATH`, so use full paths, or set `PATH` at
 the top of the crontab so that `node`, `neon`, `pg_dump` and `gh` are found:

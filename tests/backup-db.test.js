@@ -11,7 +11,6 @@ import {
   AMBIGUOUS_SOURCE_ERROR,
   BACKUP_NAME,
   DEFAULT_KEEP,
-  EXDEV_ERROR,
   ISSUE_TITLE,
   WINDOWS_PG_BIN,
   backupFileName,
@@ -40,17 +39,21 @@ import {
   PARTIAL_NAME,
   PATH_TOO_LONG_ERROR,
   WINDOWS_PATH_LIMIT,
+  WORK_NAME,
   WORK_PREFIX,
   pgTool,
   powershellTool,
   READ_ONLY_OPTION,
   resolvePgBin,
+  removeStaleWorkFolders,
+  rotate,
   runBackup,
   runProcess,
   backupTime,
   selectOld,
   SHARED_FOLDERS_ADVICE,
   SHARED_FOLDERS_PREFIX,
+  STALE_WORK_MS,
   SHARED_UNREADABLE_ERROR,
   sharedAclProblem,
   sharedFoldersMessage,
@@ -67,7 +70,7 @@ const POOLED = `postgresql://${USER}:${ENCODED}@ep-test-cool-123456-pooler.eu-ce
 const SID = 'S-1-5-21-111-222-333-1001' // a fake SID
 const NOW = new Date('2026-10-03T07:15:42Z')
 const FINAL = 'building-qr-20261003T0715Z.dump'
-// the temporary file, inside the private work directory (bqr-work-<random>) that each run makes in the temp folder
+// the temporary file, inside the private work directory (.bqr-work-<random>) that each run makes inside the output folder
 const PARTIAL = 'partial.dump'
 const LISTING = [
   ';',
@@ -183,22 +186,22 @@ function privateStat(...args) {
 
 /** True for the work directory of a run (the stub says it is private, like a real one made with mode 700). */
 function isWorkDir(target) {
-  return path.basename(String(target)).startsWith('bqr-work-')
+  return path.basename(String(target)).startsWith('.bqr-work-')
 }
 
-/** The work directories of runs that are in the temp folder of the test now: a run makes its own with mkdtemp. */
+/** The work directories that are in the output folder of the test now: a run makes its own with mkdtemp. */
 function backupFilesIn(folder) {
   return fs.readdirSync(folder).filter((name) => BACKUP_NAME.test(name)).sort()
 }
 
 function workDirsNow() {
-  return fs.readdirSync(tmp).filter((name) => name.startsWith('bqr-work-'))
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.startsWith('.bqr-work-')) : []
 }
 
-/** The working directory of a tool is this run's own work directory: a bqr-work-<random> directory in the temp folder. */
+/** The working directory of a tool is this run's own work directory: a .bqr-work-<random> directory inside the output folder. */
 function expectWorkCwd(cwd) {
-  expect(path.dirname(cwd)).toBe(path.resolve(tmp))
-  expect(path.basename(cwd)).toMatch(/^bqr-work-[A-Za-z0-9]{6}$/)
+  expect(path.dirname(cwd)).toBe(path.resolve(dir))
+  expect(path.basename(cwd)).toMatch(/^\.bqr-work-[A-Za-z0-9]{6}$/)
 }
 
 /**
@@ -225,7 +228,6 @@ async function go({ options = {}, deps = {}, runner = makeRunner() } = {}) {
       exists: () => false,
       runner,
       now: () => NOW,
-      tmpdir: tmp,
       fs: { ...fs, statSync: privateStat },
       umask: (mask) => {
         masks.push(mask)
@@ -593,9 +595,11 @@ describe('a good backup', () => {
   it('dumps to a temporary file, checks it, renames it, and prints one summary line', async () => {
     let during
     let inside
+    let cwd
     const runner = makeRunner({
       pg_dump: (call) => {
         const answer = defaults.pg_dump(call)
+        cwd = call.options.cwd
         during = fs.readdirSync(dir)
         inside = fs.readdirSync(call.options.cwd)
         return answer
@@ -604,7 +608,7 @@ describe('a good backup', () => {
     const r = await go({ runner })
     expect(r.exitCode).toBe(0)
     expect(r.ok).toBe(true)
-    expect(during).toEqual([]) // nothing is in the output folder while the dump is made: the work directory is in the temp folder
+    expect(during).toEqual([path.basename(cwd)]) // only the work directory is in the output folder while the dump is made
     expect(inside).toEqual([PARTIAL]) // and the temporary file is in it
     expect(r.files).toEqual(['backup.log', FINAL])
     expect(fs.readFileSync(path.join(dir, FINAL), 'utf8')).toBe('PGDMP fake dump')
@@ -643,7 +647,10 @@ describe('a good backup', () => {
     process.chdir(tmp)
     try {
       const r = await go({ options: { out: 'rel-backups' } })
-      expectWorkCwd(r.runner.of('pg_dump')[0].options.cwd) // the temp folder, not the folder of the backups
+      const cwd = r.runner.of('pg_dump')[0].options.cwd // the work directory, inside the folder of the backups, as an absolute path
+      expect(path.isAbsolute(cwd)).toBe(true)
+      expect(fs.realpathSync(path.dirname(cwd))).toBe(fs.realpathSync(path.join(tmp, 'rel-backups')))
+      expect(path.basename(cwd)).toMatch(/^\.bqr-work-[A-Za-z0-9]{6}$/)
       expect(fs.existsSync(path.join(tmp, 'rel-backups', FINAL))).toBe(true)
     } finally {
       process.chdir(before)
@@ -1373,7 +1380,7 @@ function ghBy({ list, comment, create } = {}) {
 }
 
 const ghCalls = (r, subcommand) => r.runner.of('gh').filter((call) => call.args[1] === subcommand)
-const bodyFileOf = (call) => call.args[call.args.indexOf('--body-file') + 1]
+const bodyOf = (call) => call.args[call.args.indexOf('--body') + 1]
 const listing = (...items) => ({ status: 0, stdout: JSON.stringify(items), stderr: '' })
 
 describe('finding the open issue', () => {
@@ -1425,14 +1432,12 @@ describe('the issue after a failure', () => {
     expect(r.runner.of('gh')[0]).toBe(list)
   })
 
-  it('opens a new issue when none is open: the title, the bug label and a body file, which is deleted afterwards', async () => {
+  it('opens a new issue when none is open: the title, the bug label and the body in the argument (no file, no temp folder)', async () => {
     let body
-    let bodyFile
     const runner = failing({
       gh: ghBy({
         create: (call) => {
-          bodyFile = bodyFileOf(call)
-          body = fs.readFileSync(bodyFile, 'utf8')
+          body = bodyOf(call)
           return { status: 0, stdout: 'https://github.com/owner/repo/issues/1\n', stderr: '' }
         },
       }),
@@ -1442,9 +1447,10 @@ describe('the issue after a failure', () => {
     expect(ghCalls(r, 'comment')).toEqual([])
     const [create] = ghCalls(r, 'create')
     expect(create.command).toBe('gh')
-    expect(create.args).toEqual(['issue', 'create', '--repo', 'owner/repo', '--title', ISSUE_TITLE, '--label', 'bug', '--body-file', bodyFile])
+    expect(create.args).toEqual(['issue', 'create', '--repo', 'owner/repo', '--title', ISSUE_TITLE, '--label', 'bug', '--body', body])
     expect(ISSUE_TITLE).toBe('Daily database backup failed')
-    expect(fs.existsSync(path.dirname(bodyFile))).toBe(false)
+    expect(body).toBe(issueBody(NOW))
+    expect(create.args).not.toContain('--body-file')
     expect(body).toContain('03/10/2026 07:15 (UTC)')
     expect(body).toContain('backup.log')
     expect(r.issue).toBe('opened')
@@ -1454,13 +1460,11 @@ describe('the issue after a failure', () => {
 
   it('adds a comment to the open issue instead of opening another one, with the same text', async () => {
     let commentBody
-    let bodyFile
     const runner = failing({
       gh: ghBy({
         list: () => listing({ number: 7, title: ISSUE_TITLE }),
         comment: (call) => {
-          bodyFile = bodyFileOf(call)
-          commentBody = fs.readFileSync(bodyFile, 'utf8')
+          commentBody = bodyOf(call)
           return { status: 0, stdout: '', stderr: '' }
         },
       }),
@@ -1469,9 +1473,8 @@ describe('the issue after a failure', () => {
     expect(r.exitCode).toBe(1)
     expect(ghCalls(r, 'create')).toEqual([])
     const [comment] = ghCalls(r, 'comment')
-    expect(comment.args).toEqual(['issue', 'comment', '7', '--repo', 'owner/repo', '--body-file', bodyFile])
+    expect(comment.args).toEqual(['issue', 'comment', '7', '--repo', 'owner/repo', '--body', commentBody])
     expect(commentBody).toBe(issueBody(NOW))
-    expect(fs.existsSync(path.dirname(bodyFile))).toBe(false)
     expect(r.issue).toBe('commented-7')
     expect(r.log).toContain(' issue=commented-7 error=pg_dump failed')
     expect(r.errs).toContain('backup: a comment was added to the open issue 7')
@@ -1536,7 +1539,7 @@ describe('the issue after a failure', () => {
   it('says nothing about a path, a host or the error: no data, not even the name of a person, in an issue or a comment', async () => {
     const bodies = {}
     const capture = (name) => (call) => {
-      bodies[name] = fs.readFileSync(bodyFileOf(call), 'utf8')
+      bodies[name] = bodyOf(call)
       return { status: 0, stdout: '', stderr: '' }
     }
     await go({ options: { reportIssue: 'owner/repo' }, runner: failing({ gh: ghBy({ create: capture('issue') }) }) })
@@ -1553,6 +1556,25 @@ describe('the issue after a failure', () => {
       expect(bodies[name], name).toBe(issueBody(NOW))
       for (const text of forbidden) expect(bodies[name], `${name}: ${text}`).not.toContain(text)
     }
+  })
+
+  it('needs no file and no temp folder: it writes nothing, whatever the file system does', async () => {
+    const written = []
+    const files = {
+      ...fs,
+      statSync: privateStat,
+      mkdtempSync: (prefix, ...rest) => {
+        written.push(`mkdtemp ${path.basename(String(prefix))}`)
+        return fs.mkdtempSync(prefix, ...rest)
+      },
+      writeFileSync: (target, data, options) => {
+        written.push(`write ${path.basename(String(target))}`)
+        return fs.writeFileSync(target, data, options)
+      },
+    }
+    const r = await go({ options: { reportIssue: 'owner/repo' }, runner: failing({ gh: ghBy() }), deps: { fs: files } })
+    expect(r.issue).toBe('opened')
+    expect(written).toEqual([`mkdtemp ${WORK_PREFIX}`, `write ${PARTIAL}`]) // the work directory and its file, and nothing for the issue
   })
 
   it('is built from the time alone, so an error text cannot get into it', () => {
@@ -1711,7 +1733,7 @@ describe('the full read of the dump', () => {
       return { status: 0, stdout: '', stderr: '' }
     })
     const r = await go({ runner })
-    expect(during).toEqual([]) // no final file yet
+    expect(during.filter((name) => !name.startsWith('.bqr-work-'))).toEqual([]) // no final file yet, only the work directory
     expect(r.exitCode).toBe(0)
     expect(r.files).toEqual(['backup.log', FINAL])
   })
@@ -1788,11 +1810,11 @@ describe('files for the owner only', () => {
     expect(events).toEqual(['umask 077', 'mkdir', 'mkdtemp', 'pg_dump', 'umask 022']) // the output folder, then the work directory
   })
 
-  it('makes the output folder with mode 700 (every folder on the way too), and the work directory with mkdtemp in the temp folder', async () => {
+  it('makes the output folder with mode 700 (every folder on the way too), and the work directory with mkdtemp inside it', async () => {
     const rec = recordingFs()
     await go({ deps: { fs: rec.fs } })
     expect(rec.mkdirs).toEqual([{ folder: true, options: { recursive: true, mode: 0o700 } }])
-    expect(rec.mkdtemps).toEqual([path.join(tmp, 'bqr-work-')]) // mkdtemp itself makes it with mode 700, with a name nobody can guess
+    expect(rec.mkdtemps).toEqual([path.join(path.resolve(dir), '.bqr-work-')]) // mkdtemp itself makes it with mode 700, with a name nobody can guess
   })
 
   it('sets mode 600 on the dump (in the work directory, before it moves) and on backup.log, and creates the log with mode 600', async () => {
@@ -1901,7 +1923,7 @@ describe('a cleanup that fails', () => {
     expect(visible(r)).not.toContain(tmp)
   })
 
-  it('does not hide the answer of the issue step when the body file cannot be deleted', async () => {
+  it('does not hide the answer of the issue step when nothing can be deleted', async () => {
     const files = { ...fs, statSync: privateStat, rmSync: busy }
     const r = await go({
       deps: { fs: files },
@@ -1943,7 +1965,8 @@ describe('a cleanup that fails', () => {
     }
     const r = await go({ deps: { fs: files } })
     expect(r.exitCode).toBe(0)
-    expect(r.warning).toBe('old-backups-not-checked')
+    // the same listing is what the clean-up of work folders that a crashed run left needs, so it says that it could not look either
+    expect(r.warning).toBe('old-backups-not-checked,stale-work-folders-not-checked')
   })
 
   it('still returns when the screen itself fails (a closed pipe)', async () => {
@@ -2073,28 +2096,29 @@ describe('owner-only files on Windows', () => {
     expect(r.runner.of('whoami')).toHaveLength(1) // for the dump and for the log
   })
 
-  it('closes the work directory in the temp folder, then the empty temporary file in it, with icacls before pg_dump writes anything: SID, no inheritance', async () => {
+  it('closes the work directory in the output folder, then the empty temporary file in it, with icacls before pg_dump writes anything: SID, no inheritance', async () => {
     const seen = {}
     const ls = (target) => (fs.existsSync(target) ? fs.readdirSync(target) : null)
+    const lsOut = () => ls(dir)?.filter((name) => !name.startsWith('.bqr-work-')) ?? null // what is in the output folder besides the work directory
     const runner = makeRunner({
       icacls: (call) => {
-        if (call.args[0].startsWith('bqr-work-')) seen.atWorkDir = { out: ls(dir), inside: ls(path.join(tmp, call.args[0])) }
+        if (call.args[0].startsWith('.bqr-work-')) seen.atWorkDir = { out: lsOut(), inside: ls(path.join(dir, call.args[0])) }
         if (call.args[0] === PARTIAL) {
           seen.atFile = { inside: ls(call.options.cwd), size: fs.statSync(path.join(call.options.cwd, PARTIAL)).size, final: fs.existsSync(path.join(dir, FINAL)) }
         }
         return defaults.icacls(call)
       },
       pg_dump: (call) => {
-        seen.beforeDump = { out: ls(dir), inside: ls(call.options.cwd) }
+        seen.beforeDump = { out: lsOut(), inside: ls(call.options.cwd) }
         return defaults.pg_dump(call)
       },
     })
     const r = await go({ deps: win(), runner })
     const [dirCall, fileCall] = r.runner.of('icacls').filter((call) => call.args.length > 1) // the calls that change a list
-    // the directory: found by a relative name in the temp folder, with the rights that what is made inside inherits
+    // the directory: found by a relative name in the output folder, with the rights that what is made inside inherits
     expect(dirCall.command).toBe(ICACLS)
-    expect(dirCall.args).toEqual([expect.stringMatching(/^bqr-work-[A-Za-z0-9]{6}$/), '/inheritance:r', '/grant:r', `*${SID}:(OI)(CI)F`])
-    expect(dirCall.options.cwd).toBe(path.resolve(tmp))
+    expect(dirCall.args).toEqual([expect.stringMatching(/^\.bqr-work-[A-Za-z0-9]{6}$/), '/inheritance:r', '/grant:r', `*${SID}:(OI)(CI)F`])
+    expect(dirCall.options.cwd).toBe(path.resolve(dir))
     // the file: by a relative name in the work directory
     expect(fileCall.args).toEqual([PARTIAL, '/inheritance:r', '/grant:r', `*${SID}:F`])
     expectWorkCwd(fileCall.options.cwd)
@@ -2115,8 +2139,9 @@ describe('owner-only files on Windows', () => {
   it('goes in this order: whoami, the work directory, icacls on it, the empty file, icacls, pg_dump, the list, the full read, the rename, the new log', async () => {
     const events = []
     const ls = (target) => (target && fs.existsSync(target) ? fs.readdirSync(target).join(' ') : '-')
-    const where = () => `out: ${ls(dir) || 'empty'}, work: ${ls(workDirsNow().map((name) => path.join(tmp, name))[0])}`
-    const named = (name) => name.replace(/^bqr-work-.*$/, '<work>')
+    const outList = () => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => !name.startsWith('.bqr-work-')).join(' ') || 'empty' : '-')
+    const where = () => `out: ${outList()}, work: ${ls(workDirsNow().map((name) => path.join(dir, name))[0])}`
+    const named = (name) => name.replace(/^\.bqr-work-.*$/, '<work>')
     const runner = makeRunner({
       whoami: (call) => {
         events.push(`whoami (${where()})`)
@@ -2214,13 +2239,13 @@ describe('owner-only files on Windows', () => {
   it('closes a new backup.log the same way, and does not touch a log that exists', async () => {
     const first = await go({ deps: win() })
     expect(first.runner.of('icacls').map((c) => c.args)).toEqual([
-      [expect.stringMatching(/^bqr-work-/), '/inheritance:r', '/grant:r', `*${SID}:(OI)(CI)F`],
-      [expect.stringMatching(/^bqr-work-/)], // the list of the work directory, read back
+      [expect.stringMatching(/^\.bqr-work-/), '/inheritance:r', '/grant:r', `*${SID}:(OI)(CI)F`],
+      [expect.stringMatching(/^\.bqr-work-/)], // the list of the work directory, read back
       [PARTIAL, '/inheritance:r', '/grant:r', `*${SID}:F`],
       ['backup.log', '/inheritance:r', '/grant:r', `*${SID}:F`],
     ])
     const second = await go({ deps: win() })
-    expect(second.runner.of('icacls').map((c) => c.args[0])).toEqual([expect.stringMatching(/^bqr-work-/), expect.stringMatching(/^bqr-work-/), PARTIAL]) // the log was there already
+    expect(second.runner.of('icacls').map((c) => c.args[0])).toEqual([expect.stringMatching(/^\.bqr-work-/), expect.stringMatching(/^\.bqr-work-/), PARTIAL]) // the log was there already
     expect(second.log.split('\n').filter(Boolean)).toHaveLength(2)
   })
 
@@ -2280,9 +2305,10 @@ describe('one work directory and one temporary file per run', () => {
   const workOf = (r) => path.basename(r.runner.of('pg_dump')[0].options.cwd)
 
   it('has a prefix that is not a backup name, and a path inside the work directory that is not longer than the final file\'s', () => {
-    expect(WORK_PREFIX).toBe('bqr-work-')
+    expect(WORK_PREFIX).toBe('.bqr-work-')
     expect(BACKUP_NAME.test(`${WORK_PREFIX}abc123`)).toBe(false)
-    // mkdtemp adds six characters; the path inside is at most one character longer than the name of the final file
+    expect(WORK_NAME.test(`${WORK_PREFIX}abc123`)).toBe(true)
+    // mkdtemp adds six characters; the path inside is not longer than the name of the final file (with its separator)
     expect(WORK_PREFIX.length + 6 + 1 + PARTIAL_NAME.length).toBeLessThanOrEqual(FINAL.length + 1)
   })
 
@@ -2290,8 +2316,8 @@ describe('one work directory and one temporary file per run', () => {
     const first = await go()
     fs.rmSync(dir, { recursive: true, force: true })
     const second = await go()
-    expect(workOf(first)).toMatch(/^bqr-work-[A-Za-z0-9]{6}$/)
-    expect(workOf(second)).toMatch(/^bqr-work-[A-Za-z0-9]{6}$/)
+    expect(workOf(first)).toMatch(/^\.bqr-work-[A-Za-z0-9]{6}$/)
+    expect(workOf(second)).toMatch(/^\.bqr-work-[A-Za-z0-9]{6}$/)
     expect(workOf(first)).not.toBe(workOf(second))
   })
 
@@ -2329,15 +2355,14 @@ describe('one work directory and one temporary file per run', () => {
   })
 
   it('leaves the work directory of another run alone, on success and on failure', async () => {
-    const other = path.join(tmp, 'bqr-work-OTHER1')
-    fs.mkdirSync(other)
+    const other = path.join(dir, '.bqr-work-OTHER1')
+    fs.mkdirSync(other, { recursive: true })
     fs.writeFileSync(path.join(other, PARTIAL), 'another run is working here')
     const good = await go({ options: { keep: 1 } })
     expect(good.exitCode).toBe(0)
-    fs.rmSync(dir, { recursive: true, force: true })
     const bad = await go({ runner: makeRunner({ pg_dump: () => ({ status: 1, stdout: '', stderr: 'nope' }) }) })
     expect(bad.exitCode).toBe(1)
-    expect(workDirsNow()).toEqual(['bqr-work-OTHER1'])
+    expect(workDirsNow()).toEqual(['.bqr-work-OTHER1'])
     expect(fs.readFileSync(path.join(other, PARTIAL), 'utf8')).toBe('another run is working here')
   })
 
@@ -2461,7 +2486,7 @@ describe('a dump that is still readable by others', () => {
 // ---- the private work directory ------------------------------------------------------------------------------------------------------
 
 describe('the private work directory', () => {
-  it('is made by mkdtemp in the temp folder, never in the output folder, after the folder and before the temporary file', async () => {
+  it('is made by mkdtemp inside the output folder, after the folder exists and before the temporary file', async () => {
     const events = []
     let outFolderDuringDump
     const files = {
@@ -2472,7 +2497,7 @@ describe('the private work directory', () => {
         return fs.mkdirSync(target, options)
       },
       mkdtempSync: (prefix, ...rest) => {
-        events.push(`mkdtemp ${path.dirname(String(prefix)) === path.resolve(tmp) ? 'in the temp folder' : 'ELSEWHERE'} ${path.basename(String(prefix))}`)
+        events.push(`mkdtemp ${path.dirname(String(prefix)) === path.resolve(dir) ? 'in the output folder' : 'ELSEWHERE'} ${path.basename(String(prefix))}`)
         return fs.mkdtempSync(prefix, ...rest)
       },
       writeFileSync: (target, data, options) => {
@@ -2481,8 +2506,10 @@ describe('the private work directory', () => {
         return fs.writeFileSync(target, data, options)
       },
     }
+    let work
     const runner = makeRunner({
       pg_dump: (call) => {
+        work = path.basename(call.options.cwd)
         outFolderDuringDump = fs.readdirSync(dir)
         return defaults.pg_dump(call)
       },
@@ -2491,10 +2518,10 @@ describe('the private work directory', () => {
     expect(r.exitCode).toBe(0)
     expect(events).toEqual([
       'mkdir folder {"recursive":true,"mode":448}',
-      'mkdtemp in the temp folder bqr-work-',
-      'write bqr-work-XXXXXX/partial.dump {"flag":"wx","mode":384}',
+      'mkdtemp in the output folder .bqr-work-',
+      'write .bqr-work-XXXXXX/partial.dump {"flag":"wx","mode":384}',
     ])
-    expect(outFolderDuringDump).toEqual([]) // nothing but the finished file ever goes into the output folder
+    expect(outFolderDuringDump).toEqual([work]) // only the work directory, and later the finished file, are in the output folder
   })
 
   it('is where pg_dump, the list and the full read run, and the finished file is moved out of it into the output folder', async () => {
@@ -2550,10 +2577,15 @@ describe('the private work directory', () => {
     expect(r.warning).toBe('work-directory-not-removed')
     expect(r.log).toBe(`03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0 warning=work-directory-not-removed\n`)
     expect(r.errs).toEqual(['backup: warning, work-directory-not-removed'])
-    expect(r.files).toEqual(['backup.log', FINAL]) // nothing of it is in the output folder
+    expect(r.files.filter((name) => !name.startsWith('.bqr-work-'))).toEqual(['backup.log', FINAL])
     const [left] = workDirsNow()
-    expect(fs.readdirSync(path.join(tmp, left))).toEqual([]) // the dump was moved out, so nothing is left in it
+    expect(fs.readdirSync(path.join(dir, left))).toEqual([]) // the dump was moved out, so nothing is left in it
     expect(visible(r)).not.toContain(tmp)
+    // and it is a directory, so the retention of the next run never sees it as a backup
+    const next = await go({ options: { keep: 1 }, deps: { now: () => new Date('2026-10-04T07:15:00Z') } })
+    expect(next.exitCode).toBe(0)
+    expect(next.files).toContain(left)
+    expect(next.files).toContain('building-qr-20261004T0715Z.dump')
   })
 
   it('on macOS and Linux must be owner-only: a file system that ignores modes stops the run before anything is dumped', async () => {
@@ -2576,7 +2608,7 @@ describe('the private work directory', () => {
       },
     }
     const runner = makeRunner({
-      icacls: (call) => (call.args[0].startsWith('bqr-work-') ? { status: 5, stdout: '', stderr: '' } : defaults.icacls(call)),
+      icacls: (call) => (call.args[0].startsWith('.bqr-work-') ? { status: 5, stdout: '', stderr: '' } : defaults.icacls(call)),
     })
     const r = await go({
       options: { keep: 1 },
@@ -2591,43 +2623,12 @@ describe('the private work directory', () => {
     expect(r.files.filter((name) => BACKUP_NAME.test(name))).toEqual(oldBackups) // nothing was rotated
   })
 
-  describe('when the output folder is on another drive than the temp folder', () => {
-    const crossDrive = (code = 'EXDEV') => ({
-      ...fs,
-      statSync: privateStat,
-      renameSync: () => {
-        throw Object.assign(new Error(`${code}: cross-device link not permitted, rename '${tmp}/x' -> '${dir}/y'`), { code })
-      },
-    })
-
-    it('fails with a message that says what to do, deletes the dump, and rotates nothing', async () => {
-      seed(oldBackups)
-      const r = await go({ options: { keep: 1 }, deps: { fs: crossDrive() } })
-      expect(r.exitCode).toBe(1)
-      expect(r.message).toBe(EXDEV_ERROR)
-      expect(EXDEV_ERROR).toMatch(/same drive/)
-      expect(EXDEV_ERROR).toMatch(/TEMP/)
-      expect(r.files).toEqual(['backup.log', ...oldBackups]) // no final file, nothing rotated
-      expect(workDirsNow()).toEqual([]) // the verified dump in the work directory is removed with it
-      expect(r.log).toBe(`03/10/2026 10:15 failed host=${MASKED_HOST} error=${EXDEV_ERROR}\n`)
-      expect(visible(r)).not.toContain(tmp)
-    })
-
-    it('does not hide another reason why a rename failed, and still cleans its message of paths', async () => {
-      const r = await go({ deps: { fs: crossDrive('EPERM') } })
-      expect(r.exitCode).toBe(1)
-      expect(r.message).toMatch(/^EPERM: /)
-      expect(r.message).not.toContain(tmp)
-      expect(workDirsNow()).toEqual([])
-    })
-  })
-
   describe('on Windows, with the limit of 260 characters of its tools', () => {
     const win = { platform: 'win32', exists: () => false, env: { SystemRoot: 'C:\\Windows' } }
     /** An output folder whose longest path (the final file) is exactly `length` characters. */
     const folderFor = (length) => path.join(tmp, 'x'.repeat(length - FINAL.length - 1 - tmp.length - 1))
-    /** A temp folder whose longest path (the file in the work directory) is exactly `length` characters. */
-    const tempFor = (length) => path.join(tmp, 'y'.repeat(length - (WORK_PREFIX.length + 6) - PARTIAL_NAME.length - 2 - tmp.length - 1))
+    /** An output folder whose path inside the work directory (the temporary file) is exactly `length` characters. */
+    const workFolderFor = (length) => path.join(tmp, 'y'.repeat(length - (WORK_PREFIX.length + 6) - PARTIAL_NAME.length - 2 - tmp.length - 1))
 
     it('allows an output folder whose longest path is the limit, and refuses one character more, before anything is made', async () => {
       const exact = folderFor(WINDOWS_PATH_LIMIT)
@@ -2644,25 +2645,15 @@ describe('the private work directory', () => {
       expect(fs.existsSync(tooLong)).toBe(false) // nothing was made
     })
 
-    it('does the same for the temp folder, which is where the work directory is', async () => {
-      const exact = tempFor(WINDOWS_PATH_LIMIT)
-      fs.mkdirSync(exact, { recursive: true })
+    it('counts the temporary file in the work directory too: it is inside the output folder and its path is not longer than the final file', () => {
+      const exact = workFolderFor(WINDOWS_PATH_LIMIT)
       expect(path.join(exact, `${WORK_PREFIX}xxxxxx`, PARTIAL_NAME).length).toBe(WINDOWS_PATH_LIMIT)
-      const fine = await go({ deps: { ...win, tmpdir: exact } })
-      expect(fine.exitCode).toBe(0)
-      fs.rmSync(dir, { recursive: true, force: true })
-      const tooLong = tempFor(WINDOWS_PATH_LIMIT + 1)
-      fs.mkdirSync(tooLong, { recursive: true })
-      const r = await go({ deps: { ...win, tmpdir: tooLong } })
-      expect(r.exitCode).toBe(1)
-      expect(r.message).toBe(PATH_TOO_LONG_ERROR)
-      expect(r.runner.calls).toEqual([])
-      expect(fs.existsSync(dir)).toBe(false) // the output folder was not made either
-      expect(fs.readdirSync(tooLong)).toEqual([]) // and no work directory
+      expect(path.join(exact, `${WORK_PREFIX}xxxxxx`, PARTIAL_NAME).length).toBeLessThan(path.join(exact, FINAL).length)
     })
 
     it('has a message that says what to do and holds no path, and the limit leaves room below 260', () => {
-      expect(PATH_TOO_LONG_ERROR).toMatch(/shorter backup folder, or a shorter TEMP folder/)
+      expect(PATH_TOO_LONG_ERROR).toMatch(/shorter backup folder/)
+      expect(PATH_TOO_LONG_ERROR).not.toMatch(/TEMP/)
       expect(PATH_TOO_LONG_ERROR).not.toMatch(/[A-Za-z]:\\/)
       expect(WINDOWS_PATH_LIMIT).toBeLessThan(260 - 10)
     })
@@ -2770,12 +2761,12 @@ describe('the access list of the work directory is read back on Windows', () => 
   const reading = (listing) =>
     makeRunner({
       icacls: (call) =>
-        call.args.length === 1 && call.args[0].startsWith('bqr-work-') ? { status: 0, stdout: listing(call.args[0]), stderr: '' } : defaults.icacls(call),
+        call.args.length === 1 && call.args[0].startsWith('.bqr-work-') ? { status: 0, stdout: listing(call.args[0]), stderr: '' } : defaults.icacls(call),
     })
-  const NOT_ALONE = (why) => `the access list of the work directory is not the user's alone (${why}), so nothing was dumped: is the temp folder shared with another account?`
+  const NOT_ALONE = (why) => `the access list of the work directory is not the user's alone (${why}), so nothing was dumped: is the backup folder shared with another account?`
 
   describe('what is read', () => {
-    const name = 'bqr-work-AbC123'
+    const name = '.bqr-work-AbC123'
 
     it('accepts the one entry that is made: the user, full control, inherited by files and folders', () => {
       expect(aclProblem(aclListing(name, OWNER_ENTRY), { name, account: 'PC\\user' })).toBeNull()
@@ -2865,7 +2856,7 @@ describe('the access list of the work directory is read back on Windows', () => 
       expect(r.message).toBe(NOT_ALONE('more than one entry'))
     })
 
-    it('reads the list after the call that changes it, in the temp folder, before the file is made and before pg_dump', async () => {
+    it('reads the list after the call that changes it, in the output folder, before the file is made and before pg_dump', async () => {
       const seen = []
       const runner = makeRunner({
         icacls: (call) => {
@@ -2882,7 +2873,7 @@ describe('the access list of the work directory is read back on Windows', () => 
       const r0 = []
       const r = await go({ runner, deps: win() })
       expect(r.exitCode).toBe(0)
-      expect(seen).toEqual([{ args: [expect.stringMatching(/^bqr-work-/)], cwd: path.resolve(tmp), partial: false, calls: 0 }, 'pg_dump'])
+      expect(seen).toEqual([{ args: [expect.stringMatching(/^\.bqr-work-/)], cwd: path.resolve(dir), partial: false, calls: 0 }, 'pg_dump'])
     })
 
     it('fails closed when the list cannot be read back at all (icacls fails, is missing or does not finish)', async () => {
@@ -3227,46 +3218,34 @@ describe('a folder that another account can change', () => {
 
     it('says which folder in a message that holds no account, no SID and no path', () => {
       const all = [
-        [[{ which: 'output', level: 'itself' }], 'the backup folder itself'],
-        [[{ which: 'temp', level: 'itself' }], 'the temp folder itself'],
-        [[{ which: 'output', level: 'above' }], 'a folder above the backup folder'],
-        [[{ which: 'temp', level: 'above' }], 'a folder above the temp folder'],
-        [
-          [
-            { which: 'output', level: 'itself' },
-            { which: 'temp', level: 'above' },
-          ],
-          'the backup folder itself, a folder above the temp folder',
-        ],
+        [['itself'], 'the backup folder itself'],
+        [['above'], 'a folder above the backup folder'],
+        [['above', 'itself'], 'the backup folder itself, a folder above the backup folder'],
+        [['itself', 'above', 'itself', 'above'], 'the backup folder itself, a folder above the backup folder'],
       ]
-      for (const [problems, which] of all) {
-        const message = sharedFoldersMessage(problems)
+      for (const [levels, which] of all) {
+        const message = sharedFoldersMessage(levels)
         expect(message).toBe(`${SHARED_FOLDERS_PREFIX}${which}${SHARED_FOLDERS_ADVICE}`)
         expect(message).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\/|S-1-|\\/)
       }
       expect(SHARED_FOLDERS_ADVICE).toMatch(/your own profile/)
-      expect(SHARED_FOLDERS_ADVICE).toMatch(/TEMP/)
-      expect(SHARED_FOLDERS_ADVICE).toMatch(/TMPDIR/)
-      expect(SHARED_UNREADABLE_ERROR).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\//)
+      expect(SHARED_FOLDERS_ADVICE).not.toMatch(/TEMP|TMPDIR/) // the temp folder is not part of this: nothing depends on it
+      expect(SHARED_UNREADABLE_ERROR).not.toMatch(/[A-Za-z]:\\|\/Users\/|\/home\/|TEMP|TMPDIR|temp folder/)
     })
   })
 
   // ---- in a run --------------------------------------------------------------------------------------------------------------------------
 
   /**
-   * The folders of one test: the output folder (dir) inside out-root and the temp folder inside temp-root, two folders that have
-   * nothing in common but the folder of the test and what is above it, so that "a folder above the backup folder" and "a folder
-   * above the temp folder" can be told apart. The output folder is made unless `outExists` is false.
+   * The folders of one test: the output folder (dir) inside out-root, so that "the backup folder itself" and "a folder above the
+   * backup folder" can be told apart. The output folder is made unless `outExists` is false.
    */
   function layout({ outExists = true } = {}) {
     const outRoot = path.join(tmp, 'out-root')
-    const tempRoot = path.join(tmp, 'temp-root')
-    const temp = path.join(tempRoot, 'private')
     dir = path.join(outRoot, 'backups')
-    fs.mkdirSync(temp, { recursive: true })
     fs.mkdirSync(outRoot, { recursive: true })
     if (outExists) fs.mkdirSync(dir, { recursive: true })
-    return { outRoot, tempRoot, temp }
+    return { outRoot }
   }
   const same = (a, b) => path.resolve(String(a)).toLowerCase() === path.resolve(String(b)).toLowerCase()
   /** A runner whose PowerShell answers with `pick(path)` for every path that it is asked about (and the rest as the defaults do). */
@@ -3285,22 +3264,22 @@ describe('a folder that another account can change', () => {
   const refusal = (which) => `${SHARED_FOLDERS_PREFIX}${which}${SHARED_FOLDERS_ADVICE}`
 
   describe('on Windows', () => {
-    /** One run with everything made visible: the work done before the check, the temp folder, the output folder. */
-    async function runWith(runner, { temp, keep = 1 } = {}) {
+    /** One run with everything made visible: the file system calls that make something, and the answers. */
+    async function runWith(runner, { keep = 1, deps = {} } = {}) {
       const rec = recordingFs()
-      const r = await go({ options: { keep }, runner, deps: fakeWindows({ tmpdir: temp, fs: rec.fs }) })
+      const r = await go({ options: { keep }, runner, deps: fakeWindows({ fs: rec.fs, ...deps }) })
       return { ...r, rec }
     }
 
     it('refuses an output folder that another account can change, before anything is made: no work directory, no tool, no log, nothing rotated', async () => {
-      const { temp } = layout()
+      layout()
       seed(oldBackups)
-      const r = await runWith(sharing(dir), { temp })
+      const r = await runWith(sharing(dir))
       expect(r.exitCode).toBe(1)
       expect(r.message).toBe(refusal('the backup folder itself'))
       expect(r.runner.calls.map((call) => call.tool)).toEqual(['whoami', 'powershell']) // not icacls, not the Neon CLI, not pg_dump
       expect(r.rec.events).toEqual([]) // no mkdir, no mkdtemp
-      expect(fs.readdirSync(temp)).toEqual([]) // no work directory
+      expect(workDirsNow()).toEqual([])
       expect(r.files).toEqual(oldBackups) // no backup.log, no rotation
       expect(r.log).toBe('')
       expect(r.errs).toEqual([LOG_SKIPPED, `backup failed: ${refusal('the backup folder itself')}`])
@@ -3308,34 +3287,10 @@ describe('a folder that another account can change', () => {
       expect(visible(r)).not.toContain(tmp)
     })
 
-    it('refuses a temp folder that another account can change, before anything is made, and still writes the log in the output folder', async () => {
-      const { temp } = layout()
-      seed(oldBackups)
-      const r = await runWith(sharing(temp), { temp })
-      expect(r.exitCode).toBe(1)
-      expect(r.message).toBe(refusal('the temp folder itself'))
-      // the one call after the check is the owner-only list of the new backup.log, the log of this failure
-      expect(r.runner.calls.map((call) => `${call.tool} ${call.tool === 'icacls' ? call.args[0] : ''}`.trim())).toEqual(['whoami', 'powershell', 'icacls backup.log'])
-      expect(r.rec.events).toEqual([])
-      expect(fs.readdirSync(temp)).toEqual([])
-      expect(r.files.filter((name) => BACKUP_NAME.test(name))).toEqual(oldBackups) // nothing rotated
-      expect(r.log).toMatch(/ failed host=/) // the output folder is private, so this failure is logged like the others
-      expect(r.errs).toEqual([`backup failed: ${refusal('the temp folder itself')}`])
-    })
-
-    it('makes the output folder for that log when it is not there yet (it was judged private, through the folder that it will be made in)', async () => {
-      const { temp } = layout({ outExists: false })
-      const r = await runWith(sharing(temp), { temp })
-      expect(r.exitCode).toBe(1)
-      expect(r.message).toBe(refusal('the temp folder itself'))
-      expect(r.files).toEqual(['backup.log'])
-      expect(r.log).toMatch(/ failed host=/)
-    })
-
     it('refuses a folder above the output folder: no log, because the output folder could have been replaced', async () => {
-      const { outRoot, temp } = layout()
+      const { outRoot } = layout()
       seed(oldBackups)
-      const r = await runWith(sharing(outRoot), { temp })
+      const r = await runWith(sharing(outRoot))
       expect(r.exitCode).toBe(1)
       expect(r.message).toBe(refusal('a folder above the backup folder'))
       expect(r.files).toEqual(oldBackups)
@@ -3345,34 +3300,15 @@ describe('a folder that another account can change', () => {
       expect(r.runner.of('pg_dump')).toEqual([])
     })
 
-    it('refuses a folder above the temp folder, and still writes the log', async () => {
-      const { tempRoot, temp } = layout()
-      const r = await runWith(sharing(tempRoot), { temp })
-      expect(r.exitCode).toBe(1)
-      expect(r.message).toBe(refusal('a folder above the temp folder'))
-      expect(r.log).toMatch(/ failed host=/)
-      expect(r.rec.events).toEqual([])
-      expect(fs.readdirSync(temp)).toEqual([])
-    })
-
-    it('refuses a folder above both (the folder of the test, shared by the two): says so for both, and writes no log', async () => {
-      const { temp } = layout()
-      const r = await runWith(sharing(tmp), { temp })
-      expect(r.exitCode).toBe(1)
-      expect(r.message).toBe(refusal('a folder above the backup folder, a folder above the temp folder'))
-      expect(r.log).toBe('')
-      expect(r.errs[0]).toBe(LOG_SKIPPED)
-    })
-
-    it('refuses the output folder and the temp folder together, and names both', async () => {
-      const { temp } = layout()
-      const r = await runWith(sharing(dir, temp), { temp })
-      expect(r.message).toBe(refusal('the backup folder itself, the temp folder itself'))
+    it('names both when the folder and a folder above it can be changed', async () => {
+      const { outRoot } = layout()
+      const r = await runWith(sharing(dir, outRoot))
+      expect(r.message).toBe(refusal('the backup folder itself, a folder above the backup folder'))
       expect(r.rec.events).toEqual([])
     })
 
     it('refuses an ancestor with any one of the dangerous rights (and accepts the one that only adds a subfolder), for every ancestor that there is', async () => {
-      const { outRoot, tempRoot, temp } = layout()
+      const { outRoot } = layout()
       const everyFolder = []
       for (let cur = path.resolve(dir); ; cur = path.win32.dirname(cur)) {
         everyFolder.push(cur)
@@ -3380,33 +3316,29 @@ describe('a folder that another account can change', () => {
       }
       expect(everyFolder.length).toBeGreaterThan(3)
       for (const rights of ['0x10000', '0x40', '0x40000', '0x80000', 'GW', 'GA']) {
-        for (const ancestor of [...everyFolder.slice(1), tempRoot]) {
-          fs.rmSync(path.join(dir, 'backup.log'), { force: true })
+        for (const ancestor of everyFolder.slice(1)) {
           const risky = acl(`A;OICI;${rights};;;${OTHER}`)
-          const runner = where((folder) => (same(folder, ancestor) ? risky : SAFE_SDDL))
-          const r = await runWith(runner, { temp })
+          const r = await runWith(where((folder) => (same(folder, ancestor) ? risky : SAFE_SDDL)))
           expect(r.exitCode, `${rights} on ${path.basename(ancestor)}`).toBe(1)
-          expect(r.message, `${rights} on ${path.basename(ancestor)}`).toMatch(/^nothing was dumped, because another account can change a folder that the backup relies on: /)
+          expect(r.message, `${rights} on ${path.basename(ancestor)}`).toBe(refusal('a folder above the backup folder'))
           expect(r.rec.events).toEqual([])
         }
       }
-      for (const ancestor of [outRoot, tempRoot, tmp]) {
-        const runner = where((folder) => (same(folder, ancestor) ? acl(`A;;LC;;;${OTHER}`) : SAFE_SDDL))
-        const r = await runWith(runner, { temp })
+      for (const ancestor of [outRoot, tmp]) {
+        const r = await runWith(where((folder) => (same(folder, ancestor) ? acl(`A;;LC;;;${OTHER}`) : SAFE_SDDL)))
         expect(r.exitCode, path.basename(ancestor)).toBe(0)
       }
     })
 
     it('refuses a folder that another account owns', async () => {
-      const { outRoot, temp } = layout()
-      const runner = where((folder) => (same(folder, outRoot) ? `O:${OTHER}G:SYD:PAI(A;OICI;FA;;;SY)` : SAFE_SDDL))
-      const r = await runWith(runner, { temp })
+      const { outRoot } = layout()
+      const r = await runWith(where((folder) => (same(folder, outRoot) ? `O:${OTHER}G:SYD:PAI(A;OICI;FA;;;SY)` : SAFE_SDDL)))
       expect(r.message).toBe(refusal('a folder above the backup folder'))
     })
 
     it('refuses a folder that is not made yet through the nearest folder that exists (the one that the new folder is made in)', async () => {
-      const { outRoot, temp } = layout({ outExists: false })
-      const r = await runWith(sharing(outRoot), { temp })
+      const { outRoot } = layout({ outExists: false })
+      const r = await runWith(sharing(outRoot))
       expect(r.exitCode).toBe(1)
       expect(r.message).toBe(refusal('the backup folder itself'))
       expect(fs.existsSync(dir)).toBe(false) // not made
@@ -3415,23 +3347,24 @@ describe('a folder that another account can change', () => {
       expect(r.rec.events).toEqual([])
     })
 
-    it('accepts the default access lists of Windows (the temp folder, the profile folder, C:\\Users and C:\\, with invented SIDs)', async () => {
-      const { temp } = layout()
-      const runner = where((folder) => {
-        const parent = path.win32.dirname(folder)
-        if (parent === folder) return ROOT_DEFAULT
-        if (path.win32.dirname(parent) === parent) return USERS_DEFAULT
-        return same(folder, tmp) ? DOCUMENTS_WITH_READER : PROFILE_DEFAULT
-      })
-      const r = await runWith(runner, { temp })
+    it('accepts the default access lists of Windows (the profile folder, C:\\Users and C:\\, with invented SIDs)', async () => {
+      layout()
+      const r = await runWith(
+        where((folder) => {
+          const parent = path.win32.dirname(folder)
+          if (parent === folder) return ROOT_DEFAULT
+          if (path.win32.dirname(parent) === parent) return USERS_DEFAULT
+          return same(folder, tmp) ? DOCUMENTS_WITH_READER : PROFILE_DEFAULT
+        }),
+      )
       expect(r.exitCode).toBe(0)
       expect(r.log).toContain(' ok host=')
     })
 
     it('accepts entries that do not apply (inherit-only, deny) for another account on every folder', async () => {
-      const { temp } = layout()
+      layout()
       const quiet = `${SAFE_SDDL}(A;OICIIO;GA;;;${OTHER})(A;CIIOID;FA;;;WD)(D;;FA;;;${OTHER})(D;OICI;0x1301bf;;;WD)`
-      const r = await runWith(where(() => quiet), { temp })
+      const r = await runWith(where(() => quiet))
       expect(r.exitCode).toBe(0)
     })
 
@@ -3453,28 +3386,26 @@ describe('a folder that another account can change', () => {
         'a conditional entry on a folder above': ({ options }) => lines(...options.env.BQR_ACL_PATHS.split('|').map((_, index, all) => (index === all.length - 1 ? conditional : SAFE_SDDL))),
       }
       for (const [what, answer] of Object.entries(answers)) {
-        const { temp } = layout({ outExists: false })
-        const r = await runWith(makeRunner({ powershell: answer }), { temp })
+        layout({ outExists: false })
+        const r = await runWith(makeRunner({ powershell: answer }))
         expect(r.exitCode, what).toBe(1)
         expect(r.message, what).toBe(SHARED_UNREADABLE_ERROR)
         expect(r.runner.of('pg_dump'), what).toEqual([])
         expect(r.rec.events, what).toEqual([])
-        expect(fs.readdirSync(temp), what).toEqual([])
         expect(fs.existsSync(dir), what).toBe(false) // the output folder is not even made, and no log is written in a folder that is not known
         expect(r.errs, what).toEqual([`backup failed: ${SHARED_UNREADABLE_ERROR}`])
-        fs.rmSync(dir, { recursive: true, force: true })
       }
     })
 
     it('refuses a descriptor with no access list at all (a NULL DACL)', async () => {
-      const { temp } = layout()
-      const r = await runWith(where((folder) => (same(folder, temp) ? 'O:BAG:SYD:NO_ACCESS_CONTROL' : SAFE_SDDL)), { temp })
-      expect(r.message).toBe(refusal('the temp folder itself'))
+      layout()
+      const r = await runWith(where((folder) => (same(folder, dir) ? 'O:BAG:SYD:NO_ACCESS_CONTROL' : SAFE_SDDL)))
+      expect(r.message).toBe(refusal('the backup folder itself'))
     })
 
     it('reads every path with ONE PowerShell call: a full path to the tool, an encoded script, the paths in an environment variable', async () => {
-      const { outRoot, tempRoot, temp } = layout()
-      const r = await runWith(makeRunner(), { temp })
+      const { outRoot } = layout()
+      const r = await runWith(makeRunner())
       expect(r.exitCode).toBe(0)
       expect(r.runner.calls.map((call) => call.tool).slice(0, 2)).toEqual(['whoami', 'powershell'])
       const calls = r.runner.of('powershell')
@@ -3489,12 +3420,11 @@ describe('a folder that another account can change', () => {
       expect(script).toContain('.Sddl')
       expect(script).toContain('$env:BQR_ACL_PATHS')
       expect(script).not.toContain(path.basename(tmp)) // no path in the script, so nothing to quote
-      // the paths: the output folder and what is above it, then the temp folder and what is above it, each once, in that order
+      // the paths: the output folder and what is above it, up to the root of the drive, each once
       const paths = call.options.env.BQR_ACL_PATHS.split('|')
       expect(new Set(paths.map((p) => p.toLowerCase())).size).toBe(paths.length)
       expect(paths.slice(0, 3).map((p) => p.toLowerCase())).toEqual([dir, outRoot, tmp].map((p) => path.resolve(p).toLowerCase()))
-      expect(paths.slice(-2).map((p) => p.toLowerCase())).toEqual([temp, tempRoot].map((p) => path.resolve(p).toLowerCase()))
-      expect(path.win32.dirname(paths.at(-3))).toBe(paths.at(-3)) // the root of the drive is the last of the shared chain
+      expect(path.win32.dirname(paths.at(-1))).toBe(paths.at(-1)) // the root of the drive is the last
       // the environment of the call holds no database address and no PG variable
       expect(call.options.env.BACKUP_DATABASE_URL).toBeUndefined()
       expect(call.options.env.SystemRoot).toBe('C:\\Windows')
@@ -3503,13 +3433,8 @@ describe('a folder that another account can change', () => {
     })
 
     it('reads for the nearest existing folder when the output folder is not made yet, and does not make it first', async () => {
-      const { outRoot, temp } = layout({ outExists: false })
-      const seen = []
-      const runner = where((folder) => {
-        seen.push(folder)
-        return SAFE_SDDL
-      })
-      const r = await runWith(runner, { temp })
+      const { outRoot } = layout({ outExists: false })
+      const r = await runWith(makeRunner())
       expect(r.exitCode).toBe(0)
       expect(r.runner.of('powershell')).toHaveLength(1)
       const paths = r.runner.of('powershell')[0].options.env.BQR_ACL_PATHS.split('|')
@@ -3517,20 +3442,36 @@ describe('a folder that another account can change', () => {
       expect(paths.map((p) => p.toLowerCase())).not.toContain(path.resolve(dir).toLowerCase())
     })
 
-    it('does the check once per run, before the connection string is asked for', async () => {
-      const { temp } = layout()
-      const r = await runWith(makeRunner(), { temp })
+    it('does the check once per run, before the connection string is asked for and before anything is dumped', async () => {
+      layout()
+      const r = await runWith(makeRunner())
       const tools = r.runner.calls.map((call) => call.tool)
       expect(tools.filter((tool) => tool === 'powershell')).toHaveLength(1)
       expect(tools.indexOf('powershell')).toBeLessThan(tools.indexOf('pg_dump'))
     })
 
     it('does not ask the folders of a run that is refused for another reason first (the path is too long): no PowerShell', async () => {
-      const { temp } = layout()
-      const long = path.join(temp, 'x'.repeat(240))
-      const r = await go({ options: { out: long }, runner: makeRunner(), deps: fakeWindows({ tmpdir: temp }) })
+      layout()
+      const long = path.join(dir, 'x'.repeat(240))
+      const r = await go({ options: { out: long }, runner: makeRunner(), deps: fakeWindows() })
       expect(r.message).toBe(PATH_TOO_LONG_ERROR)
       expect(r.runner.of('powershell')).toEqual([])
+    })
+
+    it('does not look at the temp folder at all: a shared %TEMP% changes nothing', async () => {
+      layout()
+      const sharedTemp = path.join(tmp, 'shared-temp')
+      fs.mkdirSync(sharedTemp)
+      const asked = []
+      const runner = where((folder) => {
+        asked.push(folder)
+        return same(folder, sharedTemp) ? TEMP_WITH_MODIFY : SAFE_SDDL
+      })
+      const r = await runWith(runner, { deps: { env: { TEMP: sharedTemp, TMP: sharedTemp, TMPDIR: sharedTemp } } })
+      expect(r.exitCode).toBe(0)
+      expect(r.runner.of('powershell')[0].options.env.BQR_ACL_PATHS.toLowerCase()).not.toContain('shared-temp')
+      expectWorkCwd(r.runner.of('pg_dump')[0].options.cwd) // the work directory is in the output folder, whatever TEMP says
+      expect(fs.readdirSync(sharedTemp)).toEqual([]) // nothing was made there
     })
   })
 
@@ -3544,84 +3485,64 @@ describe('a folder that another account can change', () => {
       }
       return privateStat(target, ...rest)
     }
-    async function runWith(modes, { temp, keep = 1 } = {}) {
+    async function runWith(modes, { keep = 1, deps = {} } = {}) {
       const rec = recordingFs()
       const stat = modeOf(modes)
-      const r = await go({ options: { keep }, deps: { tmpdir: temp, fs: { ...rec.fs, statSync: stat } } })
+      const r = await go({ options: { keep }, deps: { fs: { ...rec.fs, statSync: stat }, ...deps } })
       return { ...r, rec }
     }
 
-    it('refuses a temp folder that others (or the group) can write in, unless it has the sticky bit', async () => {
-      const { temp } = layout()
-      for (const mode of [0o040777, 0o040770, 0o040775, 0o040757, 0o040722, 0o040720, 0o040702]) {
-        const r = await runWith([[temp, mode]], { temp })
+    it('refuses a folder above the output folder that others can write in, unless it has the sticky bit', async () => {
+      const { outRoot } = layout()
+      seed(oldBackups)
+      for (const mode of [0o040777, 0o040707, 0o040702]) {
+        const r = await runWith([[outRoot, mode]])
         expect(r.exitCode, mode.toString(8)).toBe(1)
-        expect(r.message, mode.toString(8)).toBe(refusal('the temp folder itself'))
+        expect(r.message, mode.toString(8)).toBe(refusal('a folder above the backup folder'))
         expect(r.runner.calls, mode.toString(8)).toEqual([])
         expect(r.rec.events, mode.toString(8)).toEqual([])
-        expect(fs.readdirSync(temp), mode.toString(8)).toEqual([])
+        expect(r.log, mode.toString(8)).toBe('')
+        expect(r.errs[0], mode.toString(8)).toBe(LOG_SKIPPED)
+        expect(r.files, mode.toString(8)).toEqual(oldBackups)
       }
-      for (const mode of [0o041777, 0o041770, 0o040700, 0o040750, 0o040755, 0o040705]) {
-        const r = await runWith([[temp, mode]], { temp })
-        expect(r.exitCode, mode.toString(8)).toBe(0)
-        fs.rmSync(dir, { recursive: true, force: true })
-      }
-    })
-
-    it('writes the log of that refusal in the output folder when it is private, and not when it is not', async () => {
-      const { temp } = layout()
-      const ok = await runWith([[temp, 0o040777]], { temp })
-      expect(ok.log).toMatch(/ failed host=/)
-      expect(ok.errs).toEqual([`backup failed: ${refusal('the temp folder itself')}`])
-      fs.rmSync(path.join(dir, 'backup.log'), { force: true })
-      const open = await runWith([[temp, 0o040777], [dir, 0o040777]], { temp })
-      expect(open.log).toBe('')
-      expect(open.errs).toEqual([LOG_SKIPPED, `backup failed: ${refusal('the temp folder itself')}`])
-      // an output folder that cannot be inspected is not known to be private: that is refused as a whole, and nothing is logged
-      const unknown = await runWith([[temp, 0o040777], [dir, null]], { temp })
-      expect(unknown.message).toBe(SHARED_UNREADABLE_ERROR)
-      expect(unknown.log).toBe('')
-    })
-
-    it('refuses a folder above the temp folder or the output folder that others can write in, unless it has the sticky bit', async () => {
-      const { outRoot, tempRoot, temp } = layout()
-      const above = await runWith([[tempRoot, 0o040777]], { temp })
-      expect(above.message).toBe(refusal('a folder above the temp folder'))
-      expect(above.rec.events).toEqual([])
-      fs.rmSync(path.join(dir, 'backup.log'), { force: true })
-      const aboveOut = await runWith([[outRoot, 0o040777]], { temp })
-      expect(aboveOut.message).toBe(refusal('a folder above the backup folder'))
-      expect(aboveOut.log).toBe('')
-      expect(aboveOut.errs[0]).toBe(LOG_SKIPPED)
-      const both = await runWith([[tmp, 0o040777]], { temp })
-      expect(both.message).toBe(refusal('a folder above the backup folder, a folder above the temp folder'))
-      fs.rmSync(path.join(dir, 'backup.log'), { force: true })
-      for (const mode of [0o041777, 0o040775, 0o040770, 0o040755]) {
-        for (const folder of [outRoot, tempRoot, tmp]) {
-          const r = await runWith([[folder, mode]], { temp })
-          expect(r.exitCode, `${mode.toString(8)} on ${path.basename(folder)}`).toBe(0) // sticky: this is /tmp. Group only: its members are not known
-          fs.rmSync(dir, { recursive: true, force: true })
-          fs.mkdirSync(dir, { recursive: true })
+      // the folder of the test is above the output folder as well
+      const high = await runWith([[tmp, 0o040777]])
+      expect(high.message).toBe(refusal('a folder above the backup folder'))
+      // sticky (this is /tmp), and a folder that only the group can write in (its members are not known), are accepted
+      for (const mode of [0o041777, 0o041707, 0o040775, 0o040770, 0o040755]) {
+        for (const folder of [outRoot, tmp]) {
+          const r = await runWith([[folder, mode]])
+          expect(r.exitCode, `${mode.toString(8)} on ${path.basename(folder)}`).toBe(0)
+          seed([])
         }
       }
     })
 
     it('judges the nearest folder that exists for an output folder that is not made yet, and makes nothing when it is shared', async () => {
-      const { outRoot, temp } = layout({ outExists: false })
-      const r = await runWith([[outRoot, 0o040777]], { temp })
+      const { outRoot } = layout({ outExists: false })
+      const r = await runWith([[outRoot, 0o040777]])
       expect(r.exitCode).toBe(1)
       expect(r.message).toBe(refusal('the backup folder itself'))
       expect(fs.existsSync(dir)).toBe(false)
       expect(r.errs[0]).toBe(LOG_SKIPPED)
       expect(r.rec.events).toEqual([])
-      const sticky = await runWith([[outRoot, 0o041777]], { temp })
+      const sticky = await runWith([[outRoot, 0o041777]])
       expect(sticky.exitCode).toBe(0)
     })
 
+    it('still refuses the output folder itself when group or others can write in it (the message of the mode check)', async () => {
+      layout()
+      const r = await runWith([[dir, 0o040777]])
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toBe(FOLDER_WRITABLE_ERROR)
+      expect(r.runner.calls).toEqual([])
+      expect(r.errs[0]).toBe(LOG_SKIPPED)
+    })
+
     it('refuses when a folder of the chain cannot be inspected: a folder that is not known is not trusted', async () => {
-      const { tempRoot, temp } = layout({ outExists: false })
-      for (const folder of [temp, tempRoot, tmp]) {
-        const r = await runWith([[folder, null]], { temp })
+      const { outRoot } = layout({ outExists: false })
+      for (const folder of [outRoot, tmp]) {
+        const r = await runWith([[folder, null]])
         expect(r.exitCode).toBe(1)
         expect(r.message).toBe(SHARED_UNREADABLE_ERROR)
         expect(r.errs).toEqual([`backup failed: ${SHARED_UNREADABLE_ERROR}`])
@@ -3631,22 +3552,336 @@ describe('a folder that another account can change', () => {
     })
 
     it('does not run PowerShell, and does not read an access list', async () => {
-      const { temp } = layout()
-      const r = await runWith([], { temp })
+      layout()
+      const r = await runWith([])
       expect(r.exitCode).toBe(0)
       expect(r.runner.of('powershell')).toEqual([])
       expect(r.runner.of('whoami')).toEqual([])
+    })
+
+    it('does not look at the temp folder at all: a TMPDIR that everybody can write in changes nothing', async () => {
+      layout()
+      const sharedTemp = path.join(tmp, 'shared-temp')
+      fs.mkdirSync(sharedTemp)
+      const r = await runWith([[sharedTemp, 0o040777]], { deps: { env: { TMPDIR: sharedTemp, TEMP: sharedTemp, TMP: sharedTemp } } })
+      expect(r.exitCode).toBe(0)
+      expectWorkCwd(r.runner.of('pg_dump')[0].options.cwd)
+      expect(fs.readdirSync(sharedTemp)).toEqual([])
     })
   })
 
   it('keeps the per-path checks as a second net: the work directory list and the checks of backup.log are still made', async () => {
     // (tests above: "the access list of the work directory is read back on Windows", "a backup.log that is a link or has another name")
-    const { temp } = layout()
-    const r = await go({ runner: makeRunner(), deps: fakeWindows({ tmpdir: temp, fs: { ...fs, statSync: privateStat } }) })
+    layout()
+    const r = await go({ runner: makeRunner(), deps: fakeWindows({ fs: { ...fs, statSync: privateStat } }) })
     expect(r.exitCode).toBe(0)
     const icacls = r.runner.of('icacls')
-    expect(icacls.some((call) => call.args.length === 1 && call.args[0].startsWith('bqr-work-'))).toBe(true) // the read-back of the work directory
+    expect(icacls.some((call) => call.args.length === 1 && call.args[0].startsWith('.bqr-work-'))).toBe(true) // the read-back of the work directory
     expect(icacls.length).toBeGreaterThan(3)
+  })
+
+  it('has no trace of the temp folder in the script: os.tmpdir() is not used, and no advice about TEMP or TMPDIR is given', () => {
+    const source = fs.readFileSync(new URL('../scripts/backup-db.mjs', import.meta.url), 'utf8')
+    expect(source).not.toMatch(/tmpdir/i)
+    expect(source).not.toMatch(/\bTMPDIR\b|\bTEMP\b|\bTMP\b|%TEMP%/)
+    expect(source).not.toMatch(/EXDEV/)
+  })
+})
+
+// ---- work folders that a crashed run left behind -----------------------------------------------------------------------------------------
+
+describe('work folders that a crashed run left behind', () => {
+  const HOUR = 60 * 60 * 1000
+  // a folder that another account can change (an explicit Modify for another user), as the first path of the PowerShell answer
+  const SHARED_FOR_STALE = `${SAFE_SDDL}(A;OICI;0x1301bf;;;S-1-5-21-111-222-333-1002)`
+  /** A work folder in the output folder with a half dump in it, last changed `hoursOld` hours before the clock of the tests (NOW). */
+  function workFolder(name, hoursOld, { inside = true } = {}) {
+    const folder = path.join(dir, name)
+    fs.mkdirSync(folder, { recursive: true })
+    if (inside) fs.writeFileSync(path.join(folder, PARTIAL), 'a half dump')
+    const when = new Date(NOW.getTime() - hoursOld * HOUR)
+    fs.utimesSync(folder, when, when)
+    return folder
+  }
+  const namesInDir = () => fs.readdirSync(dir).sort()
+
+  it('has an exact name pattern: the prefix and six letters or digits, nothing else', () => {
+    for (const name of ['.bqr-work-AbC123', '.bqr-work-000000', '.bqr-work-zzzzzz']) expect(WORK_NAME.test(name), name).toBe(true)
+    const others = [
+      'bqr-work-AbC123', '.bqr-work-AbC12', '.bqr-work-AbC1234', '.bqr-work-AbC12_', '.bqr-work-AbC12-', '.bqr-work-AbC12 ', ' .bqr-work-AbC123',
+      '.bqr-work-AbC123/', '.bqr-work-AbC123.old', 'x.bqr-work-AbC123', '..bqr-work-AbC123', '.BQR-WORK-AbC123', '.bqr-work-', '.bqr-work-ab-123',
+      '.bqr-work-AbC12\u00E9', 'building-qr-20261003T0715Z.dump', 'backup.log', '',
+    ]
+    for (const name of others) expect(WORK_NAME.test(name), JSON.stringify(name)).toBe(false)
+    expect(STALE_WORK_MS).toBe(24 * HOUR)
+  })
+
+  it('removes a folder that is older than 24 hours, with all that is in it, and keeps one that is not', () => {
+    seed([])
+    const old = workFolder('.bqr-work-OLD001', 25)
+    fs.mkdirSync(path.join(old, 'nested', 'deeper'), { recursive: true })
+    fs.writeFileSync(path.join(old, 'nested', FINAL), 'a file with the name of a dump, inside the work folder')
+    fs.utimesSync(old, new Date(NOW.getTime() - 25 * HOUR), new Date(NOW.getTime() - 25 * HOUR))
+    const young = workFolder('.bqr-work-YNG001', 23)
+    const result = removeStaleWorkFolders(dir, NOW, fs)
+    expect(result).toEqual({ removed: 1, failed: 0, checked: true })
+    expect(namesInDir()).toEqual(['.bqr-work-YNG001'])
+    expect(fs.readFileSync(path.join(young, PARTIAL), 'utf8')).toBe('a half dump')
+  })
+
+  it('counts "older than 24 hours" strictly, by the modification time, and ignores a time that is in the future', () => {
+    seed([])
+    workFolder('.bqr-work-UNDER1', 24 - 1 / 3600) // one second less than 24 hours: not older
+    workFolder('.bqr-work-JUST01', 24 + 1 / 3600) // one second more: older
+    workFolder('.bqr-work-FUTURE', -5) // a clock that was wrong: never removed
+    workFolder('.bqr-work-EMPTY1', 100, { inside: false }) // empty, and old: removed as well
+    const result = removeStaleWorkFolders(dir, NOW, fs)
+    expect(result.removed).toBe(2)
+    expect(namesInDir()).toEqual(['.bqr-work-FUTURE', '.bqr-work-UNDER1'])
+  })
+
+  it('removes nothing but a directory with the exact name: not another name, not a file, not a dump, not backup.log, whatever their age', () => {
+    seed(oldBackups)
+    fs.writeFileSync(path.join(dir, 'backup.log'), 'a log\n')
+    const longAgo = new Date(NOW.getTime() - 1000 * HOUR)
+    const keepers = ['bqr-work-AbC123', '.bqr-work-AbC12', '.bqr-work-AbC1234', '.bqr-work-AbC12_', 'x.bqr-work-AbC123', '.bqr-work-AbC123.old', 'notes', FINAL.replace('.dump', '-copy.dump')]
+    for (const name of keepers) {
+      workFolder(name, 1000)
+    }
+    // a FILE with the exact name of a work directory is not a directory
+    fs.writeFileSync(path.join(dir, '.bqr-work-FILE01'), 'a file, not a folder')
+    // a directory with the name of a dump
+    fs.mkdirSync(path.join(dir, 'building-qr-20260801T0000Z.dump'))
+    for (const name of [...oldBackups, 'backup.log', '.bqr-work-FILE01', 'building-qr-20260801T0000Z.dump']) fs.utimesSync(path.join(dir, name), longAgo, longAgo)
+    const before = namesInDir()
+    const result = removeStaleWorkFolders(dir, NOW, fs)
+    expect(result).toEqual({ removed: 0, failed: 0, checked: true })
+    expect(namesInDir()).toEqual(before)
+    expect(fs.readFileSync(path.join(dir, 'backup.log'), 'utf8')).toBe('a log\n')
+  })
+
+  it('does not reach outside the folder that matched: a file next to the output folder, the other backups and a link are left alone', () => {
+    seed(oldBackups)
+    const outside = path.join(tmp, 'outside')
+    fs.mkdirSync(outside)
+    fs.writeFileSync(path.join(outside, 'precious.txt'), 'keep me')
+    fs.writeFileSync(path.join(tmp, 'next-to-the-folder.txt'), 'keep me too')
+    const longAgo = new Date(NOW.getTime() - 1000 * HOUR)
+    const stale = workFolder('.bqr-work-STALE1', 1000)
+    // a link inside the work folder to a folder outside: removing the work folder removes the link, not what it points to
+    try {
+      fs.symlinkSync(outside, path.join(stale, 'link-to-outside'), 'junction')
+    } catch {
+      // this platform needs a privilege to make a link: the rest of the test still holds
+    }
+    fs.utimesSync(stale, longAgo, longAgo)
+    // and a link in the output folder whose NAME matches, pointing at a folder outside: it is not followed and not removed
+    let namedLink = true
+    try {
+      fs.symlinkSync(outside, path.join(dir, '.bqr-work-LINK01'), 'junction')
+      fs.lutimesSync(path.join(dir, '.bqr-work-LINK01'), longAgo, longAgo)
+    } catch {
+      namedLink = false
+    }
+    const result = removeStaleWorkFolders(dir, NOW, fs)
+    expect(result.removed).toBe(1)
+    expect(fs.existsSync(stale)).toBe(false)
+    expect(fs.readFileSync(path.join(outside, 'precious.txt'), 'utf8')).toBe('keep me')
+    expect(fs.readFileSync(path.join(tmp, 'next-to-the-folder.txt'), 'utf8')).toBe('keep me too')
+    expect(namesInDir().filter((name) => BACKUP_NAME.test(name))).toEqual(oldBackups)
+    if (namedLink) expect(fs.lstatSync(path.join(dir, '.bqr-work-LINK01')).isSymbolicLink()).toBe(true)
+  })
+
+  it('never throws: a folder that cannot be listed is "not checked", one that cannot be removed is "failed"', () => {
+    const nowhere = removeStaleWorkFolders(path.join(tmp, 'does-not-exist'), NOW, fs)
+    expect(nowhere).toEqual({ removed: 0, failed: 0, checked: false })
+    seed([])
+    workFolder('.bqr-work-STUCK1', 30)
+    workFolder('.bqr-work-GONE01', 30)
+    const files = {
+      ...fs,
+      rmSync: (target, options) => {
+        if (path.basename(String(target)) === '.bqr-work-STUCK1') throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' })
+        return fs.rmSync(target, options)
+      },
+    }
+    expect(removeStaleWorkFolders(dir, NOW, files)).toEqual({ removed: 1, failed: 1, checked: true })
+    expect(namesInDir()).toEqual(['.bqr-work-STUCK1'])
+  })
+
+  it('looks again before it removes: an entry that was a directory in the listing but is a link or a file now (swapped in between) is left alone', () => {
+    const longAgo = NOW.getTime() - 1000 * HOUR
+    const removed = []
+    const entry = (name) => ({ name, isDirectory: () => true })
+    const files = (info) => ({
+      readdirSync: () => [entry('.bqr-work-SWAP01')],
+      lstatSync: () => ({ mtimeMs: longAgo, ...info }),
+      rmSync: (target) => removed.push(target),
+    })
+    const asLink = removeStaleWorkFolders('dir', NOW, files({ isDirectory: () => false, isSymbolicLink: () => true }))
+    const asJunction = removeStaleWorkFolders('dir', NOW, files({ isDirectory: () => true, isSymbolicLink: () => true }))
+    const asFile = removeStaleWorkFolders('dir', NOW, files({ isDirectory: () => false, isSymbolicLink: () => false }))
+    expect([asLink.removed, asJunction.removed, asFile.removed]).toEqual([0, 0, 0])
+    expect(removed).toEqual([])
+    const asDirectory = removeStaleWorkFolders('dir', NOW, files({ isDirectory: () => true, isSymbolicLink: () => false }))
+    expect(asDirectory.removed).toBe(1) // the same stub with a real directory is removed, so the stub itself is not what refuses
+    expect(removed).toEqual([path.join('dir', '.bqr-work-SWAP01')])
+  })
+
+  describe('in a run', () => {
+    it('removes the old ones at the start, after the checks and before its own work directory exists, and says how many in the log, with no path', async () => {
+      seed([])
+      workFolder('.bqr-work-OLD001', 30)
+      workFolder('.bqr-work-OLD002', 48, { inside: false })
+      workFolder('.bqr-work-YNG001', 2)
+      let atDump
+      let atMkdtemp
+      const files = {
+        ...fs,
+        statSync: privateStat,
+        mkdtempSync: (prefix, ...rest) => {
+          atMkdtemp = fs.readdirSync(dir).sort()
+          return fs.mkdtempSync(prefix, ...rest)
+        },
+      }
+      const runner = makeRunner({
+        pg_dump: (call) => {
+          atDump = fs.readdirSync(dir).sort()
+          return defaults.pg_dump(call)
+        },
+      })
+      const r = await go({ runner, deps: { fs: files } })
+      expect(r.exitCode).toBe(0)
+      expect(atMkdtemp).toEqual(['.bqr-work-YNG001']) // the old ones were gone before this run made its own
+      expect(atDump).toEqual(['.bqr-work-YNG001', path.basename(runner.of('pg_dump')[0].options.cwd)].sort())
+      expect(r.log).toBe(`03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0 stale-work-folders-removed=2\n`)
+      expect(r.files).toEqual(['.bqr-work-YNG001', 'backup.log', FINAL]) // the young one is another run's: left alone
+      expect(r.log).not.toContain(tmp)
+      expect(r.log).not.toContain('bqr-work-OLD')
+      expect(r.out).toEqual([`backup ok: ${FINAL}, 15 B, removed 0 old files`])
+      expect(r.errs).toEqual([])
+    })
+
+    it('says nothing in the log when there is nothing to remove, so the line is the same as before', async () => {
+      seed([])
+      workFolder('.bqr-work-YNG001', 2)
+      const r = await go()
+      expect(r.log).toBe(`03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0\n`)
+      expect(r.log).not.toContain('stale')
+    })
+
+    it('says how many in the log of a failed run too, and does not count them as the old backups that were removed', async () => {
+      seed([])
+      workFolder('.bqr-work-OLD001', 30)
+      const r = await go({ runner: makeRunner({ pg_dump: () => ({ status: 1, stdout: '', stderr: 'nope' }) }) })
+      expect(r.exitCode).toBe(1)
+      expect(r.log).toBe(`03/10/2026 10:15 failed host=${MASKED_HOST} stale-work-folders-removed=1 error=pg_dump failed (exit code 1): nope\n`)
+      expect(r.files).toEqual(['backup.log'])
+    })
+
+    it('is a warning, and the run goes on, when an old folder cannot be removed', async () => {
+      seed([])
+      workFolder('.bqr-work-STUCK1', 30)
+      workFolder('.bqr-work-OLD001', 30)
+      const files = {
+        ...fs,
+        statSync: privateStat,
+        rmSync: (target, options) => {
+          if (path.basename(String(target)) === '.bqr-work-STUCK1') throw Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${target}'`), { code: 'EBUSY' })
+          return fs.rmSync(target, options)
+        },
+      }
+      const r = await go({ deps: { fs: files } })
+      expect(r.exitCode).toBe(0)
+      expect(r.warning).toBe('1-stale-work-folders-not-removed')
+      expect(r.log).toBe(`03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=0 stale-work-folders-removed=1 warning=1-stale-work-folders-not-removed\n`)
+      expect(r.errs).toEqual(['backup: warning, 1-stale-work-folders-not-removed'])
+      expect(visible(r)).not.toContain(tmp)
+      expect(r.files).toEqual(['.bqr-work-STUCK1', 'backup.log', FINAL])
+    })
+
+    it('does not touch anything when a check refuses the run: the folder that others can write in, a backup.log that is not a file', async () => {
+      seed([])
+      const stale = workFolder('.bqr-work-OLD001', 30)
+      const open = await go({ deps: { fs: recordingFs({ folderMode: 0o040777 }).fs } })
+      expect(open.exitCode).toBe(1)
+      expect(fs.existsSync(stale)).toBe(true)
+      fs.mkdirSync(path.join(dir, 'backup.log'))
+      const badLog = await go()
+      expect(badLog.exitCode).toBe(1)
+      expect(badLog.message).toBe(LOG_NOT_REGULAR_ERROR)
+      expect(fs.existsSync(stale)).toBe(true)
+    })
+
+    it('does not touch anything on Windows when the folder can be changed by another account', async () => {
+      seed([])
+      const stale = workFolder('.bqr-work-OLD001', 30)
+      const r = await go({ runner: makeRunner({ powershell: ({ options }) => ({ status: 0, stdout: sddlLines(options.env.BQR_ACL_PATHS.split('|').map((_, index) => (index === 0 ? SHARED_FOR_STALE : SAFE_SDDL))), stderr: '' }) }), deps: { platform: 'win32', exists: () => false, env: { SystemRoot: 'C:\\Windows' } } })
+      expect(r.exitCode).toBe(1)
+      expect(r.message).toMatch(/^nothing was dumped, because another account can change a folder/)
+      expect(fs.existsSync(stale)).toBe(true)
+    })
+
+    it('also works on Windows: the same removal, after the folders were checked', async () => {
+      seed([])
+      const stale = workFolder('.bqr-work-OLD001', 30)
+      const r = await go({ deps: { platform: 'win32', exists: () => false, env: { SystemRoot: 'C:\\Windows' }, fs: { ...fs, statSync: privateStat } } })
+      expect(r.exitCode).toBe(0)
+      expect(fs.existsSync(stale)).toBe(false)
+      expect(r.log).toContain(' removed=0 stale-work-folders-removed=1')
+      expect(r.runner.calls.map((call) => call.tool).slice(0, 2)).toEqual(['whoami', 'powershell'])
+    })
+  })
+
+  describe('and retention', () => {
+    it('never counts, rotates or deletes a work folder, finished or not, young or old: only files with the exact name of a backup', () => {
+      seed(['building-qr-20260901T0000Z.dump', 'building-qr-20260902T0000Z.dump', 'building-qr-20260903T0000Z.dump'])
+      // a work folder that holds a finished dump under a dump name, one that is empty, one with a half dump, a file and a dump-named directory
+      const finished = path.join(dir, '.bqr-work-DONE01')
+      fs.mkdirSync(finished)
+      fs.writeFileSync(path.join(finished, 'building-qr-20260701T0000Z.dump'), 'finished, still inside')
+      fs.writeFileSync(path.join(finished, PARTIAL), 'x')
+      fs.mkdirSync(path.join(dir, '.bqr-work-EMPTY1'))
+      workFolder('.bqr-work-HALF01', 1000)
+      fs.writeFileSync(path.join(dir, '.bqr-work-FILE01'), 'a file')
+      fs.mkdirSync(path.join(dir, 'building-qr-20260801T0000Z.dump'))
+      const before = fs.readdirSync(dir).sort()
+      const result = rotate(dir, 1, NOW, fs)
+      expect(result).toEqual({ removed: ['building-qr-20260902T0000Z.dump', 'building-qr-20260901T0000Z.dump'], failed: 0, future: 0 })
+      const after = fs.readdirSync(dir).sort()
+      expect(after).toEqual(before.filter((name) => !result.removed.includes(name)))
+      expect(fs.readFileSync(path.join(finished, 'building-qr-20260701T0000Z.dump'), 'utf8')).toBe('finished, still inside')
+      expect(fs.existsSync(path.join(dir, 'building-qr-20260801T0000Z.dump'))).toBe(true) // a directory with a dump name
+    })
+
+    it('in a run with --keep 1: the old backups go, the young work folders of other runs stay with what is in them, and removed= counts only backups', async () => {
+      seed(oldBackups)
+      const finished = path.join(dir, '.bqr-work-DONE01')
+      fs.mkdirSync(finished)
+      fs.writeFileSync(path.join(finished, 'building-qr-20260701T0000Z.dump'), 'finished, still inside')
+      fs.mkdirSync(path.join(dir, '.bqr-work-EMPTY1'))
+      const half = workFolder('.bqr-work-HALF01', 3)
+      fs.utimesSync(finished, new Date(NOW.getTime() - HOUR), new Date(NOW.getTime() - HOUR))
+      fs.utimesSync(path.join(dir, '.bqr-work-EMPTY1'), new Date(NOW.getTime() - HOUR), new Date(NOW.getTime() - HOUR))
+      const r = await go({ options: { keep: 1 } })
+      expect(r.exitCode).toBe(0)
+      expect(r.removed).toBe(5)
+      expect(r.files.filter((name) => BACKUP_NAME.test(name))).toEqual([FINAL])
+      expect(workDirsNow().sort()).toEqual(['.bqr-work-DONE01', '.bqr-work-EMPTY1', '.bqr-work-HALF01'])
+      expect(fs.readFileSync(path.join(finished, 'building-qr-20260701T0000Z.dump'), 'utf8')).toBe('finished, still inside')
+      expect(fs.readFileSync(path.join(half, PARTIAL), 'utf8')).toBe('a half dump')
+      expect(r.log).toBe(`03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=5\n`)
+    })
+
+    it('does not delete an old work folder by retention either: only the clean-up of stale folders does, and it says so', async () => {
+      seed(oldBackups)
+      const half = workFolder('.bqr-work-HALF01', 1000)
+      const r = await go({ options: { keep: 1 } })
+      expect(r.exitCode).toBe(0)
+      expect(r.removed).toBe(5) // five backups, not six: the work folder is not one
+      expect(fs.existsSync(half)).toBe(false)
+      expect(r.log).toBe(`03/10/2026 10:15 ok host=${MASKED_HOST} file=${FINAL} size=15 removed=5 stale-work-folders-removed=1\n`)
+    })
   })
 })
 
