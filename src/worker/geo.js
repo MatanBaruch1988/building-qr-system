@@ -1,7 +1,6 @@
 // Best-effort location for the soft-GPS policy. Never throws and never blocks for long:
 // the server treats a missing or vague fix as "unverified", not as a failure (see docs).
-
-const USABLE_ACCURACY_M = 150
+import { GPS_MAX_USABLE_ACCURACY_M, GPS_MAX_STALE_AGE_S } from '../../shared/contract.js'
 
 /**
  * One geolocation request with a watchdog of our own. The browser's `timeout` only starts once the
@@ -24,13 +23,14 @@ const ask = (options, watchdogMs) =>
   })
 
 /**
- * 1) Accept a position up to 5 minutes old: people usually arrive from outside, where GPS worked,
- *    so this is instant and works indoors. 2) If that is too vague, try once for a fresh fix.
+ * 1) Accept a position up to 5 minutes old (GPS_MAX_STALE_AGE_S, the age that the server credits walking for):
+ *    people usually arrive from outside, where GPS worked, so this is instant and works indoors.
+ *    2) If that is too vague, try once for a fresh fix.
  * Returns { fix, reason } where fix is {lat, lng, accuracy, age_s} or null.
  */
-export async function getFix({ quickMs = 4000, preciseMs = 3000, maxAgeMs = 5 * 60_000 } = {}) {
+export async function getFix({ quickMs = 4000, preciseMs = 3000, maxAgeMs = GPS_MAX_STALE_AGE_S * 1000 } = {}) {
   const quick = await ask({ enableHighAccuracy: false, timeout: quickMs, maximumAge: maxAgeMs }, quickMs + 2500)
-  if (quick.fix && quick.fix.accuracy <= USABLE_ACCURACY_M) return { fix: quick.fix, reason: null }
+  if (quick.fix && quick.fix.accuracy <= GPS_MAX_USABLE_ACCURACY_M) return { fix: quick.fix, reason: null }
   if (quick.reason === 'denied' || quick.reason === 'unsupported') return { fix: null, reason: quick.reason }
 
   const precise = await ask({ enableHighAccuracy: true, timeout: preciseMs, maximumAge: 0 }, preciseMs + 2500)

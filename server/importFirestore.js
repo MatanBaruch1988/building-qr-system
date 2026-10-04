@@ -3,6 +3,11 @@
 import { createHash } from 'node:crypto'
 import { TIMEZONE } from './config.js'
 import { FLAG_LEGACY_IMPORT, FLAG_OFFLINE_SYNC } from '../shared/flags.js'
+import {
+  QR_TOKEN_PREFIX, QR_TOKEN_RE,
+  POINT_RADIUS_MIN_M, POINT_RADIUS_MAX_M, POINT_RADIUS_DEFAULT_M,
+  SOURCE_ONLINE, SOURCE_OFFLINE_SYNC, OUTCOME_ACCEPTED, OUTCOME_REJECTED_FAR,
+} from '../shared/contract.js'
 
 // The Hebrew words in these patterns are DATA, not UI text: they match what the old Firestore records contain (the
 // Hebrew words for cleaning and gardening in company names), so they must stay in Hebrew.
@@ -32,10 +37,10 @@ const DEMO_NAME = /בדיקות|בדיקה|\btest\b|\bdemo\b|דמו/i
 
 function tokenFromQr(qrCode) {
   if (typeof qrCode !== 'string') return null
-  if (/^BQR-[A-Za-z0-9-]{6,80}$/.test(qrCode)) return qrCode
+  if (QR_TOKEN_RE.test(qrCode)) return qrCode
   try {
     const code = new URL(qrCode).searchParams.get('code')
-    return code && /^BQR-[A-Za-z0-9-]{6,80}$/.test(code) ? code : null
+    return code && QR_TOKEN_RE.test(code) ? code : null
   } catch {
     return null
   }
@@ -98,7 +103,7 @@ export async function importFirestore(client, data) {
     }
     let token = tokenFromQr(l.qrCode)
     if (!token) {
-      token = 'BQR-' + createHash('sha1').update('regen:' + l.id).digest('hex').slice(0, 24)
+      token = QR_TOKEN_PREFIX + createHash('sha1').update('regen:' + l.id).digest('hex').slice(0, 24)
       warn(`location "${l.name}": no readable QR code, generated a new one (needs re-printing)`)
     }
     const radius = Number(l.radiusMeters)
@@ -108,7 +113,7 @@ export async function importFirestore(client, data) {
        on conflict (legacy_id) do nothing returning id`,
       [
         l.name.trim(), l.description || '', numOrNull(l.latitude), numOrNull(l.longitude),
-        Number.isInteger(radius) && radius >= 1 && radius <= 1000 ? radius : 50,
+        Number.isInteger(radius) && radius >= POINT_RADIUS_MIN_M && radius <= POINT_RADIUS_MAX_M ? radius : POINT_RADIUS_DEFAULT_M,
         l.isActive !== false, token, l.id, ts(l.createdAt),
       ],
     )
@@ -173,8 +178,8 @@ export async function importFirestore(client, data) {
         provider.contact ? `${provider.company} – ${provider.contact}` : provider.company,
         inferServiceType(provider.company),
         checkedIn, ts(doc.timestamp), TIMEZONE,
-        doc.syncedFromOffline ? 'offline_sync' : 'online',
-        rejected ? 'rejected_far' : 'accepted',
+        doc.syncedFromOffline ? SOURCE_OFFLINE_SYNC : SOURCE_ONLINE,
+        rejected ? OUTCOME_REJECTED_FAR : OUTCOME_ACCEPTED,
         numOrNull(doc.distanceMeters) === null ? null : Math.round(numOrNull(doc.distanceMeters)),
         numOrNull(doc.gpsAccuracy) === null ? null : Math.round(numOrNull(doc.gpsAccuracy)),
         flags,

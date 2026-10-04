@@ -3,11 +3,11 @@ import { adminApi, errorText } from '../api.js'
 import { useLoad, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconBan, IconCheck, IconShield, IconAlert, IconTrash } from '../icons.jsx'
+import { ADDRESS_MAX_LENGTH, NAME_MAX_LENGTH } from '../../../shared/contract.js'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-// The same limits as the server (server/building.js), so that the person is told before sending.
-const ADDRESS_MAX = 200
+// The same limits as the server (shared/contract.js), so that the person is told before sending.
 const CONTROL_RE = /[\p{Cc}\p{Zl}\p{Zp}]/u
 
 /**
@@ -60,7 +60,7 @@ function BuildingCard() {
           <Field label="כתובת הבניין" error={error}
             hint="הכתובת מופיעה בראש האפליקציה של נותני השירות, בדרך כלל תוך דקה מהשמירה. אפשר להשאיר ריק, ואז לא תוצג כתובת.">
             {/* dir="auto": the address is typed in any language, and each one should read the right way round */}
-            <input className="a-input" dir="auto" value={text} maxLength={ADDRESS_MAX} autoComplete="off"
+            <input className="a-input" dir="auto" value={text} maxLength={ADDRESS_MAX_LENGTH} autoComplete="off"
               onChange={(e) => { setText(e.target.value); setError('') }} />
           </Field>
           <div className="a-actions">
@@ -97,7 +97,7 @@ function AddDialog({ onClose, onAdded }) {
           <input className="a-input" type="email" dir="ltr" value={email} onChange={(e) => { setEmail(e.target.value); setError('') }} autoComplete="off" />
         </Field>
         <Field label="שם (לא חובה)">
-          <input className="a-input" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} />
+          <input className="a-input" value={name} onChange={(e) => setName(e.target.value)} maxLength={NAME_MAX_LENGTH} />
         </Field>
       </form>
     </Modal>
