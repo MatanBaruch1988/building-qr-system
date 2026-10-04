@@ -13,6 +13,8 @@ A tool for a building committee and the service providers it hires (a cleaning c
 3. Every scan is stored as one row in a clean database. **The app analyses nothing**: an AI agent reads the data through
    a read-only API ([docs/agent-api.md](docs/agent-api.md)).
 
+What personal data the app keeps, for how long, and who can see it: [docs/privacy.md](docs/privacy.md).
+
 ## How it is built
 
 | Part | What |
