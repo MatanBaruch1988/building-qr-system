@@ -12,11 +12,14 @@
 //   - Each protected route is called with no credentials, and with every kind of malformed credential (a cookie or a
 //     bearer token that does not exist, with and without the prefixes of server/config.js). All of them must get a 401
 //     with the code of THAT route's guard (not just any guard's), and must not leak data or set a cookie.
-//   - The request with no credentials at all must also make ZERO database statements. Every guard refuses such a request
-//     before it touches the database, so a handler that runs a query or a write before its guard (and only then refuses
-//     with the right 401) would pass the checks above while an unauthenticated caller had already made it do protected
-//     work. The pool is wrapped with a counter for that one request (a connection taken for a transaction counts too).
-//     The variants with a malformed credential are not counted: a guard makes one lookup for a well-formed unknown token.
+//   - A refused request must make exactly the database statements that its guard makes on its own, and nothing else.
+//     A handler that runs a query or a write before its guard (and only then refuses with the right 401) would pass the
+//     checks above while the caller had already made it do protected work, and it can do so only for some requests
+//     (when a cookie is present, when an Authorization header is). So the pool is wrapped with a counter for every
+//     request of this test (a connection taken for a transaction counts too), and the statements of the request are
+//     compared, text by text and in order, with those of the same request (method and credentials) sent to a test-only
+//     route whose handler is just the guard. The request with no credentials at all must make ZERO statements. The
+//     counter writes a statement down when it is asked for, so nothing in the comparison depends on timing.
 //   - Each protected route is also called with VALID credentials of the other two roles (a real committee session, a
 //     real provider device token, a real agent key, all made in the throwaway schema), sent the usual way and the wrong
 //     way round (a bearer token in the cookie, a cookie value as a bearer token). It must refuse them with the 401 of
@@ -25,8 +28,8 @@
 //     check all fail. The fix is the right authorization call at the top of the handler, or, for a route that is meant
 //     to be open, an entry in PUBLIC with the reason (a reviewer reads that line).
 //   - The last describe block proves that the checks notice these mistakes (an open route, a route that validates its
-//     input before it checks authorization, a route that queries or writes before it checks authorization, and a route
-//     guarded by another role's check).
+//     input before it checks authorization, a route that queries or writes before it checks authorization, always or
+//     only when a cookie or an Authorization header is present, and a route guarded by another role's check).
 // Credentials are looked up in the database, so this runs against the throwaway schema like the other API tests.
 // Random UUIDs stand in for path parameters, so even a route that was left open would find nothing to change.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -63,6 +66,8 @@ const GUARDS = {
   agent: { owns: /^\/(agent\/v1\/.*|health\/db)$/, missing: 'api_key_required', codes: ['api_key_required', 'api_key_invalid'] },
 }
 
+const checks = { committee: requireAdmin, provider: requireProvider, agent: requireApiKey }
+
 /** The guard a protected route must use, from its path. Throws for a path that no rule owns (or that two rules own). */
 function guardOf(path) {
   const owners = Object.keys(GUARDS).filter((name) => GUARDS[name].owns.test(path))
@@ -86,7 +91,8 @@ const token = (prefix = '') => prefix + randomBytes(32).toString('base64url')
 
 // What a request can carry that is not a valid credential. Each entry builds fresh values, so no two routes share one.
 // The third item is true for the request with nothing at all, which must get the guard's exact `missing` code and must
-// not make a single database statement (see countingPool).
+// not make a single database statement (see countingPool). Every other request must make the statements of its guard
+// alone (see refusal).
 const CREDENTIALS = [
   ['no credentials at all', () => ({}), true],
   ['an admin cookie that does not exist', () => ({ cookie: `${ADMIN_COOKIE}=${token()}` })],
@@ -116,7 +122,9 @@ const HOW_TO_FIX =
   'A route that is not on the PUBLIC list of tests/route-auth.test.js must call its guard as the first thing its ' +
   'handler does (before it looks anything up or uses the body): requireAdmin for /admin/ routes, requireApiKey for ' +
   '/agent/v1/ routes and /health/db, requireProvider for the provider routes (see GUARDS). Nothing may run before ' +
-  'that call: no query, no write, no transaction (a request without credentials must not touch the database at all). ' +
+  'that call, for any kind of request (a cookie, an Authorization header, none): no query, no write, no transaction. ' +
+  'Until the guard has refused, the route may make only the statements that the guard makes on its own, and a request ' +
+  'without credentials must not touch the database at all. ' +
   'If the route is meant to answer without credentials, add it to PUBLIC with the reason.'
 
 const urlOf = (r) => '/api' + r.path.replace(/:[A-Za-z_]\w*/g, () => randomUUID())
@@ -130,7 +138,7 @@ const bodyOf = (r) => (r.method !== 'GET' && r.method !== 'HEAD' ? { body: {} } 
  */
 function countingPool(real) {
   const seen = []
-  const note = (text) => seen.push(String(typeof text === 'string' ? text : text?.text).replace(/\s+/g, ' ').trim().slice(0, 70))
+  const note = (text) => seen.push(String(typeof text === 'string' ? text : text?.text).replace(/\s+/g, ' ').trim())
   return {
     seen,
     query: (text, params) => {
@@ -151,25 +159,64 @@ function countingPool(real) {
   }
 }
 
-/** Sends the request, and returns the response and, when `count` is set, every database statement it made (else null). */
-async function sendRequest(r, creds, count) {
+// A test-only route per guard and per method whose handler is just the guard. It measures what a guard makes on its own
+// for a given request. The routes are registered in beforeAll, after ROUTES was read, so they are never walked as routes
+// of the API (see the test that says so).
+const GUARD_ALONE = '/canary/guard-alone'
+const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+const guardAloneRoute = (guard, method) => ({ method, path: `${GUARD_ALONE}/${guard}` })
+const shown = (text) => (text.length > 70 ? `${text.slice(0, 67)}...` : text)
+
+/** Sends the request through a counting pool, and returns the response and every database statement it made, in order. */
+async function sendRequest(r, creds) {
   const real = getPool()
-  const counter = count ? countingPool(real) : null
-  if (counter) setPool(counter)
+  const counter = countingPool(real)
+  setPool(counter)
   try {
     const res = await call(r.method, urlOf(r), { ...bodyOf(r), ...creds })
-    return { res, statements: counter?.seen ?? null }
+    return { res, statements: counter.seen }
   } finally {
-    if (counter) setPool(real)
+    setPool(real)
   }
 }
 
 /**
- * One request that must be refused with the 401 of `guard`: the sentence that says how it was not, or null.
- * `exact`: the 401 code must be the guard's `missing` one. `noQueries`: the request must not touch the database.
+ * How the statements of a request (`actual`) differ from the ones its guard makes on its own for the same request
+ * (`expected`), as a sentence, or null when they are the same texts in the same order. An extra or a different statement
+ * names the first one that does not belong; fewer statements mean that the guard of this role did not run in full.
  */
-async function refusal(r, guard, label, creds, { exact = false, noQueries = false } = {}) {
-  const { res, statements } = await sendRequest(r, creds, noQueries)
+function statementProblem(r, guard, label, actual, expected) {
+  const count = (list) => `${list.length} database statement${list.length === 1 ? '' : 's'}`
+  const who = `with ${label} the handler of ${keyOf(r)}`
+  const at = actual.findIndex((text, i) => text !== expected[i])
+  if (at !== -1 && expected.length === 0) {
+    return (
+      `${who} made ${count(actual)} before it refused (the first: ${shown(actual[at])}). The authorization call must ` +
+      'come first in the handler: the guard alone makes no database statement for this request, so neither may the handler'
+    )
+  }
+  if (at !== -1) {
+    return (
+      `${who} made ${count(actual)}, but the ${guard} guard alone makes ${count(expected)} for the same request, and the ` +
+      `first statement that is not the guard's own is number ${at + 1}: ${shown(actual[at])}. The authorization call must ` +
+      "come first in the handler: until it has refused the request, nothing but the guard's own statements may run"
+    )
+  }
+  if (actual.length < expected.length) {
+    return `${who} made ${count(actual)} but the ${guard} guard alone makes ${count(expected)} for the same request: the guard of this role did not run in full`
+  }
+  return null
+}
+
+/**
+ * One request that must be refused with the 401 of `guard`: the sentence that says how it was not, or null.
+ * `exact`: the 401 code must be the guard's `missing` one. `nothing`: the request carries no credentials, so it must not
+ * touch the database; any other request must make the statements that its guard makes on its own, measured by sending
+ * the same method and the very same credentials to the guard-alone route (the answer is not looked at, only the statements).
+ */
+async function refusal(r, guard, label, creds, { exact = false, nothing = false } = {}) {
+  const { res, statements } = await sendRequest(r, creds)
+  const expected = nothing ? [] : (await sendRequest(guardAloneRoute(guard, r.method), creds)).statements
   const code = res.json?.error?.code
   const want = exact ? [GUARDS[guard].missing] : GUARDS[guard].codes
   const problems = []
@@ -179,13 +226,8 @@ async function refusal(r, guard, label, creds, { exact = false, noQueries = fals
   } else if (res.json && Object.keys(res.json).some((k) => k !== 'error')) {
     problems.push(`with ${label} the 401 holds more than an error: ${Object.keys(res.json).join(', ')}`)
   } else if (res.headers['set-cookie'] !== undefined) problems.push(`with ${label} it set a cookie`)
-  if (statements?.length) {
-    problems.push(
-      `with ${label} the handler of ${keyOf(r)} made ${statements.length} database statement${statements.length === 1 ? '' : 's'} before it refused ` +
-        `(the first: ${statements[0]}). The authorization call must come first in the handler: a request without ` +
-        'credentials must not make the database run anything',
-    )
-  }
+  const extra = statementProblem(r, guard, label, statements, expected)
+  if (extra) problems.push(extra)
   return problems.length ? problems.join('; ') : null
 }
 
@@ -194,7 +236,7 @@ async function authProblems(r, guard = guardOf(r.path)) {
   const problems = []
   for (const [label, build, nothing] of CREDENTIALS) {
     // The request with nothing at all gets the guard's exact code, and every guard refuses it before any query.
-    const problem = await refusal(r, guard, label, build(), { exact: nothing, noQueries: nothing })
+    const problem = await refusal(r, guard, label, build(), { exact: nothing, nothing })
     if (problem) problems.push(problem)
   }
   return problems
@@ -215,6 +257,15 @@ async function crossRoleProblems(r, guard = guardOf(r.path)) {
 let db
 
 beforeAll(async () => {
+  // After ROUTES was read at the top of this file, so these routes are not part of the walked table.
+  for (const guard of Object.keys(GUARDS)) {
+    for (const method of METHODS) {
+      route(method, guardAloneRoute(guard, method).path, async ({ req }) => {
+        await checks[guard](req)
+        return { ok: true }
+      })
+    }
+  }
   db = await setupDb()
   await seedAdmin(db.pool)
   const cookie = await adminCookie()
@@ -308,6 +359,38 @@ describe('the guards', () => {
     expect(() => guardOf('/canary/unknown-group')).toThrow(/fits no guard rule/)
   })
 
+  it('keeps the test-only routes that measure a guard alone out of the walked table', () => {
+    expect(ROUTES.filter((r) => r.path.startsWith(GUARD_ALONE))).toEqual([])
+    expect(PROTECTED.filter((r) => r.path.startsWith(GUARD_ALONE))).toEqual([])
+    // They are registered (that is how a request reaches them), after the walked table was read.
+    const live = routeTable().map(keyOf)
+    for (const guard of Object.keys(GUARDS)) {
+      for (const method of METHODS) expect(live).toContain(keyOf(guardAloneRoute(guard, method)))
+    }
+  })
+
+  it('measures each guard on its own: no statement without credentials, a lookup for a credential it can look up', async () => {
+    const own = { committee: asCookie(VALID.committee), provider: asBearer(VALID.provider), agent: asBearer(VALID.agent) }
+    // A token shaped like the guard's own kind, that does not exist: the guard has to look it up to refuse it.
+    const unknown = {
+      committee: asCookie(token(ADMIN_TOKEN_PREFIX)),
+      provider: asBearer(token(PROVIDER_TOKEN_PREFIX)),
+      agent: asBearer(token(API_KEY_PREFIX)),
+    }
+    for (const guard of Object.keys(GUARDS)) {
+      const alone = guardAloneRoute(guard, 'GET')
+      const nothing = await sendRequest(alone, {})
+      expect(nothing.res.json?.error?.code, guard).toBe(GUARDS[guard].missing)
+      expect(nothing.statements, `the ${guard} guard must refuse a request with no credentials before any query`).toEqual([])
+      const missing = await sendRequest(alone, unknown[guard])
+      expect(missing.res.status, guard).toBe(401)
+      expect(missing.statements.length, `the ${guard} guard looks up a credential that is shaped like its own`).toBeGreaterThanOrEqual(1)
+      const accepted = await sendRequest(alone, own[guard])
+      expect(accepted.res.status, guard).toBe(200)
+      expect(accepted.statements.length, `the ${guard} guard looks up a valid credential`).toBeGreaterThanOrEqual(1)
+    }
+  })
+
   it('has a real committee session, provider device token and agent key, each accepted by its own routes', async () => {
     const sample = (guard) => PROTECTED.find((r) => r.method === 'GET' && !r.path.includes(':') && guardOf(r.path) === guard)
     const plain = {
@@ -372,7 +455,8 @@ describe('the checks themselves', () => {
   })
 
   // A handler that does work before its guard and then refuses with the right 401: the status and the code are all
-  // correct, so only the count of database statements of the request without credentials can show it.
+  // correct, so only the database statements of the request can show it. Work that happens for every kind of request is
+  // seen in every variant; the two checks differ only in what they compare with (nothing, or the guard on its own).
   it('catch a route that runs a query before it checks authorization', async () => {
     route('GET', '/canary/queries-first', async ({ req }) => {
       await query('select 1 as one')
@@ -381,12 +465,17 @@ describe('the checks themselves', () => {
     })
     const r = { method: 'GET', path: '/canary/queries-first' }
     const problems = await authProblems(r, 'committee')
-    expect(problems.length).toBe(1) // the 401 and its code were right in every variant, only the request with nothing is counted
+    expect(problems.length).toBe(CREDENTIALS.length) // the extra statement shows in every variant, the 401 and its code were right in all
     expect(problems[0]).toMatch(/^with no credentials at all the handler of GET \/canary\/queries-first made 1 database statement before it refused/)
     expect(problems[0]).toMatch(/\(the first: select 1 as one\)/)
-    expect(problems[0]).toMatch(/The authorization call must come first/)
-    expect(problems[0]).not.toMatch(/answered/) // it did refuse with admin_required
-    expect(await crossRoleProblems(r, 'committee')).toEqual([]) // the credentials of the other roles are still refused
+    for (const p of problems) {
+      expect(p).toMatch(/select 1 as one/)
+      expect(p).toMatch(/The authorization call must come first/)
+      expect(p).not.toMatch(/answered/) // it did refuse with admin_required
+    }
+    const cross = await crossRoleProblems(r, 'committee')
+    expect(cross.length).toBe(4) // and so does every credential of the other roles
+    for (const p of cross) expect(p).toMatch(/select 1 as one/)
     expect(getPool()).toBe(db.pool) // the counting pool was taken out again
   })
 
@@ -397,7 +486,7 @@ describe('the checks themselves', () => {
       return { ok: true }
     })
     const problems = await authProblems({ method: 'GET', path: '/canary/transaction-first' }, 'provider')
-    expect(problems.length).toBe(1)
+    expect(problems.length).toBe(CREDENTIALS.length)
     expect(problems[0]).toMatch(/made 4 database statements before it refused \(the first: \(a connection for a transaction\)\)/) // connect, begin, select, commit
   })
 
@@ -410,13 +499,88 @@ describe('the checks themselves', () => {
         return { ok: true }
       })
       const problems = await authProblems({ method: 'POST', path: '/canary/writes-first' }, 'agent')
-      expect(problems.length).toBe(1)
+      expect(problems.length).toBe(CREDENTIALS.length)
       expect(problems[0]).toMatch(/made 1 database statement before it refused \(the first: insert into canary_writes_first/)
       // The unauthenticated request really did write a row, although every response was a clean 401.
       const { rows } = await db.pool.query('select count(*)::int as n from canary_writes_first')
       expect(rows[0].n).toBeGreaterThanOrEqual(1)
     } finally {
       await db.pool.query('drop table canary_writes_first')
+    }
+  })
+
+  // Work before the guard that happens only when the request carries something. The request with no credentials at all
+  // stays clean (zero statements), so the zero-statement check passes these routes: only the comparison with the guard on
+  // its own can catch them, and it must catch every variant that carries the thing the handler looks at.
+  it('catch a route that queries before its guard only when a cookie is present', async () => {
+    route('GET', '/canary/queries-first-with-cookie', async ({ req }) => {
+      if (req.headers.cookie) await query('select 1 as one')
+      await requireAdmin(req)
+      return { ok: true }
+    })
+    const r = { method: 'GET', path: '/canary/queries-first-with-cookie' }
+    const problems = await authProblems(r, 'committee')
+    expect(problems.some((p) => p.startsWith('with no credentials at all'))).toBe(false) // the zero-statement check is not what catches it
+    expect(problems.length).toBe(4) // the four variants with the admin cookie (the ones with a bearer token stay clean)
+    for (const p of problems) {
+      expect(p).toMatch(/^with (an admin cookie|an empty admin cookie)/)
+      expect(p).toMatch(/select 1 as one/)
+      expect(p).toMatch(/The authorization call must come first/)
+    }
+    const cross = await crossRoleProblems(r, 'committee')
+    expect(cross.length).toBe(2) // a provider token and an agent key sent in the admin cookie
+    for (const p of cross) {
+      expect(p).toMatch(/^with a valid (provider|agent) credential sent in the admin cookie/)
+      expect(p).toMatch(/select 1 as one/)
+    }
+  })
+
+  it('catch a route that queries before its guard only when an Authorization header is present', async () => {
+    route('GET', '/canary/queries-first-with-authorization', async ({ req }) => {
+      if (req.headers.authorization) await query('select 1 as one')
+      await requireProvider(req)
+      return { ok: true }
+    })
+    const r = { method: 'GET', path: '/canary/queries-first-with-authorization' }
+    const problems = await authProblems(r, 'provider')
+    expect(problems.some((p) => p.startsWith('with no credentials at all'))).toBe(false)
+    expect(problems.length).toBe(5) // four kinds of bearer token (one with no token) and the header of another scheme
+    for (const p of problems) {
+      expect(p).toMatch(/^with (a bearer token|an Authorization header)/)
+      expect(p).toMatch(/select 1 as one/)
+    }
+    const cross = await crossRoleProblems(r, 'provider')
+    expect(cross.length).toBe(2) // the committee session and the agent key, each sent as a bearer token
+    for (const p of cross) {
+      expect(p).toMatch(/^with a valid (committee|agent) credential/)
+      expect(p).toMatch(/select 1 as one/)
+    }
+  })
+
+  it('catch a route that writes before its guard only when a bearer token with the agent key prefix is present', async () => {
+    await db.pool.query('create table canary_writes_on_key (n int not null)')
+    try {
+      route('POST', '/canary/writes-first-with-agent-key', async ({ req }) => {
+        if (String(req.headers.authorization ?? '').startsWith(`Bearer ${API_KEY_PREFIX}`)) {
+          await query('insert into canary_writes_on_key (n) values (1)')
+        }
+        await requireProvider(req)
+        return { ok: true }
+      })
+      const r = { method: 'POST', path: '/canary/writes-first-with-agent-key' }
+      const problems = await authProblems(r, 'provider')
+      expect(problems.length).toBe(1) // only the bearer token with the agent key prefix
+      expect(problems[0]).toMatch(/^with a bearer token with the agent key prefix that does not exist the handler of POST \/canary\/writes-first-with-agent-key made /)
+      expect(problems[0]).toMatch(/insert into canary_writes_on_key/)
+      const cross = await crossRoleProblems(r, 'provider')
+      expect(cross.length).toBe(1) // and the valid agent key sent as a bearer token
+      expect(cross[0]).toMatch(/^with a valid agent credential the handler of POST/)
+      expect(cross[0]).toMatch(/insert into canary_writes_on_key/)
+      // Those two unauthenticated requests really wrote a row each, although every response was a clean 401.
+      const { rows } = await db.pool.query('select count(*)::int as n from canary_writes_on_key')
+      expect(rows[0].n).toBe(2)
+    } finally {
+      await db.pool.query('drop table canary_writes_on_key')
     }
   })
 
@@ -433,6 +597,20 @@ describe('the checks themselves', () => {
     expect((await call('GET', '/api/canary/queries-after', asCookie(VALID.committee))).status).toBe(200)
   })
 
+  it('pass a route whose guard comes first, even when it then does work that depends on the cookie or the header', async () => {
+    route('POST', '/canary/guard-first-then-work/:id', async ({ req }) => {
+      await requireProvider(req)
+      if (req.headers.authorization) await query('select 1 as one')
+      if (req.headers.cookie) await query('select 2 as two')
+      return { ok: true }
+    })
+    const r = { method: 'POST', path: '/canary/guard-first-then-work/:id' }
+    expect(await authProblems(r, 'provider')).toEqual([])
+    expect(await crossRoleProblems(r, 'provider')).toEqual([])
+    const signedIn = await call('POST', `/api/canary/guard-first-then-work/${randomUUID()}`, { body: {}, ...asBearer(VALID.provider) })
+    expect(signedIn.status).toBe(200)
+  })
+
   it('catch a 401 that does not come from an authorization check', async () => {
     route('GET', '/canary/other-401', async () => {
       throw unauthorized('google_invalid')
@@ -443,7 +621,6 @@ describe('the checks themselves', () => {
   })
 
   // A route that is guarded, but by another role's check: the case that every credential being invalid cannot show.
-  const checks = { committee: requireAdmin, provider: requireProvider, agent: requireApiKey }
   for (const needs of Object.keys(GUARDS)) {
     for (const uses of Object.keys(GUARDS).filter((name) => name !== needs)) {
       it(`catch a route of the ${needs} role that is guarded by the ${uses} check`, async () => {
