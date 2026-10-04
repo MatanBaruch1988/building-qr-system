@@ -5,12 +5,12 @@ import { hashPassword, randomToken, sha256 } from '../crypto.js'
 import {
   ApiError, bad, conflict, forbidden, notFound, requireUuid, isUuid, str, num, toCsv, cookieHeader, getCookie, clientIp,
 } from '../http.js'
-import { requireAdmin, guardLogin } from '../auth.js'
+import { requireAdmin, isAdminToken, guardLogin } from '../auth.js'
 import { verifyGoogleCredential } from '../google.js'
 import { readAddress, saveAddress, parseAddress } from '../building.js'
 import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvRow } from '../scans.js'
 import {
-  ADMIN_COOKIE, ADMIN_SESSION_DAYS, PASSWORD_MIN_LENGTH,
+  ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, API_KEY_PREFIX, PASSWORD_MIN_LENGTH,
 } from '../config.js'
 
 const GPS_MODES = ['required', 'optional', 'none']
@@ -54,7 +54,7 @@ function password(value, required = false) {
 const devLoginAllowed = () => !process.env.VERCEL && process.env.DEV_ADMIN_LOGIN === '1'
 
 async function startAdminSession(req, res, adminRow) {
-  const token = randomToken('qra_')
+  const token = randomToken(ADMIN_TOKEN_PREFIX)
   await query(
     `insert into admin_sessions (admin_id, token_hash, expires_at)
      values ($1, $2, now() + ($3 || ' days')::interval)`,
@@ -104,7 +104,10 @@ route('POST', '/admin/dev-login', async ({ req, res, body }) => {
 
 route('POST', '/admin/logout', async ({ req, res }) => {
   const token = getCookie(req, ADMIN_COOKIE)
-  if (token) await query('update admin_sessions set revoked_at = now() where token_hash = $1', [sha256(token)])
+  // Only a cookie shaped like one of our session tokens can match a session: any other value costs no query.
+  if (token && isAdminToken(token)) {
+    await query('update admin_sessions set revoked_at = now() where token_hash = $1', [sha256(token)])
+  }
   res.setHeader('Set-Cookie', cookieHeader(ADMIN_COOKIE, '', { maxAgeSeconds: 0, secure: isSecure(req) }))
   return { ok: true }
 })
@@ -502,7 +505,7 @@ route('GET', '/admin/api-keys', async ({ req }) => {
 route('POST', '/admin/api-keys', async ({ req, body }) => {
   const { admin } = await requireAdmin(req)
   const name = str(body.name, { field: 'name', max: 80, required: true })
-  const key = randomToken('qrk_')
+  const key = randomToken(API_KEY_PREFIX)
   const { rows } = await query(
     'insert into api_keys (name, key_prefix, key_hash) values ($1, $2, $3) returning id, name, key_prefix, created_at',
     [name, key.slice(0, 8), sha256(key)],

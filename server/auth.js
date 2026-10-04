@@ -3,18 +3,32 @@ import { sha256 } from './crypto.js'
 import { bearerToken, getCookie, unauthorized, ApiError } from './http.js'
 import {
   ADMIN_COOKIE,
+  ADMIN_TOKEN_PREFIX,
+  API_KEY_PREFIX,
   LOGIN_MAX_FAILURES,
   LOGIN_MAX_PER_ACCOUNT,
   LOGIN_MAX_PER_IP,
   LOGIN_WINDOW_MINUTES,
+  MAX_TOKEN_LENGTH,
+  PROVIDER_TOKEN_PREFIX,
 } from './config.js'
 
 const TOUCH_EVERY_MS = 5 * 60 * 1000
 
-/** Provider phone: `Authorization: Bearer <device token>`. Inactive provider or revoked device = 401. */
+// Anything we minted starts with its prefix and is short (see config.js). Checking that first means a random string in
+// a header or a cookie is refused without a database round trip, which would otherwise cost a query and could wake the
+// Neon compute for anyone who asked.
+const hasTokenShape = (token, prefix) => token.startsWith(prefix) && token.length <= MAX_TOKEN_LENGTH
+export const isProviderToken = (token) => hasTokenShape(token, PROVIDER_TOKEN_PREFIX)
+export const isAdminToken = (token) => hasTokenShape(token, ADMIN_TOKEN_PREFIX)
+
+/**
+ * Provider phone: `Authorization: Bearer <device token>`. Inactive provider or revoked device = 401.
+ * A token that is not shaped like a device token gets the same answer as no token, without a query.
+ */
 export async function requireProvider(req) {
   const token = bearerToken(req)
-  if (!token) throw unauthorized('invalid_session', 'Sign in required')
+  if (!token || !isProviderToken(token)) throw unauthorized('invalid_session', 'Sign in required')
   const { rows } = await query(
     `select d.id as device_id, d.last_seen_at, p.id, p.company, p.contact_name, p.service_type, p.is_demo
        from provider_devices d
@@ -39,10 +53,10 @@ export async function requireProvider(req) {
   }
 }
 
-/** Committee member: HttpOnly session cookie. */
+/** Committee member: HttpOnly session cookie. A cookie that is not shaped like a session token is refused without a query. */
 export async function requireAdmin(req) {
   const token = getCookie(req, ADMIN_COOKIE)
-  if (!token) throw unauthorized('admin_required', 'Admin sign in required')
+  if (!token || !isAdminToken(token)) throw unauthorized('admin_required', 'Admin sign in required')
   const { rows } = await query(
     `select a.id, a.email, a.name, s.id as session_id
        from admin_sessions s
@@ -57,7 +71,9 @@ export async function requireAdmin(req) {
 /** External agent: `Authorization: Bearer qrk_…` (read-only). */
 export async function requireApiKey(req) {
   const token = bearerToken(req)
-  if (!token || !token.startsWith('qrk_')) throw unauthorized('api_key_required', 'API key required')
+  if (!token || !token.startsWith(API_KEY_PREFIX)) throw unauthorized('api_key_required', 'API key required')
+  // Too long to be one of ours: the answer an unknown key gets, without a query.
+  if (token.length > MAX_TOKEN_LENGTH) throw unauthorized('api_key_invalid', 'API key is invalid or revoked')
   const { rows } = await query(
     'select id from api_keys where key_hash = $1 and revoked_at is null',
     [sha256(token)],
