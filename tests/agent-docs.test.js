@@ -11,7 +11,8 @@
 //   4. endpoints:      the routes under /agent/v1 in routeTable() = schemaDoc.endpoints = the md table
 //   5. filters:        what listScans really reads = SCAN_FILTERS = schemaDoc = the md (and the values they allow)
 //   6. outcomes and sources: the check constraints of the scans table (db/migrations) = schemaDoc = the md
-//   7. error codes:    what the real routes answer to a matrix of bad requests = schemaDoc.errors = the md table
+//   7. error codes:    what the real routes answer to a matrix of bad requests = schemaDoc.errors = the md table, and
+//                      the order of the checks (endpoint, then key, then the rest) that both documents state
 //   8. numbers in prose: server/config.js = the prose of schemaDoc (written from the constant) = the md (typed)
 // When a test here fails, update the document that the message names (or the code, if the code is what is wrong). A
 // document that cannot be read any more (a heading or a table that moved) fails with the shape that the test expects.
@@ -732,7 +733,34 @@ describe('the real agent API answers what the documents say', () => {
       }
     }
 
-    // The matrix of bad requests against every agent endpoint.
+    // The order in which the router judges a request: first whether there is such an endpoint (404 and 405 need no key),
+    // then the key (401), and only then the rest of the request (the filters, the cursor, the body: the 400s). A request
+    // that is wrong in a second way as well therefore gets the 401 until its key is valid. Each of these is sent with no
+    // key, an unknown key and a revoked key (the 401 of its kind) and then with a valid key (the 400 of its kind).
+    const unauthenticated = [
+      ['no key', {}, 'api_key_required'],
+      ['an unknown key', { token: `${config.API_KEY_PREFIX}unknown` }, 'api_key_invalid'],
+      ['a revoked key', { token: revokedKey }, 'api_key_invalid'],
+    ]
+    for (const { method, path: p } of agentRoutes()) {
+      const rel = p.replace('/agent/v1', '')
+      for (const [who, opts, code] of unauthenticated) {
+        expectPair(await call(method, `/api/agent/v1${rel}`, { ...opts, badJsonBody: true }), `${method} ${rel} with ${who} and a body that is not valid JSON`, 401, code)
+      }
+      expectPair(await call('POST', `/api/agent/v1${rel}`, { body: {} }), `POST ${rel} with no key`, 405, 'method_not_allowed')
+    }
+    for (const [what, q, code] of [
+      ['a limit that is not a number', 'limit=abc', 'invalid_filter'],
+      ['a cursor that this API did not return', 'cursor=zzz', 'invalid_cursor'],
+    ]) {
+      for (const [who, opts, refusal] of unauthenticated) {
+        expectPair(await call('GET', `/api/agent/v1/scans?${q}`, opts), `GET /scans with ${who} and ${what}`, 401, refusal)
+      }
+      expectPair(await get(`/scans?${q}`), `GET /scans with a valid key and ${what}`, 400, code)
+    }
+    expectPair(await call('GET', '/api/agent/v1/nope', {}), 'GET /nope with no key', 404, 'not_found')
+
+    // The rest of the matrix of bad requests against every agent endpoint.
     for (const { method, path: p } of agentRoutes()) {
       const rel = p.replace('/agent/v1', '')
       expectPair(await call(method, `/api/agent/v1${rel}`, {}), `${method} ${rel} with no key`, 401, 'api_key_required')
@@ -741,11 +769,10 @@ describe('the real agent API answers what the documents say', () => {
       expectPair(await call(method, `/api/agent/v1${rel}`, { token: `${config.API_KEY_PREFIX}unknown` }), `${method} ${rel} with an unknown key`, 401, 'api_key_invalid')
       expectPair(await call(method, `/api/agent/v1${rel}`, { token: revokedKey }), `${method} ${rel} with a revoked key`, 401, 'api_key_invalid')
       expectPair(await call('POST', `/api/agent/v1${rel}`, { token: key, body: {} }), `POST ${rel}`, 405, 'method_not_allowed')
-      expectPair(await call(method, `/api/agent/v1${rel}`, { token: key, badJsonBody: true }), `${method} ${rel} with a body that is not valid JSON`, 400, 'invalid_json')
+      expectPair(await call(method, `/api/agent/v1${rel}`, { token: key, badJsonBody: true }), `${method} ${rel} with a valid key and a body that is not valid JSON`, 400, 'invalid_json')
     }
     expectPair(await get('/nope'), 'GET /nope', 404, 'not_found')
     expectPair(await call('GET', '/api/agent/nope', { token: key }), 'GET /api/agent/nope', 404, 'not_found')
-    expectPair(await get('/scans?cursor=zzz'), 'a cursor that this API did not return', 400, 'invalid_cursor')
 
     // A failure of the server itself: a database that cannot be reached, through the real route and the real router.
     const pool = getPool()
@@ -785,6 +812,20 @@ describe('the real agent API answers what the documents say', () => {
       }
       for (const pair of docPairs) {
         if (!produced.has(pair)) problems.push(`${where} lists ${pair}, but no request of the matrix produces it: remove it, or add the request to the matrix in tests/agent-docs.test.js.`)
+      }
+    }
+    // The order of the checks, which the matrix above proves, is stated in both documents.
+    const mdIntro = section(md, '## Errors').split('\n').filter((l) => !l.startsWith('|')).join(' ')
+    const mdJson = mdRows.find((r) => r.pair === '400 invalid_json')?.meaning ?? ''
+    for (const [what, pattern, places] of [
+      ['say that the key is checked first', /key is checked first/i, [[`${MD} (the text above the table under "## Errors")`, mdIntro], [`${SCHEMA} (errors.api_key_required)`, schemaDoc.errors.api_key_required]]],
+      ['say that a 400 is answered only to a valid key', /valid key/i, [[`${MD} (row 400 invalid_json)`, mdJson], [`${SCHEMA} (errors.invalid_json)`, schemaDoc.errors.invalid_json], [`${MD} (the text above the table under "## Errors")`, mdIntro]]],
+      ['say that 404 and 405 need no key', /without a key/i, [[`${MD} (the text above the table under "## Errors")`, mdIntro], [`${SCHEMA} (errors.not_found)`, schemaDoc.errors.not_found], [`${SCHEMA} (errors.method_not_allowed)`, schemaDoc.errors.method_not_allowed]]],
+    ]) {
+      for (const [where, text] of places) {
+        if (!pattern.test(text ?? '')) {
+          problems.push(`${where} does not ${what} (the test looks for ${pattern}). The router judges a request in this order: the endpoint (404, 405, no key needed), the key (401), then the rest of the request (the 400s), and the matrix above proves it: the documents must say it.`)
+        }
       }
     }
     // The filters that invalid_filter names.

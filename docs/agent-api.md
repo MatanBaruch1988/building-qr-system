@@ -149,6 +149,8 @@ A provider (`/providers`):
 
 JSON `{ "error": { "code": "…", "message": "…" } }`, sometimes with extra keys such as `field`.
 
+The key is checked first. A request to an endpoint that exists but has no valid key gets a `401`, whatever else is wrong with it (a bad filter, a bad cursor, a body that is not valid JSON): the `400` errors below are answered only to a valid key. `404` and `405` are answered without a key, because no endpoint is reached.
+
 | Status and code | Meaning |
 |---|---|
 | `401 api_key_required` | No key, or the header is not a `Bearer qrk_…` key |
@@ -156,7 +158,7 @@ JSON `{ "error": { "code": "…", "message": "…" } }`, sometimes with extra ke
 | `400 invalid_filter` | A bad `from`, `to`, `point_id`, `provider_id`, `outcome`, `order` or `limit` (`field` names it) |
 | `400 invalid_cursor` | The `cursor` is not one that this API returned |
 | `400 invalid_input` | The database refused a value as out of range or malformed |
-| `400 invalid_json` | The request carries a body that is not valid JSON (these endpoints read no body: send none) |
+| `400 invalid_json` | The request carries a body that is not valid JSON (these endpoints read no body: send none). Only a valid key gets this answer; without one it is the `401` |
 | `404 not_found` | No such endpoint |
 | `405 method_not_allowed` | The endpoint exists but not for this HTTP method (everything here is `GET`) |
 | `500 server_error` | An unexpected failure on the server. Try again later |

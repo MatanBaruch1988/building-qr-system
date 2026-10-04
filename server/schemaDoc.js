@@ -48,14 +48,17 @@ export const schemaDoc = {
   auth: 'Header "Authorization: Bearer qrk_…". Keys are created and revoked by the committee in the admin screen.',
   errors: {
     shape: '{ "error": { "code": "...", "message": "..." } }, sometimes with extra keys such as field.',
-    api_key_required: '401: no key, or the header is not a Bearer qrk_ key.',
+    api_key_required:
+      '401: no key, or the header is not a Bearer qrk_ key. The key is checked first: a request to an endpoint that exists but has no valid key gets a 401, ' +
+      'whatever else is wrong with it, and every 400 below is answered only to a valid key.',
     api_key_invalid: '401: the key is unknown or revoked.',
     invalid_filter: '400: a bad from, to, point_id, provider_id, outcome, order or limit. The field key names it.',
     invalid_cursor: '400: the cursor is not one that this API returned.',
     invalid_input: '400: the database refused a value as out of range or malformed.',
-    invalid_json: '400: the request carries a body that is not valid JSON. These endpoints read no body: send none.',
-    not_found: '404: no such endpoint.',
-    method_not_allowed: '405: the endpoint exists but not for this HTTP method (everything here is GET).',
+    invalid_json:
+      '400: the request carries a body that is not valid JSON. These endpoints read no body: send none. Only a valid key gets this answer; without one it is a 401.',
+    not_found: '404: no such endpoint (answered without a key).',
+    method_not_allowed: '405: the endpoint exists but not for this HTTP method (everything here is GET). Answered without a key.',
     server_error: '500: an unexpected failure on the server. Try again later.',
   },
   points_fields: {
