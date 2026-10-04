@@ -20,13 +20,36 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 | `GET /schema` | Field, flag and rule descriptions. |
 | `GET /health` | Liveness and server time. |
 
+### Response envelopes
+
+| Endpoint | Top level of the JSON answer |
+|---|---|
+| `GET /scans` | `{ scans, count, next_cursor }`. `count` is the number of scans in this page, not the total. `next_cursor` is `null` on the last page. |
+| `GET /points` | `{ points }` |
+| `GET /providers` | `{ providers }` |
+| `GET /health` | `{ ok, server_time, server_time_local }` (UTC ISO, and `YYYY-MM-DD HH:mm:ss` in Israel time) |
+
 ### `GET /scans` filters
 
-`from`, `to` (`YYYY-MM-DD` = Israel calendar day, or a full ISO time with `Z`/offset), `point_id`, `provider_id`,
-`service_type`, `flag`, `outcome` (`accepted` default | `rejected` | `all`), `include_voided`, `include_demo`,
+`from`, `to` (`YYYY-MM-DD` = Israel calendar day, or a full ISO date-time that carries `Z` or an offset such as
+`+03:00`; a date-time without one is refused), `point_id`, `provider_id` (uuids), `service_type`, `flag`,
+`outcome` (`accepted` default | `rejected` | `all`), `include_voided`, `include_demo`,
 `order` (`desc` default | `asc`), `limit` (1 to 500, default 100), `cursor`, `format` (`json` | `csv`).
 
-Paging: the response has `next_cursor`; pass it back as `cursor`. For CSV the cursor is in the `X-Next-Cursor` header.
+How they really behave:
+
+- `limit` above 500 is cut to 500, not refused. Zero, negative or not a whole number is `400 invalid_filter`.
+- `include_voided` and `include_demo` mean yes only for `true` or `1`. Any other value means no.
+- `service_type` and `flag` are cut to 60 characters before they are compared.
+- `format=csv` returns CSV. Any other `format` value (or none) returns JSON.
+
+Paging: the response has `next_cursor`; pass it back as `cursor`. For CSV the cursor is in the `X-Next-Cursor` header
+(absent on the last page).
+
+### CSV
+
+The same columns as a scan row, in the same order, with a header line and no byte-order mark. `flags` are joined with
+`;` (for example `offline_sync;clock_skew`). `voided` is the text `true` or `false`. A null is an empty cell.
 
 ```bash
 curl -H "Authorization: Bearer $KEY" \
@@ -52,6 +75,38 @@ curl -H "Authorization: Bearer $KEY" \
 }
 ```
 
+`distance_m` is null when no GPS fix was sent, and also when the point has no coordinates.
+
+## A point and a provider
+
+A point (`/points`):
+
+| Key | Meaning |
+|---|---|
+| `id` | uuid |
+| `name` | Name of the point |
+| `description` | Free text from the committee, or null |
+| `service_type` | e.g. cleaning / gardening, or null |
+| `gps_mode` | `required`, `optional` or `none` |
+| `lat`, `lng` | Coordinates of the point, null when it has none |
+| `radius_m` | Radius in meters around the point that counts as being there |
+| `is_active` | false when the committee switched the point off |
+| `created_at` | UTC ISO time the point was created |
+| `assigned_provider_ids` | Provider uuids assigned to the point (empty: any provider may scan it) |
+
+A provider (`/providers`):
+
+| Key | Meaning |
+|---|---|
+| `id` | uuid |
+| `company` | Company name |
+| `contact_name` | Contact person, or null |
+| `service_type` | e.g. cleaning / gardening, or null |
+| `is_active` | false when the committee switched the provider off |
+| `is_demo` | true for the demo account (its scans are test data) |
+| `created_at` | UTC ISO time the provider was created |
+| `last_scan_at` | UTC ISO time of the latest accepted, not voided scan, or null |
+
 ## How to read it
 
 - `outcome: accepted` is a real check-in. `rejected_far` / `rejected_no_location` are refused attempts, kept for the record.
@@ -60,7 +115,9 @@ curl -H "Authorization: Bearer $KEY" \
   - `location_outside_radius`: a good fix slightly outside the point's radius (within the 15 m pin tolerance).
   - `location_stale`: the phone used a position it remembered (older than a minute), typically from just outside the building.
   - `offline_sync`: scanned without signal, uploaded later (`checked_in_at` is the phone's time).
-  - `clock_skew`: the phone's clock was off by more than 5 minutes.
+  - `clock_skew`: the phone's clock cannot be trusted. Online: it differed from the server by more than 5 minutes (or
+    was not a believable time). Offline: the phone time was older than 7 days, more than 5 minutes in the future, missing
+    or not believable; then `checked_in_at` is the server time of the upload, so the real day of the visit is not known.
   - `demo`: the demo account (hidden unless `include_demo=true`).
   - `legacy_import`: imported from the old Firebase system on 01/10/2026; its location and device details are not known.
 - The same provider at the same point within 10 minutes is stored once.
@@ -75,5 +132,15 @@ curl -H "Authorization: Bearer $KEY" \
 
 ## Errors
 
-JSON `{ "error": { "code": "…", "message": "…" } }`. `401 api_key_required | api_key_invalid` (missing, malformed
-or revoked key), `400 invalid_filter` (bad date, id, cursor, …).
+JSON `{ "error": { "code": "…", "message": "…" } }`, sometimes with extra keys such as `field`.
+
+| Status and code | Meaning |
+|---|---|
+| `401 api_key_required` | No key, or the header is not a `Bearer qrk_…` key |
+| `401 api_key_invalid` | The key is unknown or revoked |
+| `400 invalid_filter` | A bad `from`, `to`, `point_id`, `provider_id`, `outcome`, `order` or `limit` (`field` names it) |
+| `400 invalid_cursor` | The `cursor` is not one that this API returned |
+| `400 invalid_input` | The database refused a value as out of range or malformed |
+| `404 not_found` | No such endpoint |
+| `405 method_not_allowed` | The endpoint exists but not for this HTTP method (everything here is `GET`) |
+| `500 server_error` | An unexpected failure on the server. Try again later |
