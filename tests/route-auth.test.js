@@ -20,6 +20,10 @@
 //     compared, text by text and in order, with those of the same request (method and credentials) sent to a test-only
 //     route whose handler is just the guard. The request with no credentials at all must make ZERO statements. The
 //     counter writes a statement down when it is asked for, so nothing in the comparison depends on timing.
+//   - A refused request must not touch its body at all. Every request that has a body (any method but GET and HEAD) is
+//     sent a body that writes down every access (a Proxy over an empty object, see watchedBody), so the test does not
+//     guess which field a handler looks at: a read, `in`, Object.keys, a validation, any write counts. Nothing the guard
+//     does touches it (a test proves that), so the guard has run before any use of the body when the list is empty.
 //   - Each protected route is also called with VALID credentials of the other two roles (a real committee session, a
 //     real provider device token, a real agent key, all made in the throwaway schema), sent the usual way and the wrong
 //     way round (a bearer token in the cookie, a cookie value as a bearer token). It must refuse them with the 401 of
@@ -29,7 +33,8 @@
 //     to be open, an entry in PUBLIC with the reason (a reviewer reads that line).
 //   - The last describe block proves that the checks notice these mistakes (an open route, a route that validates its
 //     input before it checks authorization, a route that queries or writes before it checks authorization, always or
-//     only when a cookie or an Authorization header is present, and a route guarded by another role's check).
+//     only when a cookie or an Authorization header is present, a route that uses its body before it checks
+//     authorization, and a route guarded by another role's check).
 // Credentials are looked up in the database, so this runs against the throwaway schema like the other API tests.
 // Random UUIDs stand in for path parameters, so even a route that was left open would find nothing to change.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -122,13 +127,43 @@ const HOW_TO_FIX =
   'A route that is not on the PUBLIC list of tests/route-auth.test.js must call its guard as the first thing its ' +
   'handler does (before it looks anything up or uses the body): requireAdmin for /admin/ routes, requireApiKey for ' +
   '/agent/v1/ routes and /health/db, requireProvider for the provider routes (see GUARDS). Nothing may run before ' +
-  'that call, for any kind of request (a cookie, an Authorization header, none): no query, no write, no transaction. ' +
+  'that call, for any kind of request (a cookie, an Authorization header, none): no query, no write, no transaction, ' +
+  'and no use of the body (not a read of a field, not `in`, not Object.keys, not a validation). ' +
   'Until the guard has refused, the route may make only the statements that the guard makes on its own, and a request ' +
   'without credentials must not touch the database at all. ' +
   'If the route is meant to answer without credentials, add it to PUBLIC with the reason.'
 
 const urlOf = (r) => '/api' + r.path.replace(/:[A-Za-z_]\w*/g, () => randomUUID())
-const bodyOf = (r) => (r.method !== 'GET' && r.method !== 'HEAD' ? { body: {} } : {})
+const hasBody = (r) => r.method !== 'GET' && r.method !== 'HEAD'
+
+/**
+ * The body of a request that writes down every way a handler can use it. It is an empty object behind a Proxy whose traps
+ * cover everything that can reveal or change its content (a read, `in`, the list of keys, the descriptor of a key, the
+ * prototype, and every write), so the test does not have to guess which field a handler looks at. call() in helpers.js
+ * puts it on `req.body` as it is, and readBody() in server/router.js only checks `typeof` and `Array.isArray` and hands it
+ * on, and neither of those reaches a trap (a test below proves it), so every touch written down is the handler's own.
+ */
+function watchedBody() {
+  const touched = []
+  const note = (what, key) => touched.push(key === undefined ? what : `${what} ${String(key)}`)
+  const body = new Proxy(
+    {},
+    {
+      get: (t, k, rcv) => (note('read', k), Reflect.get(t, k, rcv)),
+      has: (t, k) => (note('check for', k), Reflect.has(t, k)),
+      ownKeys: (t) => (note('list the keys'), Reflect.ownKeys(t)),
+      getOwnPropertyDescriptor: (t, k) => (note('inspect', k), Reflect.getOwnPropertyDescriptor(t, k)),
+      getPrototypeOf: (t) => (note('read the prototype'), Reflect.getPrototypeOf(t)),
+      isExtensible: (t) => (note('ask if it is extensible'), Reflect.isExtensible(t)),
+      set: (t, k, v, rcv) => (note('write', k), Reflect.set(t, k, v, rcv)),
+      defineProperty: (t, k, d) => (note('define', k), Reflect.defineProperty(t, k, d)),
+      deleteProperty: (t, k) => (note('delete', k), Reflect.deleteProperty(t, k)),
+      setPrototypeOf: (t, p) => (note('change the prototype'), Reflect.setPrototypeOf(t, p)),
+      preventExtensions: (t) => (note('seal'), Reflect.preventExtensions(t)),
+    },
+  )
+  return { body, touched }
+}
 
 /**
  * A stand-in for the pool of the throwaway schema that passes everything on to it and writes down every statement:
@@ -167,17 +202,34 @@ const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
 const guardAloneRoute = (guard, method) => ({ method, path: `${GUARD_ALONE}/${guard}` })
 const shown = (text) => (text.length > 70 ? `${text.slice(0, 67)}...` : text)
 
-/** Sends the request through a counting pool, and returns the response and every database statement it made, in order. */
+/**
+ * Sends the request through a counting pool, with a watched body when the method carries one, and returns the response,
+ * every database statement it made (in order) and every way the handler touched the body (empty for a method without one).
+ */
 async function sendRequest(r, creds) {
   const real = getPool()
   const counter = countingPool(real)
+  const watched = hasBody(r) ? watchedBody() : null
   setPool(counter)
   try {
-    const res = await call(r.method, urlOf(r), { ...bodyOf(r), ...creds })
-    return { res, statements: counter.seen }
+    const res = await call(r.method, urlOf(r), { ...(watched ? { body: watched.body } : {}), ...creds })
+    return { res, statements: counter.seen, touched: watched?.touched ?? [] }
   } finally {
     setPool(real)
   }
+}
+
+/**
+ * The sentence that says that the handler used the request body before it refused, or null. A refused request must not
+ * have touched the body at all: the guard runs before any use of it, whatever the field or the way it is looked at.
+ */
+function bodyProblem(r, label, touched) {
+  if (!touched.length) return null
+  const list = touched.slice(0, 3).join(', ') + (touched.length > 3 ? ` and ${touched.length - 3} more` : '')
+  return (
+    `with ${label} the handler of ${keyOf(r)} used the request body before it refused (it did: ${list}). The authorization ` +
+    'call must come first in the handler: nothing may read, check or validate the body before the guard has refused the request'
+  )
 }
 
 /**
@@ -215,7 +267,7 @@ function statementProblem(r, guard, label, actual, expected) {
  * the same method and the very same credentials to the guard-alone route (the answer is not looked at, only the statements).
  */
 async function refusal(r, guard, label, creds, { exact = false, nothing = false } = {}) {
-  const { res, statements } = await sendRequest(r, creds)
+  const { res, statements, touched } = await sendRequest(r, creds)
   const expected = nothing ? [] : (await sendRequest(guardAloneRoute(guard, r.method), creds)).statements
   const code = res.json?.error?.code
   const want = exact ? [GUARDS[guard].missing] : GUARDS[guard].codes
@@ -228,6 +280,8 @@ async function refusal(r, guard, label, creds, { exact = false, nothing = false 
   } else if (res.headers['set-cookie'] !== undefined) problems.push(`with ${label} it set a cookie`)
   const extra = statementProblem(r, guard, label, statements, expected)
   if (extra) problems.push(extra)
+  const used = bodyProblem(r, label, touched)
+  if (used) problems.push(used)
   return problems.length ? problems.join('; ') : null
 }
 
@@ -391,6 +445,73 @@ describe('the guards', () => {
     }
   })
 
+  it('never touches the request body in a guard, whatever it is sent, so a touch before the guard is always the handler\'s', async () => {
+    const own = { committee: asCookie(VALID.committee), provider: asBearer(VALID.provider), agent: asBearer(VALID.agent) }
+    const unknown = {
+      committee: asCookie(token(ADMIN_TOKEN_PREFIX)),
+      provider: asBearer(token(PROVIDER_TOKEN_PREFIX)),
+      agent: asBearer(token(API_KEY_PREFIX)),
+    }
+    for (const guard of Object.keys(GUARDS)) {
+      for (const method of METHODS.filter((m) => hasBody({ method: m }))) {
+        for (const [what, creds] of [['no credentials', {}], ['an unknown token', unknown[guard]], ['a valid credential', own[guard]]]) {
+          const { touched } = await sendRequest(guardAloneRoute(guard, method), creds)
+          expect(touched, `${method} through the ${guard} guard alone with ${what}`).toEqual([])
+        }
+      }
+    }
+  })
+
+  it('hands the watched body to the handler as it is: call() and the router check only its type', async () => {
+    let received
+    route('POST', '/canary/body-received', async ({ body }) => {
+      received = body
+      return { ok: true }
+    })
+    const watched = watchedBody()
+    const res = await call('POST', '/api/canary/body-received', { body: watched.body })
+    expect(res.status).toBe(200)
+    // Compared outside expect(), which is not told about the Proxy: the same object, not a copy and not a serialised one.
+    const same = received === watched.body
+    expect(same).toBe(true)
+    const touchedByTheRouter = [...watched.touched]
+    expect(touchedByTheRouter, 'call(), assertSafeWrite and readBody must not reach a trap').toEqual([])
+    void received.name // and a use by the handler is written down
+    expect(watched.touched).toEqual(['read name'])
+  })
+
+  // Every way to look at the body that a handler could use, each alone: the first thing written down says which.
+  const USES = [
+    ['a read of a field', (b) => b.name, 'read name'],
+    ['a destructured field', (b) => { const { name } = b; return name }, 'read name'],
+    ['the in operator', (b) => 'name' in b, 'check for name'],
+    ['Object.keys', (b) => Object.keys(b), 'list the keys'],
+    ['Object.entries', (b) => Object.entries(b), 'list the keys'],
+    ['a spread', (b) => ({ ...b }), 'list the keys'],
+    ['Object.hasOwn', (b) => Object.hasOwn(b, 'name'), 'inspect name'],
+    ['JSON.stringify', (b) => JSON.stringify(b), 'read toJSON'],
+    ['the prototype', (b) => Object.getPrototypeOf(b), 'read the prototype'],
+    ['instanceof', (b) => b instanceof Object, 'read the prototype'],
+    ['a write of a field', (b) => { b.name = 'x' }, 'write name'],
+    ['a delete of a field', (b) => delete b.name, 'delete name'],
+    ['defineProperty', (b) => Object.defineProperty(b, 'name', { value: 'x' }), 'define name'],
+    ['preventExtensions', (b) => Object.preventExtensions(b), 'seal'],
+  ]
+  for (const [what, use, first] of USES) {
+    it(`writes down ${what} of the body`, () => {
+      const watched = watchedBody()
+      use(watched.body)
+      expect(watched.touched[0]).toBe(first)
+    })
+  }
+
+  it('does not write down what readBody does with the body: typeof, Array.isArray, truthiness and identity', () => {
+    const { body, touched } = watchedBody()
+    expect(body && typeof body === 'object' && !Array.isArray(body)).toBe(true)
+    expect(body === body).toBe(true)
+    expect(touched).toEqual([])
+  })
+
   it('has a real committee session, provider device token and agent key, each accepted by its own routes', async () => {
     const sample = (guard) => PROTECTED.find((r) => r.method === 'GET' && !r.path.includes(':') && guardOf(r.path) === guard)
     const plain = {
@@ -451,7 +572,12 @@ describe('the checks themselves', () => {
     const problems = await authProblems(r, 'committee')
     expect(problems.length).toBe(CREDENTIALS.length)
     expect(problems[0]).toMatch(/answered 400 \(missing_field\), expected 401/)
-    expect((await crossRoleProblems(r, 'committee')).length).toBe(4)
+    // Two checks catch this one, each on its own: the status (a 400 where the guard's 401 belongs), and the body check
+    // (the handler read `name` before the guard). The body check alone catches the same mistake when the answer is a 401.
+    for (const p of problems) expect(p).toMatch(/used the request body before it refused \(it did: read name\)/)
+    const cross = await crossRoleProblems(r, 'committee')
+    expect(cross.length).toBe(4)
+    for (const p of cross) expect(p).toMatch(/answered 400 \(missing_field\)(.|\n)*read name/)
   })
 
   // A handler that does work before its guard and then refuses with the right 401: the status and the code are all
@@ -609,6 +735,85 @@ describe('the checks themselves', () => {
     expect(await crossRoleProblems(r, 'provider')).toEqual([])
     const signedIn = await call('POST', `/api/canary/guard-first-then-work/${randomUUID()}`, { body: {}, ...asBearer(VALID.provider) })
     expect(signedIn.status).toBe(200)
+  })
+
+  // Use of the body before the guard. The body of every request here is empty, so a handler that looks at a field gets
+  // `undefined`, does not act on it, and still refuses with the guard's own 401 and its own statements: only the body
+  // check can show it, and it must show it for every variant, no credentials included, and for every cross-role credential.
+  async function expectCaughtByTheBodyCheckAlone(r, guard, touchedPattern) {
+    const problems = await authProblems(r, guard)
+    expect(problems.length).toBe(CREDENTIALS.length)
+    expect(problems[0]).toMatch(new RegExp(`^with no credentials at all the handler of ${r.method} ${r.path.replace(/\//g, '\\/')} used the request body`))
+    const cross = await crossRoleProblems(r, guard)
+    expect(cross.length).toBe(4)
+    for (const p of [...problems, ...cross]) {
+      expect(p).toMatch(/used the request body before it refused/)
+      expect(p).toMatch(touchedPattern)
+      expect(p).toMatch(/The authorization call must come first/)
+      expect(p).not.toMatch(/answered|database statement/) // a 401 with the guard's code, and only the guard's own statements
+    }
+  }
+
+  it('catch a route that reads a field of the body before it checks authorization, without acting on it', async () => {
+    route('POST', '/canary/body-field-read', async ({ req, body }) => {
+      const name = body.name
+      await requireAdmin(req)
+      return { ok: true }
+    })
+    await expectCaughtByTheBodyCheckAlone({ method: 'POST', path: '/canary/body-field-read' }, 'committee', /\(it did: read name\)/)
+  })
+
+  it('catch a route that reads a field of the body before its guard and acts on it only when it is set', async () => {
+    route('POST', '/canary/body-field-acts', async ({ req, body }) => {
+      if (body.confirm) await query('select 1 as one') // an empty body never gets here, which is how it slipped through
+      await requireProvider(req)
+      return { ok: true }
+    })
+    await expectCaughtByTheBodyCheckAlone({ method: 'POST', path: '/canary/body-field-acts' }, 'provider', /\(it did: read confirm\)/)
+  })
+
+  it('catch a route that checks the body with the in operator before it checks authorization', async () => {
+    route('DELETE', '/canary/body-in', async ({ req, body }) => {
+      const confirmed = 'confirm' in body
+      await requireApiKey(req)
+      return { ok: true }
+    })
+    await expectCaughtByTheBodyCheckAlone({ method: 'DELETE', path: '/canary/body-in' }, 'agent', /\(it did: check for confirm\)/)
+  })
+
+  it('catch a route that lists the keys of the body before it checks authorization', async () => {
+    route('PUT', '/canary/body-keys', async ({ req, body }) => {
+      const keys = Object.keys(body)
+      await requireAdmin(req)
+      return { ok: true }
+    })
+    await expectCaughtByTheBodyCheckAlone({ method: 'PUT', path: '/canary/body-keys' }, 'committee', /\(it did: list the keys\)/)
+  })
+
+  it('catch a route that validates the shape of the body before it checks authorization, and uses the result after', async () => {
+    route('PATCH', '/canary/body-shape-first', async ({ req, body }) => {
+      const valid = typeof body.name === 'string' && body.name.trim() !== ''
+      await requireProvider(req)
+      if (!valid) throw bad('missing_field', 'name is required')
+      return { ok: true }
+    })
+    await expectCaughtByTheBodyCheckAlone({ method: 'PATCH', path: '/canary/body-shape-first' }, 'provider', /\(it did: read name\)/)
+  })
+
+  it('pass a route that reads the body only after its guard let the request in', async () => {
+    route('POST', '/canary/body-after-guard/:id', async ({ req, body }) => {
+      await requireProvider(req)
+      if (body.confirm) await query('select 1 as one')
+      const keys = Object.keys(body)
+      return { ok: true, keys: keys.length, has: 'confirm' in body }
+    })
+    const r = { method: 'POST', path: '/canary/body-after-guard/:id' }
+    expect(await authProblems(r, 'provider')).toEqual([])
+    expect(await crossRoleProblems(r, 'provider')).toEqual([])
+    // With a real device token it gets in, and the body it sends is the one it reads (so the canary is not a dead route).
+    const res = await call('POST', `/api/canary/body-after-guard/${randomUUID()}`, { body: { confirm: true }, ...asBearer(VALID.provider) })
+    expect(res.status).toBe(200)
+    expect(res.json).toEqual({ ok: true, keys: 1, has: true })
   })
 
   it('catch a 401 that does not come from an authorization check', async () => {
