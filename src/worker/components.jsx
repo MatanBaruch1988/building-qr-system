@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useI18n } from '../i18n/index.jsx'
 import { api } from '../api/client.js'
 import { applyUpdate, isUpdateReady, subscribeUpdate } from './update.js'

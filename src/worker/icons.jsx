@@ -1,4 +1,3 @@
-import React from 'react'
 
 // Small inline icons. Decorative: every one is aria-hidden, meaning always comes from nearby text.
 const Svg = ({ size = 24, children, ...rest }) => (

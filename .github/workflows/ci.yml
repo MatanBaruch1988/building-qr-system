@@ -1,5 +1,5 @@
 # Continuous integration. Four checks, and branch protection (.github/rulesets/) requires all of them to merge:
-#   guards                 migrations only move forward, tests are not removed, the PR title, a dependency audit
+#   guards                 migrations only move forward, tests are not removed, the PR title, ESLint, a dependency audit
 #   unit                   Vitest, against a Postgres 18 container (production runs Postgres 18 on Neon)
 #   e2e (android-chrome)   Playwright, Chromium as a Pixel 7
 #   e2e (iphone-webkit)    Playwright, WebKit as an iPhone 14
@@ -37,7 +37,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-      # The guard scripts use Node built-ins only and `npm audit` reads the lock file, so there is no `npm ci` here.
+          cache: npm
 
       # What to compare with: the target branch for a pull request, the previous tip for a push. A branch that is new
       # (all-zero SHA) or a force-pushed one (the old tip is gone) has nothing to compare with: the diff guards skip.
@@ -80,6 +80,12 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: node scripts/check-pr-title.mjs
+
+      # The guard scripts above use Node built-ins only and `npm audit` reads the lock file: only ESLint needs the
+      # dependencies, so the install sits right before it.
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
 
       - name: Audit the production dependencies
         run: npm audit --omit=dev --audit-level=high
