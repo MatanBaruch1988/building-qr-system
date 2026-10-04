@@ -21,7 +21,7 @@ Map of the repository:
 |---|---|
 | `src/worker`, `src/i18n`, `src/pages/WorkerApp.jsx` | The provider app (`/` and `/scan?code=...`): four languages, works offline with a queue on the phone that uploads by itself |
 | `src/admin`, `src/pages/AdminApp.jsx` | The committee app (`/admin`): points, providers, history, agent keys. Google sign-in, only for people on the committee list |
-| `api/index.js`, `server/` | One Vercel function (`vercel.json` routes every `/api/*` to it) that runs `server/`: `routes/` (admin, provider, agent), auth, scan rules (`scanLogic.js`, `scans.js`), Google token check, `db.js`, `migrate.js` |
+| `api/index.js`, `server/` | One Vercel function (`vercel.json` routes every `/api/*` to it) that runs `server/`: `routes/` (admin, provider, agent), the access policy (`access.js`), auth, scan rules (`scanLogic.js`, `scans.js`), Google token check, `db.js`, `migrate.js` |
 | `db/migrations/` | The database schema as numbered SQL files (`NNN_snake_case.sql`). Scans are append-only |
 | `shared/` | Code that runs in the browser and on the server. `shared/datetime.js` writes every date and time a person sees |
 | `tests/` | Vitest: logic, the API against a real Postgres in a throwaway schema, i18n, contrast, typography, `tests/components` |
@@ -168,14 +168,19 @@ The same holds for the API and the offline sync payload (`POST /api/scans/sync`,
 - When a version of a stored shape has to change (the queue key `qr.queue.v1`, the session in the browser), read the old
   one and the new one.
 
-Authorization is checked by each handler, so a new route must either refuse a request without credentials (its handler
-starts with `requireAdmin`, `requireProvider` or `requireApiKey`, before it looks anything up or uses the body) or be
-on the `PUBLIC` list of `tests/route-auth.test.js` with a one-line reason. That test walks every registered route
-(`routeTable()` in `server/router.js`) and fails for a route that answers anything but 401 without credentials, or that
-accepts a valid credential of another role (committee session, provider device token, agent key). The guard that a route
-must use comes from its path (`GUARDS` in that test), so a new group of routes needs a rule there. The one answer that
-comes before the guard is the 400 `invalid_json` for a body that is not valid JSON: Vercel and the dev server parse the
-JSON before any route runs, and that answer looks nothing up and says nothing about the route.
+Authorization is enforced by the router, before any code of the handler runs, so a route is protected by default.
+`server/access.js` holds the policy: the `PUBLIC` list (the routes that answer without credentials, each with a one-line
+reason) and the rules that give every other route the guard of its role by its path (`/admin/` the committee, the
+provider routes the provider, `/agent/v1/` and `/health/db` the agent key). `route()` in `server/router.js` refuses to
+register a route that is not public and that no rule, or more than one rule, owns, so the server cannot start with an
+unguarded route, and a new group of routes needs a rule in that file. For each request the router runs the same-origin
+check, then the guard, and only then reads the body and builds the query and the parameters for the handler, so nothing
+of a refused request reaches a handler. A handler may still call its guard to learn who is signed in: the guards remember
+their answer for the request, so that costs no second lookup. `tests/route-auth.test.js` checks it from the outside on
+every registered route (`routeTable()`): a 401 with the code of the right guard without usable credentials, the valid
+credentials of the other roles refused, only the guard's own database statements, and the body untouched. The one answer
+that can come before the guard is the 400 `invalid_json` of the local dev server, which parses the JSON before any route
+runs; it looks nothing up and says nothing about the route.
 
 ## Git and pull requests
 
@@ -342,9 +347,10 @@ reviewing agent should apply it too.
   `pull_request_target`, or sets `persist-credentials: true`.
 - An endpoint under `/api` without the right authorization check (committee member, service provider or agent key), or
   any write through the agent API (it is read-only).
-- A route added to the `PUBLIC` list of `tests/route-auth.test.js` without a reason that justifies answering without
-  credentials, or a protected route made public (moved to that list, or its authorization call removed or moved after
-  other work).
+- A route added to the `PUBLIC` list of `server/access.js` without a reason that justifies answering without
+  credentials, a protected route made public (moved to that list, or a path rule changed so that it no longer owns the
+  route), a change to `server/router.js` that runs any code of a handler (or reads the body, the query or the parameters
+  for it) before the guard of its route, or a way to register a route that skips the policy.
 - A change that widens who can start `claude.yml` or `claude-review.yml` (another or wider sender check, a fork, a bot,
   `allowed_bots`, `allowed_non_write_users`), that loosens their tool lists (a new or broader `Bash(...)` pattern, `Edit` or
   `Write` in `--allowedTools`, `Bash(git push *)`, `Bash(gh api *)`, a network tool, a shorter `--disallowedTools`, a
