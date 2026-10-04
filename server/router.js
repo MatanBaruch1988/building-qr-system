@@ -1,5 +1,6 @@
 import { Answer, ApiError, assertSafeWrite, bad } from './http.js'
 import { accessFor } from './access.js'
+import { oneLine } from './logSafe.js'
 
 const routes = []
 
@@ -105,16 +106,15 @@ function fromDatabaseError(err) {
  * and cut to a length.
  */
 function describeUnhandled(matched, raw) {
-  const flat = (value, max) => String(value).replace(/\s+/g, ' ').trim().slice(0, max)
-  const parts = ['unhandled API error:', matched ? `${matched.method} /api/${matched.segments.join('/')}` : '(no route)']
+  const parts =['unhandled API error:', matched ? `${matched.method} /api/${matched.segments.join('/')}` : '(no route)']
   if (!(raw instanceof Error)) {
     // Anything can be thrown (a string, an object): its content is not known to be safe, so only its type is logged.
     parts.push(`thrown ${typeof raw}`)
     return parts.join(' ')
   }
-  parts.push(flat(raw.name || 'Error', 60))
-  if (typeof raw.code === 'string' || typeof raw.code === 'number') parts.push(`code=${flat(raw.code, 40)}`)
-  const frames = stackFrames(raw).map((line) => flat(line, 300))
+  parts.push(oneLine(raw.name || 'Error', 60))
+  if (typeof raw.code === 'string' || typeof raw.code === 'number') parts.push(`code=${oneLine(raw.code, 40)}`)
+  const frames = stackFrames(raw).map((line) => oneLine(line, 300))
   if (frames.length) parts.push(`stack: ${frames.join(' | ')}`)
   return parts.join(' ')
 }
