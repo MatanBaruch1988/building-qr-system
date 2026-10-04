@@ -545,6 +545,19 @@ describe('agent API', () => {
     expect(r.json.rules.history).toMatch(/provider can be deleted/)
     expect(r.json.rules.history).not.toMatch(/not deleted/)
   })
+  it('documents exactly the keys that /points and /providers return', async () => {
+    const schema = (await call('GET', '/api/agent/v1/schema', { token: key })).json
+    const points = (await call('GET', '/api/agent/v1/points', { token: key })).json.points
+    const providers = (await call('GET', '/api/agent/v1/providers', { token: key })).json.providers
+    expect(points.length).toBeGreaterThan(0)
+    expect(providers.length).toBeGreaterThan(0)
+    expect(Object.keys(schema.points_fields).sort()).toEqual(Object.keys(points[0]).sort())
+    expect(Object.keys(schema.providers_fields).sort()).toEqual(Object.keys(providers[0]).sort())
+    for (const text of [...Object.values(schema.points_fields), ...Object.values(schema.providers_fields)]) {
+      expect(typeof text).toBe('string')
+      expect(text.length).toBeGreaterThan(0)
+    }
+  })
   it('a revoked key stops working', async () => {
     await call('POST', `/api/admin/api-keys/${keyId}/revoke`, { cookie })
     expect((await call('GET', '/api/agent/v1/scans', { token: key })).json.error.code).toBe('api_key_invalid')

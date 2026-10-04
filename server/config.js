@@ -44,6 +44,17 @@ export const LOGIN_WINDOW_MINUTES = 15
 export const ADMIN_SESSION_DAYS = 14
 export const ADMIN_COOKIE = 'qr_admin'
 
+// Every secret the server mints starts with a prefix that says what it is. The same constants are used where a secret is
+// minted and where it is checked, so the two can never drift apart. A token that does not start with its prefix cannot
+// be one of ours, so it is refused before any database query (see server/auth.js).
+export const PROVIDER_TOKEN_PREFIX = 'qrp_' // a provider's phone (Authorization: Bearer ...)
+export const ADMIN_TOKEN_PREFIX = 'qra_' // a committee session (the HttpOnly cookie)
+export const API_KEY_PREFIX = 'qrk_' // a read-only agent key (Authorization: Bearer ...)
+// A minted token is its 4-character prefix plus 43 characters (32 random bytes, base64url): 47 in all. Anything longer
+// than this is not ours either, so it is refused without being hashed or looked up. It leaves room to grow, but not for
+// a request that wants us to hash something huge.
+export const MAX_TOKEN_LENGTH = 200
+
 export const PASSWORD_MIN_LENGTH = 8
 
 export const DEFAULT_PAGE_SIZE = 100
