@@ -46,6 +46,15 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    // Vite 7 raised its default target to 'baseline-widely-available' (Chrome 107, Firefox 104, Safari 16). The service
+    // providers' phones are not known, so the target stays what Vite 5 built for ('modules': Chrome 87, Firefox 78,
+    // Safari 14). Raising this floor is a separate decision of the owner, not a side effect of a Vite upgrade.
+    target: ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14'],
+  },
+  // Vite 7 strips license comments from the bundle by default (Vite 5 kept them). React, its scheduler and Leaflet ask
+  // for their notice to ship with the code, so keep the comments, as before.
+  esbuild: { legalComments: 'inline' },
   server: {
     port: 3000,
     // `npm run dev:api` serves the same handler as production on this port (API_PORT overrides it; the E2E tests
