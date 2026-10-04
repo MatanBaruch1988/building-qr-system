@@ -32,6 +32,11 @@ route('GET', '/test/unique-violation', async () => {
   })
 })
 
+route('GET', '/test/personal-message', async () => {
+  // Some errors quote an input or a row value in the message itself (here with an internal code, so it reaches the log).
+  throw Object.assign(new Error(`invalid input syntax for type uuid: "${PERSONAL}"`), { code: 'XX001' })
+})
+
 route('GET', '/test/plain-error', async () => {
   throw new TypeError('Cannot read properties of undefined')
 })
@@ -70,7 +75,7 @@ describe('an unhandled error', () => {
     expect(r.text).not.toContain('XX000')
   })
 
-  it('is logged as one line with the route, the error name, the code and the message, and nothing from the row', async () => {
+  it('is logged as one line with the route, the error name and the code, and nothing from the row', async () => {
     const { calls } = await boom('/api/test/postgres-error')
     expect(calls).toHaveLength(1)
     expect(calls[0]).toHaveLength(1) // one string, not the error object
@@ -81,7 +86,8 @@ describe('an unhandled error', () => {
     expect(line).toContain('GET /api/test/postgres-error')
     expect(line).toContain(' error ') // the name of a pg error
     expect(line).toContain('code=XX000')
-    expect(line).toContain('message="internal failure while writing a row"')
+    expect(line).not.toContain('message')
+    expect(line).not.toContain('internal failure while writing a row')
     expect(line).not.toContain(PERSONAL)
     expect(line).not.toContain('example.com')
     expect(line).not.toContain('detail')
@@ -96,7 +102,15 @@ describe('an unhandled error', () => {
     expect(line).toContain('TypeError')
     expect(line).not.toContain('code=') // this error has no code
     expect(line).toMatch(/stack: at .*router-log\.test\.js/)
-    expect(line.split('Cannot read properties of undefined')).toHaveLength(2) // the message appears once
+    expect(line).not.toContain('Cannot read properties of undefined') // the message is never logged
+  })
+
+  it('never logs the message, which can quote a personal value', async () => {
+    const { calls } = await boom('/api/test/personal-message')
+    const line = calls[0][0]
+    expect(line).toContain('code=XX001')
+    expect(line).not.toContain(PERSONAL)
+    expect(line).not.toContain('invalid input syntax')
   })
 
   it('leaves the query string out of the path (it can hold a QR code or a name)', async () => {
@@ -109,11 +123,10 @@ describe('an unhandled error', () => {
   it('cannot be made to forge a second log line, or to fill the log', async () => {
     const forged = (await boom('/api/test/multi-line')).calls[0][0]
     expect(forged).not.toMatch(/[\r\n]/)
-    expect(forged).toContain('message="first line 2026-01-01 00:00:00 FORGED log line third"')
+    expect(forged).not.toContain('FORGED')
     const long = (await boom('/api/test/long-message')).calls[0][0]
     expect(long.length).toBeLessThan(3000)
-    expect(long).toContain('x'.repeat(300))
-    expect(long).not.toContain('x'.repeat(301))
+    expect(long).not.toContain('xxxxxxxxxx')
   })
 
   it('logs only the type of something that is not an Error', async () => {
