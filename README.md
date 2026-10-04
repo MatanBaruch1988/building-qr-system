@@ -19,7 +19,7 @@ A tool for a building committee and the service providers it hires (a cleaning c
 |---|---|
 | Service provider app | `/` and `/scan?code=…`. Hebrew / English / Russian / Arabic, and it works without a signal too (a local queue on the phone that uploads by itself). Code in `src/worker`, `src/i18n`, `src/pages/WorkerApp.jsx` |
 | Committee app | `/admin`. Sign-in **only with a Google account** that is on the committee list. Points, service providers, history, agent keys. Code in `src/admin` |
-| API | One Vercel function (`api/index.js`, to which `vercel.json` routes every `/api/*`) that runs `server/`. Postgres (Neon) through `pg` |
+| API | One Vercel function (`api/index.js`, to which `vercel.json` routes every `/api/*`) that runs `server/`. Postgres (Neon) through `pg`. The router checks who may call a route before any code of its handler runs: a route is protected by default, and only the `PUBLIC` list in `server/access.js` answers without credentials |
 | Database | `db/migrations/*.sql`. Scans are append-only: they can only be voided, and a single row can be deleted only from the committee screen. A point, a service provider, a committee member or an agent key can be deleted, and their history stays with the name that was recorded |
 
 **The location policy ("soft GPS")**: a scan is refused when there is an accurate position that is clearly far from the
@@ -83,7 +83,7 @@ The move was completed on 01/10/2026. What is left of it:
 
 ```
 api/index.js           the Vercel entry point (every /api/* is routed to it in vercel.json)
-server/                the API: routes/, auth, scans (the rules), google (verification), db, migrate
+server/                the API: routes/, access (who may call what, enforced by the router), auth, scans (the rules), google (verification), db, migrate
 shared/                code that runs in both the browser and the server: shared/datetime.js writes every date and time a person sees, always DD/MM/YYYY and HH:MM
 db/migrations/         the DB schema
 scripts/               migration, creating an admin, the development seed, import from Firestore, the CI guards

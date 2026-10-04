@@ -5,6 +5,18 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { call } from './helpers.js'
 import { route } from '../server/router.js'
 
+// The routes below exist only for this file, and they answer without credentials because what is tested is what the router
+// logs, not who may call. The router gives a route to nobody by default (server/access.js: a pattern that is neither PUBLIC
+// nor owned by a rule cannot be registered), and the production PUBLIC list must not learn about test routes. So this file
+// replaces `accessFor` with a version that calls the real one for everything except the `/test/` paths. vi.mock changes the
+// module only inside this test file's own module graph, so the production code has no hook for it: no function, flag or
+// environment variable in server/ can register a route that skips the policy.
+vi.mock('../server/access.js', async (importOriginal) => {
+  const real = await importOriginal()
+  const open = Object.freeze({ public: true })
+  return { ...real, accessFor: (method, pattern) => (pattern.startsWith('/test/') ? open : real.accessFor(method, pattern)) }
+})
+
 const PERSONAL = 'someone@example.com'
 
 route('GET', '/test/postgres-error', async () => {
