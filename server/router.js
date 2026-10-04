@@ -58,6 +58,36 @@ function fromDatabaseError(err) {
   return null
 }
 
+/**
+ * The one log line for an error that no route handled, built only from fields that cannot carry personal data.
+ * Never log the raw error: a Postgres error also carries `detail` (usually the values of the failing row, for example
+ * "Key (email)=(...) already exists."), `where`, `table`, `column` and `parameters`, and the runtime logs are kept and read
+ * by more people than the committee. What is safe: the method, the path without the query string (that can hold a QR
+ * code or a name), the error's `name`, its `code` (for Postgres the SQLSTATE, which says what went wrong), its `message`
+ * (a Postgres message names the constraint or the problem, the values are in `detail`) and the stack frames. The stack
+ * is cut at its first line, which only repeats the message. Everything is flattened to one line and cut to a length,
+ * so an odd message cannot forge extra log lines or fill the log.
+ */
+function describeUnhandled(req, raw) {
+  const flat = (value, max) => String(value).replace(/\s+/g, ' ').trim().slice(0, max)
+  const parts = ['unhandled API error:', flat(req?.method ?? '', 10), flat(String(req?.url ?? '').split(/[?#]/)[0], 200)]
+  if (!(raw instanceof Error)) {
+    // Anything can be thrown (a string, an object): its content is not known to be safe, so only its type is logged.
+    parts.push(`thrown ${typeof raw}`)
+    return parts.join(' ')
+  }
+  parts.push(flat(raw.name || 'Error', 60))
+  if (typeof raw.code === 'string' || typeof raw.code === 'number') parts.push(`code=${flat(raw.code, 40)}`)
+  parts.push(`message=${JSON.stringify(flat(raw.message, 300))}`)
+  const frames = String(raw.stack ?? '')
+    .split('\n')
+    .filter((line) => /^\s*at /.test(line))
+    .slice(0, 10)
+    .map((line) => flat(line, 300))
+  if (frames.length) parts.push(`stack: ${frames.join(' | ')}`)
+  return parts.join(' ')
+}
+
 /** Single entry point for every /api/* request (Vercel function and local dev server share it). */
 export async function handle(req, res) {
   try {
@@ -93,7 +123,7 @@ export async function handle(req, res) {
         json: { error: { code: err.code, message: err.message, ...(err.extra || {}) } },
       })
     }
-    console.error('unhandled API error:', raw)
+    console.error(describeUnhandled(req, raw))
     return send(res, { status: 500, json: { error: { code: 'server_error', message: 'Something went wrong' } } })
   }
 }
