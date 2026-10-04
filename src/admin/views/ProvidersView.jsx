@@ -3,14 +3,7 @@ import { adminApi, errorText, copyText } from '../api.js'
 import { useLoad, SERVICE_TYPES, serviceLabel, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconEdit, IconKey, IconDevice, IconBan, IconCheck, IconCopy, IconRefresh, IconUsers, IconAlert, IconTrash } from '../icons.jsx'
-
-// No look-alike characters (0/o, 1/l/i): the password gets read out or typed from a message.
-const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
-function generatePassword() {
-  const bytes = crypto.getRandomValues(new Uint32Array(8))
-  const s = [...bytes].map((n) => ALPHABET[n % ALPHABET.length]).join('')
-  return `${s.slice(0, 4)}-${s.slice(4)}`
-}
+import { generatePassword } from '../password.js'
 
 function PasswordBox({ value, onChange, id, ...aria }) {
   const toast = useToast()
