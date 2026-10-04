@@ -1,4 +1,5 @@
-import { ApiError, assertSafeWrite, bad } from './http.js'
+import { Answer, ApiError, assertSafeWrite, bad } from './http.js'
+import { accessFor } from './access.js'
 
 const routes = []
 
@@ -6,8 +7,17 @@ function compile(pattern) {
   return pattern.split('/').filter(Boolean)
 }
 
+/**
+ * Registers a route. Its access (public, or the guard of its role) comes from the policy in server/access.js and is fixed
+ * here, so this throws for a route that the policy does not cover and the server cannot start with an unguarded route.
+ * There is deliberately nothing else to pass and no other way to register a route.
+ */
 export function route(method, pattern, handler) {
-  routes.push({ method, pattern, segments: compile(pattern), handler })
+  const access = accessFor(method, pattern)
+  if (access.public !== true && typeof access.check !== 'function') {
+    throw new Error(`${method} ${pattern} has no guard: the access policy (server/access.js) gave it neither public nor a check`)
+  }
+  routes.push({ method, pattern, segments: compile(pattern), handler, access })
 }
 
 /**
@@ -19,18 +29,34 @@ export function routeTable() {
   return Object.freeze(routes.map((r) => Object.freeze({ method: r.method, path: r.pattern })))
 }
 
-function match(segments, path) {
+function decode(part) {
+  try {
+    return decodeURIComponent(part)
+  } catch {
+    throw bad('bad_request', 'Malformed URL')
+  }
+}
+
+/**
+ * Whether the path is this route's: the same number of segments and the same text in every fixed one. It reads no
+ * parameter (nothing is decoded), so finding the route says nothing about the values in the path.
+ */
+function matches(segments, path) {
   const parts = path.split('/').filter(Boolean)
-  if (parts.length !== segments.length) return null
+  if (parts.length !== segments.length) return false
+  return segments.every((segment, i) => segment.startsWith(':') || segment === parts[i])
+}
+
+/**
+ * The values of the `:name` parameters of a path that `matches`, decoded. They are for the handler, so they are built only
+ * after the guard of the route has let the request in; a segment that is not valid percent-encoding is a 400 `bad_request`
+ * from there on. (Without a route for the method, no guard and no handler run: see the end of handle().)
+ */
+function paramsOf(segments, path) {
+  const parts = path.split('/').filter(Boolean)
   const params = {}
   for (let i = 0; i < segments.length; i++) {
-    if (segments[i].startsWith(':')) {
-      try {
-        params[segments[i].slice(1)] = decodeURIComponent(parts[i])
-      } catch {
-        throw bad('bad_request', 'Malformed URL')
-      }
-    } else if (segments[i] !== parts[i]) return null
+    if (segments[i].startsWith(':')) params[segments[i].slice(1)] = decode(parts[i])
   }
   return params
 }
@@ -123,29 +149,37 @@ export async function handle(req, res) {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.replace(/^\/api/, '') || '/'
 
-    let allowed = false
+    const sameShape = [] // the routes of this path, whatever their method
     for (const r of routes) {
-      const params = match(r.segments, path)
-      if (!params) continue
-      allowed = true
+      if (!matches(r.segments, path)) continue
+      sameShape.push(r)
       if (r.method !== req.method) continue
       matched = r
       assertSafeWrite(req)
+      // The guard of the route runs before anything else: no code of the handler, and nothing of the request that is made
+      // for it (the body, the query, the parameters), until the guard has let the request in. A refusal ends the request.
+      const auth = r.access.public === true ? undefined : await r.access.check(req)
       const out = await r.handler({
         req,
         res,
         url,
-        params,
+        params: paramsOf(r.segments, path),
         query: Object.fromEntries(url.searchParams),
         body: readBody(req),
+        auth,
       })
       const shaped = out && (out.json !== undefined || out.text !== undefined || out.status) ? out : { json: out }
       return send(res, shaped)
     }
-    throw allowed
-      ? new ApiError(405, 'method_not_allowed', 'Method not allowed')
-      : new ApiError(404, 'not_found', 'Unknown endpoint')
+    if (sameShape.length) {
+      // The path is a route's but not for this method (405). No guard and no handler run for it, so nothing is exposed by
+      // checking the parameters here: a malformed one is the same 400 as it always was for such a path.
+      for (const r of sameShape) paramsOf(r.segments, path)
+      throw new ApiError(405, 'method_not_allowed', 'Method not allowed')
+    }
+    throw new ApiError(404, 'not_found', 'Unknown endpoint')
   } catch (raw) {
+    if (raw instanceof Answer) return send(res, raw.out)
     const err = raw instanceof ApiError ? raw : fromDatabaseError(raw)
     if (err) {
       return send(res, {

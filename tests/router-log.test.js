@@ -5,6 +5,18 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { call } from './helpers.js'
 import { route } from '../server/router.js'
 
+// The routes below exist only for this file, and they answer without credentials because what is tested is what the router
+// logs, not who may call. The router gives a route to nobody by default (server/access.js: a pattern that is neither PUBLIC
+// nor owned by a rule cannot be registered), and the production PUBLIC list must not learn about test routes. So this file
+// replaces `accessFor` with a version that calls the real one for everything except the `/test/` paths. vi.mock changes the
+// module only inside this test file's own module graph, so the production code has no hook for it: no function, flag or
+// environment variable in server/ can register a route that skips the policy.
+vi.mock('../server/access.js', async (importOriginal) => {
+  const real = await importOriginal()
+  const open = Object.freeze({ public: true })
+  return { ...real, accessFor: (method, pattern) => (pattern.startsWith('/test/') ? open : real.accessFor(method, pattern)) }
+})
+
 const PERSONAL = 'someone@example.com'
 
 route('GET', '/test/postgres-error', async () => {
@@ -78,6 +90,9 @@ afterEach(() => vi.restoreAllMocks())
 /** Calls a route that throws and returns the response and everything that was passed to console.error. */
 async function boom(path) {
   const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+  // Since Vitest 4, spying on a method that is already spied returns the same spy, so a second call in one test would still
+  // hold what the first one logged. Start every call from an empty record.
+  logged.mockClear()
   const r = await call('GET', path)
   return { r, calls: logged.mock.calls }
 }
