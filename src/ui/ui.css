@@ -234,6 +234,9 @@
 .w-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; background: var(--w-surface-2); border: 1px solid var(--w-border); color: var(--w-text); font-weight: var(--w-weight-semibold); }
 .w-who { display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--w-text-2); font-size: 1rem; }
 .w-actions { display: flex; flex-direction: column; gap: 10px; width: 100%; margin-block-start: 12px; }
+/* The screen that replaces a broken one (src/ui/ErrorBoundary.jsx) is this result screen. The one addition: a long message
+   breaks into two even lines instead of leaving one word alone on the second. */
+.w-crash h1 { text-wrap: balance; }
 
 /* ----- working ----- */
 .w-working { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; text-align: center; }

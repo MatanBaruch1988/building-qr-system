@@ -42,6 +42,17 @@ export function pickLang({ stored } = {}) {
   return isLang(stored) ? stored : DEFAULT_LANG
 }
 
+export const LANG_STORAGE_KEY = 'qr.lang'
+
+/** The language saved on this phone (not checked: give it to pickLang), or null when there is none or storage is blocked. */
+export function readStoredLang() {
+  try {
+    return localStorage.getItem(LANG_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
 const LOCALES = { he: 'he-IL', en: 'en-GB', ru: 'ru-RU', ar: 'ar-u-nu-latn' } // Arabic with Western digits
 
 export function makeFormatters(lang) {

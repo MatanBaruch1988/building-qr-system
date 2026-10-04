@@ -4,7 +4,7 @@
 // of what the module exports. No database is needed.
 import { describe, it, expect } from 'vitest'
 import { makeAccessFor, accessFor, PUBLIC } from '../server/access.js'
-import { requireAdmin, requireProvider, requireApiKey } from '../server/auth.js'
+import { requireAdmin, requireProvider, requireApiKey, requireCron } from '../server/auth.js'
 
 const check = async () => ({})
 const rules = [
@@ -53,6 +53,13 @@ describe('the policy of the server', () => {
     // /health/db has a check of its own (it also answers a database that is down with its 503), still the agent role.
     expect(accessFor('GET', '/health/db').guard).toBe('agent')
     expect(typeof accessFor('GET', '/health/db').check).toBe('function')
+  })
+
+  it('gives the scheduled jobs under /cron/ the cron guard, and only the group that its rule owns', () => {
+    expect(accessFor('GET', '/cron/retention')).toEqual({ guard: 'cron', check: requireCron })
+    // Only the group that the rule owns: a look-alike path is owned by no rule, so it cannot be registered.
+    expect(() => accessFor('GET', '/cron')).toThrow(/no access rule/)
+    expect(() => accessFor('GET', '/crons/retention')).toThrow(/no access rule/)
   })
 
   it('is public only where PUBLIC says so, and every entry says why', () => {

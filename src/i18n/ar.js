@@ -68,4 +68,9 @@ export default {
   'notice.dismiss': 'إغلاق',
   'update.available': 'يتوفر إصدار جديد من التطبيق',
   'update.apply': 'تحديث',
+
+  // The screen that replaces a broken one (src/ui/ErrorBoundary.jsx).
+  'crash.title': 'حدث خطأ ما في هذه الشاشة',
+  'crash.retry': 'حاول مرة أخرى',
+  'crash.reload': 'أعد تحميل التطبيق',
 }

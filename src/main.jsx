@@ -3,6 +3,8 @@ import ReactDOM from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import '@fontsource-variable/heebo' // the one typeface (Hebrew + Latin), variable weight, bundled: no external request, works offline
 import App from './App.jsx'
+import ErrorBoundary from './ui/ErrorBoundary.jsx'
+import { crashRootOptions } from './ui/crash.js'
 import { setUpdater, markUpdateReady } from './worker/update.js'
 import './ui/base.css'
 import { initTheme } from './ui/theme.js'
@@ -23,8 +25,12 @@ const updateSW = registerSW({
 })
 setUpdater(updateSW)
 
-ReactDOM.createRoot(document.getElementById('root')).render(
+// The boundary is the outermost component, so it catches a crash in either app, in a screen that failed to download, and in
+// the language provider itself. crashRootOptions makes the console line for a crash carry the error's name and nothing else.
+ReactDOM.createRoot(document.getElementById('root'), crashRootOptions).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>,
 )
