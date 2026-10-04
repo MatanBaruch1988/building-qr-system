@@ -7,7 +7,9 @@ import {
   TIMEZONE,
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
+  FILTER_TEXT_MAX_LENGTH,
 } from './config.js'
+import { FLAG_DEMO } from '../shared/flags.js'
 
 const localFmt = new Intl.DateTimeFormat('sv-SE', {
   timeZone: TIMEZONE,
@@ -116,7 +118,7 @@ export async function recordScan({ provider, deviceId, input, source, now = new 
     if (near.rows.length) return { scan: scanJson(near.rows[0]), duplicate: true }
 
     const geo = evaluateGps({ mode: point.gps_mode, point, gps })
-    const flags = [...geo.flags, ...clock.flags, ...(provider.is_demo ? ['demo'] : [])]
+    const flags = [...geo.flags, ...clock.flags, ...(provider.is_demo ? [FLAG_DEMO] : [])]
 
     const inserted = await c.query(
       `insert into scans
@@ -185,9 +187,20 @@ function parseBound(name, value) {
 }
 
 /**
+ * Every query parameter that listScans reads: the one list of the filters of GET /api/agent/v1/scans (which also reads
+ * `format`, in server/routes/agent.js). tests/agent-docs.test.js proves that listScans reads exactly these (a read of
+ * another name, or a name here that is not read, fails) and that server/schemaDoc.js and docs/agent-api.md name
+ * exactly these. A new filter goes here, in listScans, and in both documents.
+ */
+export const SCAN_FILTERS = Object.freeze([
+  'from', 'to', 'point_id', 'provider_id', 'service_type', 'flag', 'outcome',
+  'include_voided', 'include_demo', 'order', 'limit', 'cursor',
+])
+
+/**
  * Shared by the admin history screen and the agent API.
- * Filters: from/to (YYYY-MM-DD = Israel calendar day, or a full ISO time), point_id, provider_id,
- * service_type, flag, outcome (accepted | rejected | all), include_voided, order, limit, cursor.
+ * Filters: see SCAN_FILTERS. from/to are YYYY-MM-DD (Israel calendar day) or a full ISO time, outcome is
+ * accepted | rejected | all.
  */
 export async function listScans(q = {}) {
   const where = []
@@ -215,8 +228,8 @@ export async function listScans(q = {}) {
       add(`${col} = ?`, q[name].toLowerCase())
     }
   }
-  if (q.service_type) add('service_type = ?', String(q.service_type).slice(0, 60))
-  if (q.flag) add('? = any(flags)', String(q.flag).slice(0, 60))
+  if (q.service_type) add('service_type = ?', String(q.service_type).slice(0, FILTER_TEXT_MAX_LENGTH))
+  if (q.flag) add('? = any(flags)', String(q.flag).slice(0, FILTER_TEXT_MAX_LENGTH))
 
   const outcome = q.outcome || 'accepted'
   if (outcome === 'accepted') where.push(`outcome = 'accepted'`)
@@ -226,7 +239,7 @@ export async function listScans(q = {}) {
   const truthy = (v) => v === true || v === 'true' || v === '1'
   if (!truthy(q.include_voided)) where.push('voided_at is null')
   // Demo-account scans are test data: hidden unless asked for.
-  if (!truthy(q.include_demo)) where.push(`not ('demo' = any(flags))`)
+  if (!truthy(q.include_demo)) add('not (? = any(flags))', FLAG_DEMO)
 
   const order = q.order === 'asc' ? 'asc' : 'desc'
   if (q.order && !['asc', 'desc'].includes(q.order)) throw bad('invalid_filter', 'order must be asc or desc', { field: 'order' })

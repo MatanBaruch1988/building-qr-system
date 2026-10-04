@@ -1,7 +1,19 @@
 // Self-describing contract for the agent API. Served at GET /api/agent/v1/schema and mirrored in docs/agent-api.md.
 import {
   TIMEZONE, SCAN_COOLDOWN_MINUTES, GPS_MAX_USABLE_ACCURACY_M, GPS_PIN_TOLERANCE_M, GPS_MAX_ACCURACY_CREDIT_M,
+  GPS_STALE_AFTER_S, CLOCK_MAX_AGE_MS, CLOCK_MAX_FUTURE_MS, CLOCK_SKEW_FLAG_MS,
+  DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH,
 } from './config.js'
+import {
+  FLAG_LOCATION_UNVERIFIED, FLAG_LOCATION_OUTSIDE_RADIUS, FLAG_LOCATION_STALE, FLAG_OFFLINE_SYNC, FLAG_CLOCK_SKEW,
+  FLAG_DEMO, FLAG_LEGACY_IMPORT,
+} from '../shared/flags.js'
+
+// Every number that the prose below quotes from config.js is written from the constant (never typed), so a change of
+// a limit changes this document with it. docs/agent-api.md cannot do that: tests/agent-docs.test.js compares its numbers
+// with config.js instead.
+const minutes = (ms) => ms / 60_000
+const days = (ms) => ms / 86_400_000
 
 export const schemaDoc = {
   version: 'v1',
@@ -17,10 +29,11 @@ export const schemaDoc = {
   endpoints: {
     'GET /api/agent/v1/scans':
       'Query: from, to (YYYY-MM-DD = a calendar day in Israel time, or an ISO date-time that carries Z or an offset), ' +
-      'point_id, provider_id (uuids), service_type, flag (text, cut to 60 characters), ' +
+      `point_id, provider_id (uuids), service_type, flag (both text, cut to ${FILTER_TEXT_MAX_LENGTH} characters), ` +
       'outcome (accepted|rejected|all, default accepted), ' +
       'include_voided, include_demo (only true or 1 mean yes; anything else means no), order (asc|desc, default desc), ' +
-      'limit (1-500, default 100; a larger number is cut to 500, not refused), cursor (from next_cursor), ' +
+      `limit (1-${MAX_PAGE_SIZE}, default ${DEFAULT_PAGE_SIZE}; a larger number is cut to ${MAX_PAGE_SIZE}, not refused), ` +
+      'cursor (from next_cursor), ' +
       'format (csv for CSV; any other value, or none, returns JSON). ' +
       'Returns { scans, count, next_cursor }: count is the number of scans in this page (not the total), ' +
       'next_cursor is null on the last page. With format=csv the body is CSV and next_cursor is in the X-Next-Cursor header ' +
@@ -35,13 +48,17 @@ export const schemaDoc = {
   auth: 'Header "Authorization: Bearer qrk_…". Keys are created and revoked by the committee in the admin screen.',
   errors: {
     shape: '{ "error": { "code": "...", "message": "..." } }, sometimes with extra keys such as field.',
-    api_key_required: '401: no key, or the header is not a Bearer qrk_ key.',
+    api_key_required:
+      '401: no key, or the header is not a Bearer qrk_ key. The key is checked first: a request to an endpoint that exists but has no valid key gets a 401, ' +
+      'whatever else is wrong with it, and every 400 below is answered only to a valid key.',
     api_key_invalid: '401: the key is unknown or revoked.',
     invalid_filter: '400: a bad from, to, point_id, provider_id, outcome, order or limit. The field key names it.',
     invalid_cursor: '400: the cursor is not one that this API returned.',
     invalid_input: '400: the database refused a value as out of range or malformed.',
-    not_found: '404: no such endpoint.',
-    method_not_allowed: '405: the endpoint exists but not for this HTTP method (everything here is GET).',
+    invalid_json:
+      '400: the request carries a body that is not valid JSON. These endpoints read no body: send none. Only a valid key gets this answer; without one it is a 401.',
+    not_found: '404: no such endpoint (answered without a key).',
+    method_not_allowed: '405: the endpoint exists but not for this HTTP method (everything here is GET). Answered without a key.',
     server_error: '500: an unexpected failure on the server. Try again later.',
   },
   points_fields: {
@@ -87,18 +104,22 @@ export const schemaDoc = {
     rejected_far: 'A usable GPS fix placed the phone clearly away from the point.',
     rejected_no_location: "The point requires GPS ('required') and no usable fix was sent.",
   },
+  sources: {
+    online: 'The phone had a signal and the scan arrived at once.',
+    offline_sync: 'The phone had no signal and uploaded the scan later.',
+  },
   flags: {
-    location_unverified: 'No usable GPS fix (typical indoors or in basements). Not evidence of fraud on its own.',
-    location_outside_radius: 'A usable fix was a bit outside the point radius but not far enough to reject.',
-    location_stale: "The position was remembered by the phone (older than a minute), so it shows where the person was a little earlier. 'optional' points allow for the walking since.",
-    offline_sync: 'Scanned without signal and uploaded later; checked_in_at is the phone time.',
-    clock_skew:
-      'The phone clock cannot be trusted. Online scan: the phone time differed from the server time by more than 5 minutes, ' +
+    [FLAG_LOCATION_UNVERIFIED]: 'No usable GPS fix (typical indoors or in basements). Not evidence of fraud on its own.',
+    [FLAG_LOCATION_OUTSIDE_RADIUS]: 'A usable fix was a bit outside the point radius but not far enough to reject.',
+    [FLAG_LOCATION_STALE]: `The position was remembered by the phone (older than ${GPS_STALE_AFTER_S} seconds), so it shows where the person was a little earlier. 'optional' points allow for the walking since.`,
+    [FLAG_OFFLINE_SYNC]: 'Scanned without signal and uploaded later; checked_in_at is the phone time.',
+    [FLAG_CLOCK_SKEW]:
+      `The phone clock cannot be trusted. Online scan: the phone time differed from the server time by more than ${minutes(CLOCK_SKEW_FLAG_MS)} minutes, ` +
       'or was not a believable time; checked_in_at is the server time. Offline scan (offline_sync): the phone time was older than ' +
-      '7 days, more than 5 minutes in the future, missing or not believable; checked_in_at is then the server time of the upload, ' +
+      `${days(CLOCK_MAX_AGE_MS)} days, more than ${minutes(CLOCK_MAX_FUTURE_MS)} minutes in the future, missing or not believable; checked_in_at is then the server time of the upload, ` +
       'so the real day of the visit is not known.',
-    demo: 'Scanned with the demo account (test data). Hidden by default; use include_demo=true to see it.',
-    legacy_import: 'Imported from the old Firebase system on 01/10/2026; its location and device details are not known.',
+    [FLAG_DEMO]: 'Scanned with the demo account (test data). Hidden by default; use include_demo=true to see it.',
+    [FLAG_LEGACY_IMPORT]: 'Imported from the old Firebase system on 01/10/2026; its location and device details are not known.',
   },
   rules: {
     duplicate_window_minutes: SCAN_COOLDOWN_MINUTES,
