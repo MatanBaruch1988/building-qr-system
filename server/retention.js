@@ -39,7 +39,8 @@ export async function runRetention() {
       [RETENTION_DEVICE_LABEL_DAYS],
     )
     const counts = { sessions: sessions.rowCount, loginAttempts: attempts.rowCount, deviceLabels: labels.rowCount }
-    // Counts only: no id, no name, no label. The audit log is read by the committee and by whoever holds the database.
+    // Counts only: no id, no name, no label. The audit log has no end date, and nothing in the app reads it today (no screen,
+    // no agent API, no export): only whoever holds the database or a backup can.
     await c.query(
       `insert into audit_log (actor_type, actor_id, action, entity, entity_id, detail)
        values ('system', null, 'retention.run', null, null, $1)`,

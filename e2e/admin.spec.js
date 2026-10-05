@@ -64,6 +64,20 @@ test('every committee screen fits the width, on a phone and on a computer', asyn
   }
 })
 
+// The tab is kept in the address. A link to a tab that is opened in the moment after signing in (the shell has just appeared)
+// used to be lost: the app read the address once and attached its listener a little later, so it stayed on the first tab.
+// Nothing here waits for the title or for anything else of the shell, the way a person who pastes a link does not. A fresh
+// sign-in for every tab, because the moment is only there after one. (tests/components/admin-tab.test.jsx makes the moment
+// happen on purpose; this checks it in a real browser.)
+test('a tab that is opened by its address right after signing in opens', async ({ page }) => {
+  for (const [tab, title] of TABS) {
+    await page.context().clearCookies() // signed out again: the next sign-in is a first one
+    await adminSignIn(page) // returns as soon as the first screen is there
+    await page.goto(`/admin#${tab}`)
+    await expect(page.getByRole('heading', { level: 1, name: title }), tab).toBeVisible()
+  }
+})
+
 test('the history date fields do not overlap and stay inside the filter bar, on a phone and on a computer', async ({ page }) => {
   await adminSignIn(page)
   for (const size of [null, COMPUTER]) {

@@ -306,9 +306,27 @@ of the three is enough: the loop narrows all of them, and the strongest cut is t
   (`*.dump` is in `.gitignore`; `npm run db:backup` prints no connection string and its issue says nothing but "failed").
 - Personal data is kept only as long as `docs/privacy.md` says (owner decision of 04/10/2026). A daily job
   (`GET /api/cron/retention`, called by Vercel Cron with `CRON_SECRET`) deletes committee sessions 30 days after they
-  expired or were revoked and login attempts after 1 day, and clears the label of a phone 90 days after it was revoked;
-  the periods are constants in `server/config.js`. It never deletes or changes a scan, the audit log, an active session or
-  an active phone: their retention waits for a legal decision. The job logs counts only.
+  expired or were revoked and login attempts after 1 day, and clears the label of a phone 90 days after it was revoked,
+  together with the status that the phone reported. It also deletes the error records (`app_errors`) 90 days after
+  their last event and the days of the alert throttle (`alert_pings`) after 30 days (owner decision of 05/10/2026). The
+  periods are constants in `server/config.js`. It never deletes or changes a scan, a refused upload (`scan_refusals`),
+  the audit log, an active session or an active phone: their retention waits for a legal decision. The job logs counts
+  only.
+- Every change that the committee makes writes its `audit_log` row in the same transaction as the change: `audit(c, ...)`
+  in `server/audit.js` with the client of that transaction, never the module's `query()`, so there is no change without
+  its row and no row without its change. `audit_log` and `scan_refusals` are append-only: triggers refuse an update, a
+  delete and a truncate. The one way to delete from them is a setting local to a transaction (`app.audit_retention`,
+  `app.refusal_retention`) that nothing sets today; code that sets it needs a legal decision and a rules change first.
+- Errors are recorded in our own database (ADR 0007), only through `server/errorLog.js`, with the fields that
+  `describeUnhandled` logs and no more: the route as it is written in the code (or a fixed screen key of an app), the
+  method, the status, the error's code or name, the app build, counts, times and the Vercel request id. Never a message,
+  the path or the query that was asked for, a body, a token, a name, a QR code or a position. A request that its guard
+  refused, and a 4xx of a public route, record nothing. The two apps report their errors only through
+  `POST /api/my/errors` (provider) and `POST /api/admin/client-errors` (committee), with the fields that
+  `shared/contract.js` allows; there is no public endpoint that writes.
+- `HEALTH_HEARTBEAT_URL` (the server's check on healthchecks.io, ADR 0007) is a secret: the server reads it when it uses
+  it and never logs it, returns it or writes it to a file. What the server sends there holds counts, route patterns,
+  codes, and dates written by `shared/datetime.js`, never personal data.
 - Tests and fixtures use only fake data (the dev seed). Never real names, phone numbers, e-mails, coordinates or
   attendance rows. Put nothing personal in a log or an error message.
 - An unhandled API error is logged only through `describeUnhandled` in `server/router.js` (method, the route as it is
@@ -333,6 +351,7 @@ The decisions behind these rules are in `docs/adr/` (an Architecture Decision Re
 - [0004 Revoke a leaked key, do not rewrite history](docs/adr/0004-revoke-a-leaked-key-do-not-rewrite-history.md)
 - [0005 Local tooling never touches production](docs/adr/0005-local-tooling-never-touches-production.md)
 - [0006 The agent loop runs in GitHub Actions](docs/adr/0006-the-agent-loop-in-github-actions.md)
+- [0007 Observability in our own Postgres](docs/adr/0007-observability-in-our-own-postgres.md)
 
 ## Code Review Rules
 
@@ -372,9 +391,17 @@ reviewing agent should apply it too.
   `pull_request_target`, or sets `persist-credentials: true`.
 - An endpoint under `/api` without the right authorization check (committee member, service provider, agent key, or the
   cron secret for `/cron/`), or any write through the agent API (it is read-only).
-- A change to the retention job that deletes or changes anything beyond what the Safety rules list (a scan, the audit log,
-  an active session or phone), changes a retention period without the owner's decision, or answers a `/cron/` request
-  without checking `CRON_SECRET` (a missing secret must refuse, never allow).
+- A change to the retention job that deletes or changes anything beyond what the Safety rules list (a scan, a refused
+  upload, the audit log, an active session or phone), changes a retention period without the owner's decision, or answers
+  a `/cron/` request without checking `CRON_SECRET` (a missing secret must refuse, never allow).
+- A committee write whose `audit_log` row is not written in the transaction of the change, an update or a delete of
+  `audit_log` or `scan_refusals`, a migration that creates `scan_refusals` (or makes `audit_log` append-only) without
+  the triggers that refuse an update, a delete and a truncate, or a change that weakens those triggers or sets their
+  delete setting.
+- An error record written anywhere but through `server/errorLog.js`, an error record, a heartbeat body or an error report
+  of an app that holds anything beyond the fields that the Safety rules allow, a record written for a request that its
+  guard refused or for a 4xx of a public route, `HEALTH_HEARTBEAT_URL` in a log, an answer or a file, or a new public
+  endpoint that writes.
 - A route added to the `PUBLIC` list of `server/access.js` without a reason that justifies answering without
   credentials, a protected route made public (moved to that list, or a path rule changed so that it no longer owns the
   route), a change to `server/router.js` that runs any code of a handler (or reads the body, the query or the parameters
