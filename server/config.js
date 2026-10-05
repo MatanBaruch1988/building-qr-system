@@ -65,6 +65,11 @@ export const RETENTION_SESSION_DAYS = 30
 export const RETENTION_LOGIN_ATTEMPT_DAYS = 1
 export const RETENTION_DEVICE_LABEL_DAYS = 90
 
+// The audit log keeps the name of the committee member as it was at the time of the action (audit_log.actor_name, a
+// snapshot, so the entry stays readable after the member is deleted). The column refuses more than this many characters
+// (db/migrations/007_audit_log_append_only.sql), so the code cuts a longer name instead of failing the action.
+export const AUDIT_ACTOR_NAME_MAX_LENGTH = 200
+
 // Every secret the server mints starts with a prefix that says what it is. The same constants are used where a secret is
 // minted and where it is checked, so the two can never drift apart. A token that does not start with its prefix cannot
 // be one of ours, so it is refused before any database query (see server/auth.js).
