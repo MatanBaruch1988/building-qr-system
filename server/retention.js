@@ -6,7 +6,7 @@
 //   - deletes the login attempts older than RETENTION_LOGIN_ATTEMPT_DAYS,
 //   - clears the label of a phone (provider_devices.label, the browser string it sent at sign-in) when the phone was revoked
 //     more than RETENTION_DEVICE_LABEL_DAYS ago, and in the same statement everything that the phone reported about itself
-//     (migration 010: the build, the time of the report, how many visits waited and since when, the two running totals, the time
+//     (migration 009: the build, the time of the report, how many visits waited and since when, the two running totals, the time
 //     of the last upload). The row stays (a scan keeps the id of the phone that made it, and the owner's decision is to clear the
 //     text, not the row): only what can identify a person's device, or says what it did, goes. A phone with no label that still
 //     holds a status is cleared too, so a status never outlives the period because the label happened to be empty.

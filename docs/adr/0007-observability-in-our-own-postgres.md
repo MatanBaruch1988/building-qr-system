@@ -1,6 +1,6 @@
 # 0007: Observability lives in our own Postgres
 
-Status: Accepted, not implemented yet
+Status: Accepted, implemented
 
 Date: 05/10/2026
 

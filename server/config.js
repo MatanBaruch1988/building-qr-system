@@ -62,7 +62,7 @@ export const ADMIN_COOKIE = 'qr_admin'
 //  - a committee session is deleted this many days after it expired or was revoked,
 //  - a login attempt is deleted after this many days (guardLogin in server/auth.js prunes the same way when someone signs in),
 //  - the label of a phone (the browser string it sent at sign-in) is cleared this many days after the phone was revoked, together
-//    with what the phone reported about itself (migration 010: its build, how many visits waited and since when, the totals),
+//    with what the phone reported about itself (migration 009: its build, how many visits waited and since when, the totals),
 //  - a recorded error (app_errors: safe fields only, no personal data) is deleted this many days after its last event,
 //  - a day of the alert throttle (alert_pings: one date, no personal data) is deleted this many days after that day.
 export const RETENTION_SESSION_DAYS = 30

@@ -4,7 +4,7 @@
 //   - it deletes the committee sessions that expired or were revoked more than 30 days ago, the login attempts older than
 //     1 day, the recorded errors (app_errors) whose last event is older than 90 days, and the days of the alert throttle
 //     (alert_pings, migration 011) that are more than 30 days back, and it clears the label of a phone
-//     that was revoked more than 90 days ago TOGETHER WITH everything that the phone reported about itself (migration 010:
+//     that was revoked more than 90 days ago TOGETHER WITH everything that the phone reported about itself (migration 009:
 //     build, time of the report, what waited and since when, the two totals, the last upload), also when the label of that
 //     phone is empty;
 //   - it never touches a scan, the audit log, an active session or phone (label and reported status alike), or anything that is
@@ -72,7 +72,7 @@ const PHONES_CLEARED = [...LABELS_CLEARED, ...STATUS_ONLY_CLEARED]
 // A phone that is revoked and due but holds nothing to clear (no label, no status) is not touched and not counted.
 const NOTHING_TO_CLEAR = 'revoked-91d-nothing'
 const COUNTS = { sessions: 3, loginAttempts: 2, deviceLabels: 3, appErrors: 2, alertPings: 2 }
-// What a phone reports about itself (migration 010): every phone of the fixture but NOTHING_TO_CLEAR has this, and a cleared phone has CLEARED.
+// What a phone reports about itself (migration 009): every phone of the fixture but NOTHING_TO_CLEAR has this, and a cleared phone has CLEARED.
 const REPORTED = { app_build: 'abcdef1', waiting_count: 12, not_accepted_total: 4, overflow_total: 2 }
 const CLEARED = { label: '', app_build: null, status_at: null, waiting_count: null, oldest_waiting_at: null, last_sync_at: null, not_accepted_total: 0, overflow_total: 0 }
 
@@ -158,7 +158,7 @@ async function seed() {
        from jsonb_to_recordset($2::jsonb) as t(id uuid, token text, label text, revoked int)`,
     [providerId, JSON.stringify(fixtures)],
   )
-  // What the phones reported about themselves (migration 010), on every phone but the one that has nothing to clear: the active one,
+  // What the phones reported about themselves (migration 009), on every phone but the one that has nothing to clear: the active one,
   // the one revoked 89 days ago and the ones that are due all hold a status, and the status is the same on each, so that a
   // difference after a run can only come from the job.
   await q(

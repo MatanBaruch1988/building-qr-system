@@ -25,8 +25,8 @@
 //       many report another build than the server's own (information only).
 //   (g) sign-ins: new provider phones (provider_devices.created_at) and committee sign-ins (audit_log `session.sign_in`), each
 //       against the median per day of the SUMMARY_SIGNIN_BASELINE_DAYS days before the period. A spike (a count of at least
-//       SUMMARY_SIGNIN_SPIKE_MIN that is more than SUMMARY_SIGNIN_SPIKE_FACTOR times the median) is a failure. Nothing writes
-//       `session.sign_in` yet (the audit screen reserves the group for a later change), so the committee's count is 0 until then.
+//       SUMMARY_SIGNIN_SPIKE_MIN that is more than SUMMARY_SIGNIN_SPIKE_FACTOR times the median) is a failure. The committee's
+//       sign-ins are the `session.sign_in` rows that the sign-in routes write (server/routes/admin.js).
 //
 // What the body may hold (AGENTS.md, Safety): numbers, route patterns as they are written in the code, codes, screen keys,
 // builds and times written by shared/datetime.js. Never a name, an e-mail, a QR code, the label of a phone, the name of a provider

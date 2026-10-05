@@ -144,7 +144,7 @@ route('POST', '/scans/sync', async ({ req, body }) => {
       }
     }
   }
-  // The items are recorded: stamp the end of the upload on the phone's row, for the committee's view of the phone (migration 010).
+  // The items are recorded: stamp the end of the upload on the phone's row, for the committee's view of the phone (migration 009).
   // The server does it from the sync itself, so it is right for a phone of any version, and it is the LAST thing the request does.
   // A failure is swallowed and logged by touchLastSync, and the answer below is exactly what it always was.
   await touchLastSync(deviceId)
