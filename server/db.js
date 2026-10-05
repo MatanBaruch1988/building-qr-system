@@ -8,6 +8,36 @@ pg.types.setTypeParser(1082, (value) => value)
 let pool
 
 /**
+ * The `code` of the error that `takeClient` throws when the pool could not hand out a client in time. `pg` throws a plain
+ * `Error` for that, with a message and no code, so the label of a failure (failureLabel in server/logSafe.js) would be just
+ * "Error". With a code of our own the log line and the record of the 500 say what happened, and server/errorLog.js knows that
+ * the database cannot be reached (it attempts no insert).
+ */
+export const DB_CONNECT_TIMEOUT = 'db_connect_timeout'
+
+// The message of the error of the pool (pg-pool) that waited for a client for `connectionTimeoutMillis`. It is recognised here
+// to decide and nothing else: it is never logged and never kept.
+const POOL_CONNECT_TIMEOUT_MESSAGE = 'timeout exceeded when trying to connect'
+
+/**
+ * `p.connect()`, except that the timeout of the pool (the one `pg` error that has no code) is thrown again as an error of ours:
+ * a sentence of ours as its message and `code: 'db_connect_timeout'`, with no `cause` and nothing of the original, so nothing the
+ * driver wrote can reach a log or a record. Any other failure is thrown as it is.
+ * @param {*} p
+ * @returns {Promise<import('pg').PoolClient>}
+ */
+async function takeClient(p) {
+  try {
+    return await p.connect()
+  } catch (err) {
+    if (err instanceof Error && err.message === POOL_CONNECT_TIMEOUT_MESSAGE) {
+      throw Object.assign(new Error('The pool gave no database connection in time'), { code: DB_CONNECT_TIMEOUT })
+    }
+    throw err
+  }
+}
+
+/**
  * How long the database lets one statement run, and a transaction sit idle, before it ends it (server/config.js).
  *
  * The app cannot ask for these as a setting of the connection, because Neon does not pass one on. Measured against the
@@ -89,7 +119,7 @@ async function inTransaction(p, fn, { limits, signal } = {}) {
   // Built first, so that a bad limit is refused before a connection is taken. A pool without limits (a test double) opens a
   // plain transaction whatever is asked.
   const begin = beginSql(p.limits ? { ...p.limits, ...limits } : undefined)
-  const client = await p.connect()
+  const client = await takeClient(p)
   if (signal?.aborted) {
     client.release()
     signal.throwIfAborted()

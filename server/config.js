@@ -85,6 +85,12 @@ export const ERROR_RECORD_LOCK_TIMEOUT_MS = 500
 // A burst of failures while the database is slow therefore cannot make error records compete with healthy work for the pool.
 export const ERROR_RECORD_POOL_RESERVE = 1
 
+// A request that its guard let in and that took longer than this many milliseconds, from the start of the router to the moment
+// its answer was ready, is recorded as a `slow` event in app_errors (server/router.js), with its route, method and status. It
+// leaves room for a cold Neon start (a compute that is waking from sleep takes a few seconds, see poolConfig in server/db.js),
+// so an ordinary first request after a quiet night is not slow, and a request that takes longer than that is.
+export const SLOW_REQUEST_MS = 5000
+
 // The first server error of a building day pings healthchecks.io (server/alerts.js, server/heartbeat.js, docs/adr/0007). The
 // host (Vercel Hobby) has no way to finish work after the answer, and the function may freeze once it has answered, so the
 // answer of the request waits for the ping, and every wait is bounded. It happens at most once a day, or once an hour (per
