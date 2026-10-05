@@ -9,9 +9,8 @@ import { requireAdmin, isAdminToken, guardLogin } from '../auth.js'
 import { verifyGoogleCredential } from '../google.js'
 import { readAddress, saveAddress, parseAddress } from '../building.js'
 import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvRow } from '../scans.js'
-import {
-  ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, API_KEY_PREFIX, AUDIT_ACTOR_NAME_MAX_LENGTH,
-} from '../config.js'
+import { audit, adminActor } from '../audit.js'
+import { ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, API_KEY_PREFIX } from '../config.js'
 import {
   GPS_MODES, GPS_MODE_REQUIRED, DEFAULT_GPS_MODE,
   POINT_RADIUS_MIN_M, POINT_RADIUS_MAX_M,
@@ -30,15 +29,10 @@ function baseUrl(req) {
   return `${proto}://${req.headers['x-forwarded-host'] || req.headers.host}`
 }
 
-/** The name an audit row keeps for a committee member: the name, or the e-mail when there is none. Cut by characters, not UTF-16 units. */
-const actorName = (admin) => Array.from(admin.name || admin.email || '').slice(0, AUDIT_ACTOR_NAME_MAX_LENGTH).join('') || null
-
-async function audit(admin, action, entity, entityId, detail) {
-  await query(
-    'insert into audit_log (actor_type, actor_id, actor_name, action, entity, entity_id, detail) values ($1,$2,$3,$4,$5,$6,$7)',
-    ['admin', admin.id, actorName(admin), action, entity, entityId ?? null, detail ? JSON.stringify(detail) : null],
-  )
-}
+// Every change that the committee makes is one transaction that holds the change and its audit row (`tx`, then `audit(c,
+// adminActor(admin), ...)` with the client of that transaction: server/audit.js), so there is no change without its row and no
+// row without its change. Slow or outside work (a password hash, a call to Google, the validation of the body) comes before
+// the transaction, and the reads that only build the answer (POINT_SELECT, PROVIDER_SELECT) come after the commit.
 
 /** Builds "col = $n, …" from an object of already-validated fields. */
 function setClause(fields, startAt = 1) {
@@ -62,14 +56,24 @@ function password(value, required = false) {
 /** Local development only: lets a developer (or an automated UI check) get an admin session without Google. */
 const devLoginAllowed = () => !process.env.VERCEL && process.env.DEV_ADMIN_LOGIN === '1'
 
-async function startAdminSession(req, res, adminRow) {
+/**
+ * Opens a session for a committee member with the client `c` of the transaction that looked the member up: the session row and
+ * the time of the last sign-in are written in that transaction. Returns the token that goes into the cookie (only its hash is
+ * stored).
+ */
+async function createAdminSession(c, adminId) {
   const token = randomToken(ADMIN_TOKEN_PREFIX)
-  await query(
+  await c.query(
     `insert into admin_sessions (admin_id, token_hash, expires_at)
      values ($1, $2, now() + ($3 || ' days')::interval)`,
-    [adminRow.id, sha256(token), String(ADMIN_SESSION_DAYS)],
+    [adminId, sha256(token), String(ADMIN_SESSION_DAYS)],
   )
-  await query('update admins set last_login_at = now() where id = $1', [adminRow.id])
+  await c.query('update admins set last_login_at = now() where id = $1', [adminId])
+  return token
+}
+
+/** The answer of a sign-in, once its transaction has committed: the session cookie, and who signed in. */
+function adminSessionAnswer(req, res, token, adminRow) {
   res.setHeader('Set-Cookie', cookieHeader(ADMIN_COOKIE, token, {
     maxAgeSeconds: ADMIN_SESSION_DAYS * 86400,
     secure: isSecure(req),
@@ -90,25 +94,39 @@ route('POST', '/admin/google', async ({ req, res, body }) => {
   const attempt = await guardLogin({ scope: 'admin', account: ip, ip })
 
   const google = await verifyGoogleCredential(credential)
-  const { rows } = await query('select * from admins where email = $1 and is_active', [google.email])
-  if (!rows.length) throw forbidden('not_an_admin', 'This Google account is not on the committee list')
-  await query(
-    `update admins set google_sub = coalesce(google_sub, $2), name = case when name = '' then $3 else name end where id = $1`,
-    [rows[0].id, google.sub, google.name],
-  )
-  if (rows[0].google_sub && rows[0].google_sub !== google.sub) {
-    throw forbidden('google_account_mismatch', 'This e-mail is linked to a different Google account')
-  }
+  // One transaction, and the order matters: the member's row is locked first (so that disabling or deleting them at the same
+  // moment is seen or waited for), the Google account is compared with the one that is linked BEFORE anything is written (a
+  // refused sign-in writes nothing to `admins`, not even the name), and only then the link, the name, the session and the
+  // time of the sign-in are written, all or none. The throttle (guardLogin above) has a transaction of its own on purpose: a
+  // refused attempt must stay counted.
+  const { row, token } = await tx(async (c) => {
+    const found = await c.query('select * from admins where email = $1 and is_active for update', [google.email])
+    if (!found.rows.length) throw forbidden('not_an_admin', 'This Google account is not on the committee list')
+    const member = found.rows[0]
+    if (member.google_sub && member.google_sub !== google.sub) {
+      throw forbidden('google_account_mismatch', 'This e-mail is linked to a different Google account')
+    }
+    await c.query(
+      `update admins set google_sub = coalesce(google_sub, $2), name = case when name = '' then $3 else name end where id = $1`,
+      [member.id, google.sub, google.name],
+    )
+    return { row: member, token: await createAdminSession(c, member.id) }
+  })
+  // The counters of this account are given back only after the sign-in is complete. (It runs on the pool: it must not run inside
+  // the transaction above, where it would take a second connection from a pool of three.)
   await attempt.success()
-  return startAdminSession(req, res, { ...rows[0], name: rows[0].name || google.name })
+  return adminSessionAnswer(req, res, token, { ...row, name: row.name || google.name })
 })
 
 route('POST', '/admin/dev-login', async ({ req, res, body }) => {
   if (!devLoginAllowed()) throw new ApiError(404, 'not_found', 'Unknown endpoint')
   const email = str(body.email, { field: 'email', max: EMAIL_MAX_LENGTH, required: true }).toLowerCase()
-  const { rows } = await query('select * from admins where email = $1 and is_active', [email])
-  if (!rows.length) throw forbidden('not_an_admin', 'Not an admin')
-  return startAdminSession(req, res, rows[0])
+  const { row, token } = await tx(async (c) => {
+    const found = await c.query('select * from admins where email = $1 and is_active for update', [email])
+    if (!found.rows.length) throw forbidden('not_an_admin', 'Not an admin')
+    return { row: found.rows[0], token: await createAdminSession(c, found.rows[0].id) }
+  })
+  return adminSessionAnswer(req, res, token, row)
 })
 
 route('POST', '/admin/logout', async ({ req, res }) => {
@@ -139,13 +157,16 @@ route('POST', '/admin/admins', async ({ req, body }) => {
   const email = str(body.email, { field: 'email', max: EMAIL_MAX_LENGTH, required: true }).toLowerCase()
   if (!EMAIL_RE.test(email)) throw bad('invalid_field', 'Not a valid e-mail address', { field: 'email' })
   const name = str(body.name, { field: 'name', max: NAME_MAX_LENGTH }) ?? ''
-  const { rows } = await query(
-    `insert into admins (email, name) values ($1, $2)
-     on conflict (email) do update set is_active = true returning id, email, name, is_active`,
-    [email, name],
-  )
-  await audit(admin, 'admin.add', 'admin', rows[0].id, { email })
-  return { status: 201, json: { admin: rows[0] } }
+  const added = await tx(async (c) => {
+    const { rows } = await c.query(
+      `insert into admins (email, name) values ($1, $2)
+       on conflict (email) do update set is_active = true returning id, email, name, is_active`,
+      [email, name],
+    )
+    await audit(c, adminActor(admin), 'admin.add', { entity: 'admin', entityId: rows[0].id, detail: { email } })
+    return rows[0]
+  })
+  return { status: 201, json: { admin: added } }
 })
 
 route('PATCH', '/admin/admins/:id', async ({ req, params, body }) => {
@@ -153,11 +174,18 @@ route('PATCH', '/admin/admins/:id', async ({ req, params, body }) => {
   const id = requireUuid(params.id)
   if (typeof body.is_active !== 'boolean') throw bad('invalid_field', 'is_active must be true or false', { field: 'is_active' })
   if (id === admin.id && !body.is_active) throw conflict('cannot_deactivate_self', 'You cannot remove your own access')
-  const r = await query('update admins set is_active = $2 where id = $1 returning id, email, name, is_active', [id, body.is_active])
-  if (!r.rows.length) throw notFound('admin_not_found', 'Admin not found')
-  if (!body.is_active) await query('update admin_sessions set revoked_at = now() where admin_id = $1 and revoked_at is null', [id])
-  await audit(admin, body.is_active ? 'admin.enable' : 'admin.disable', 'admin', id)
-  return { admin: r.rows[0] }
+  // The switch and the sign-out of that member's sessions are one transaction: the member's row is locked first (so a sign-in
+  // at the same moment waits for the answer instead of slipping a new session in), and a failure of any step leaves the member as
+  // they were, never switched off with sessions that still work.
+  const member = await tx(async (c) => {
+    const found = await c.query('select id from admins where id = $1 for update', [id])
+    if (!found.rows.length) throw notFound('admin_not_found', 'Admin not found')
+    const r = await c.query('update admins set is_active = $2 where id = $1 returning id, email, name, is_active', [id, body.is_active])
+    if (!body.is_active) await c.query('update admin_sessions set revoked_at = now() where admin_id = $1 and revoked_at is null', [id])
+    await audit(c, adminActor(admin), body.is_active ? 'admin.enable' : 'admin.disable', { entity: 'admin', entityId: id })
+    return r.rows[0]
+  })
+  return { admin: member }
 })
 
 // Deleting a committee member takes them off the list for good (their sessions go with them). You cannot delete
@@ -167,9 +195,15 @@ route('DELETE', '/admin/admins/:id', async ({ req, params }) => {
   const { admin } = await requireAdmin(req)
   const id = requireUuid(params.id)
   if (id === admin.id) throw conflict('cannot_delete_self', 'You cannot delete yourself')
-  const r = await query('delete from admins where id = $1 returning email, name', [id])
-  if (!r.rows.length) throw notFound('admin_not_found', 'Admin not found')
-  await audit(admin, 'admin.delete', 'admin', id, { email: r.rows[0].email, name: r.rows[0].name })
+  await tx(async (c) => {
+    const r = await c.query('delete from admins where id = $1 returning email, name', [id])
+    if (!r.rows.length) throw notFound('admin_not_found', 'Admin not found')
+    await audit(c, adminActor(admin), 'admin.delete', {
+      entity: 'admin',
+      entityId: id,
+      detail: { email: r.rows[0].email, name: r.rows[0].name },
+    })
+  })
   return { ok: true }
 })
 
@@ -184,8 +218,10 @@ route('GET', '/admin/building', async ({ req }) => {
 route('PUT', '/admin/building', async ({ req, body }) => {
   const { admin } = await requireAdmin(req)
   const address = parseAddress(body.address)
-  await saveAddress(admin.id, address)
-  await audit(admin, 'building.update', 'building', null, { address })
+  await tx(async (c) => {
+    await saveAddress(c, admin.id, address)
+    await audit(c, adminActor(admin), 'building.update', { entity: 'building', detail: { address } })
+  })
   return { building: { address } }
 })
 
@@ -285,9 +321,9 @@ route('POST', '/admin/points', async ({ req, body }) => {
       vals,
     )
     await replaceAssignments(c, rows[0].id, ids)
+    await audit(c, adminActor(admin), 'point.create', { entity: 'point', entityId: rows[0].id, detail: fields })
     return rows[0].id
   })
-  await audit(admin, 'point.create', 'point', created, fields)
   const { rows } = await query(`${POINT_SELECT} where p.id = $1 group by p.id`, [created])
   return { status: 201, json: { point: pointJson(rows[0], req) } }
 })
@@ -307,8 +343,8 @@ route('PATCH', '/admin/points/:id', async ({ req, params, body }) => {
       await c.query(`update points set ${sql} where id = $${values.length + 1}`, [...values, id])
     }
     if (ids !== undefined) await replaceAssignments(c, id, ids)
+    await audit(c, adminActor(admin), 'point.update', { entity: 'point', entityId: id, detail: { ...fields, provider_ids: ids } })
   })
-  await audit(admin, 'point.update', 'point', id, { ...fields, provider_ids: ids })
   const { rows } = await query(`${POINT_SELECT} where p.id = $1 group by p.id`, [id])
   return { point: pointJson(rows[0], req) }
 })
@@ -323,9 +359,10 @@ route('DELETE', '/admin/points/:id', async ({ req, params }) => {
     if (!found.rows.length) throw notFound('point_not_found', 'Point not found')
     const kept = await c.query('select count(*)::int as n from scans where point_id = $1', [id])
     await c.query('delete from points where id = $1', [id]) // the assignments follow (on delete cascade)
-    return { name: found.rows[0].name, scans_kept: kept.rows[0].n }
+    const result = { name: found.rows[0].name, scans_kept: kept.rows[0].n }
+    await audit(c, adminActor(admin), 'point.delete', { entity: 'point', entityId: id, detail: result })
+    return result
   })
-  await audit(admin, 'point.delete', 'point', id, gone)
   return { ok: true, scans_kept: gone.scans_kept }
 })
 
@@ -333,9 +370,11 @@ route('DELETE', '/admin/points/:id', async ({ req, params }) => {
 route('POST', '/admin/points/:id/regenerate-qr', async ({ req, params }) => {
   const { admin } = await requireAdmin(req)
   const id = requireUuid(params.id)
-  const r = await query('update points set qr_token = $2, updated_at = now() where id = $1 returning id', [id, newQrToken()])
-  if (!r.rows.length) throw notFound('point_not_found', 'Point not found')
-  await audit(admin, 'point.regenerate_qr', 'point', id)
+  await tx(async (c) => {
+    const r = await c.query('update points set qr_token = $2, updated_at = now() where id = $1 returning id', [id, newQrToken()])
+    if (!r.rows.length) throw notFound('point_not_found', 'Point not found')
+    await audit(c, adminActor(admin), 'point.regenerate_qr', { entity: 'point', entityId: id })
+  })
   const { rows } = await query(`${POINT_SELECT} where p.id = $1 group by p.id`, [id])
   return { point: pointJson(rows[0], req) }
 })
@@ -377,12 +416,15 @@ route('POST', '/admin/providers', async ({ req, body }) => {
   const pw = password(body.password)
   if (pw) fields.password_hash = await hashPassword(pw)
   const cols = Object.keys(fields)
-  const { rows } = await query(
-    `insert into providers (${cols.join(', ')}) values (${cols.map((_, i) => `$${i + 1}`).join(', ')}) returning id`,
-    Object.values(fields),
-  )
-  await audit(admin, 'provider.create', 'provider', rows[0].id, { company: fields.company })
-  const out = await query(`${PROVIDER_SELECT} where p.id = $1`, [rows[0].id])
+  const created = await tx(async (c) => {
+    const { rows } = await c.query(
+      `insert into providers (${cols.join(', ')}) values (${cols.map((_, i) => `$${i + 1}`).join(', ')}) returning id`,
+      Object.values(fields),
+    )
+    await audit(c, adminActor(admin), 'provider.create', { entity: 'provider', entityId: rows[0].id, detail: { company: fields.company } })
+    return rows[0].id
+  })
+  const out = await query(`${PROVIDER_SELECT} where p.id = $1`, [created])
   return { status: 201, json: { provider: out.rows[0] } }
 })
 
@@ -394,6 +436,7 @@ route('PATCH', '/admin/providers/:id', async ({ req, params, body }) => {
   if (pw) fields.password_hash = await hashPassword(pw)
   if (!Object.keys(fields).length) throw bad('nothing_to_update', 'No fields to update')
 
+  const { password_hash, ...loggable } = fields
   await tx(async (c) => {
     const { sql, values } = setClause({ ...fields, updated_at: new Date() })
     const r = await c.query(`update providers set ${sql} where id = $${values.length + 1} returning id`, [...values, id])
@@ -402,9 +445,12 @@ route('PATCH', '/admin/providers/:id', async ({ req, params, body }) => {
     if (fields.is_active === false || pw) {
       await c.query('update provider_devices set revoked_at = now() where provider_id = $1 and revoked_at is null', [id])
     }
+    await audit(c, adminActor(admin), 'provider.update', {
+      entity: 'provider',
+      entityId: id,
+      detail: { ...loggable, password_changed: !!password_hash },
+    })
   })
-  const { password_hash, ...loggable } = fields
-  await audit(admin, 'provider.update', 'provider', id, { ...loggable, password_changed: !!password_hash })
   const out = await query(`${PROVIDER_SELECT} where p.id = $1`, [id])
   return { provider: out.rows[0] }
 })
@@ -420,21 +466,29 @@ route('DELETE', '/admin/providers/:id', async ({ req, params }) => {
     if (!found.rows.length) throw notFound('provider_not_found', 'Provider not found')
     const kept = await c.query('select count(*)::int as n from scans where provider_id = $1', [id])
     await c.query('delete from providers where id = $1', [id])
-    return { company: found.rows[0].company, contact_name: found.rows[0].contact_name, scans_kept: kept.rows[0].n }
+    const result = { company: found.rows[0].company, contact_name: found.rows[0].contact_name, scans_kept: kept.rows[0].n }
+    await audit(c, adminActor(admin), 'provider.delete', { entity: 'provider', entityId: id, detail: result })
+    return result
   })
-  await audit(admin, 'provider.delete', 'provider', id, gone)
   return { ok: true, scans_kept: gone.scans_kept }
 })
 
 route('POST', '/admin/providers/:id/revoke-devices', async ({ req, params }) => {
   const { admin } = await requireAdmin(req)
   const id = requireUuid(params.id)
-  const r = await query(
-    'update provider_devices set revoked_at = now() where provider_id = $1 and revoked_at is null',
-    [id],
-  )
-  await audit(admin, 'provider.revoke_devices', 'provider', id, { devices: r.rowCount })
-  return { revoked: r.rowCount }
+  const revoked = await tx(async (c) => {
+    // The provider's row is locked against being deleted until this commits, so the entry never names a provider that is gone.
+    // A provider that does not exist has no phones to revoke: the answer is the same (0) and nothing is recorded.
+    const found = await c.query('select 1 from providers where id = $1 for key share', [id])
+    if (!found.rows.length) return 0
+    const r = await c.query(
+      'update provider_devices set revoked_at = now() where provider_id = $1 and revoked_at is null',
+      [id],
+    )
+    await audit(c, adminActor(admin), 'provider.revoke_devices', { entity: 'provider', entityId: id, detail: { devices: r.rowCount } })
+    return r.rowCount
+  })
+  return { revoked }
 })
 
 // ---------- scans ----------
@@ -462,18 +516,21 @@ async function setVoid(req, params, body, voided) {
   const { admin } = await requireAdmin(req)
   const id = requireUuid(params.id)
   const reason = voided ? str(body.reason, { field: 'reason', max: VOID_REASON_MAX_LENGTH }) || null : null
-  const r = await query(
-    `update scans set voided_at = $2, void_reason = $3
-      where id = $1 and (voided_at is null) = $4 returning *`,
-    [id, voided ? new Date() : null, reason, voided],
-  )
-  if (!r.rows.length) {
-    const exists = await query('select 1 from scans where id = $1', [id])
-    if (!exists.rows.length) throw notFound('scan_not_found', 'Scan not found')
-    throw conflict(voided ? 'already_voided' : 'not_voided', voided ? 'Scan is already voided' : 'Scan is not voided')
-  }
-  await audit(admin, voided ? 'scan.void' : 'scan.unvoid', 'scan', id, { reason })
-  return { scan: scanJson(r.rows[0]) }
+  const row = await tx(async (c) => {
+    const r = await c.query(
+      `update scans set voided_at = $2, void_reason = $3
+        where id = $1 and (voided_at is null) = $4 returning *`,
+      [id, voided ? new Date() : null, reason, voided],
+    )
+    if (!r.rows.length) {
+      const exists = await c.query('select 1 from scans where id = $1', [id])
+      if (!exists.rows.length) throw notFound('scan_not_found', 'Scan not found')
+      throw conflict(voided ? 'already_voided' : 'not_voided', voided ? 'Scan is already voided' : 'Scan is not voided')
+    }
+    await audit(c, adminActor(admin), voided ? 'scan.void' : 'scan.unvoid', { entity: 'scan', entityId: id, detail: { reason } })
+    return r.rows[0]
+  })
+  return { scan: scanJson(row) }
 }
 // Deleting a scan row for good (test data, a row that should never have been there). The database refuses every other
 // delete: this route tells it, for the length of its own transaction, that this one is intended. Who deleted what goes
@@ -481,18 +538,22 @@ async function setVoid(req, params, body, voided) {
 route('DELETE', '/admin/scans/:id', async ({ req, params }) => {
   const { admin } = await requireAdmin(req)
   const id = requireUuid(params.id)
-  const row = await tx(async (c) => {
+  await tx(async (c) => {
     await c.query("select set_config('app.allow_scan_delete', 'on', true)")
     const r = await c.query('delete from scans where id = $1 returning *', [id])
     if (!r.rows.length) throw notFound('scan_not_found', 'Scan not found')
-    return r.rows[0]
-  })
-  await audit(admin, 'scan.delete', 'scan', id, {
-    point_name: row.point_name,
-    provider_name: row.provider_name,
-    checked_in_at: new Date(row.checked_in_at).toISOString(),
-    outcome: row.outcome,
-    voided: row.voided_at != null,
+    const gone = r.rows[0]
+    await audit(c, adminActor(admin), 'scan.delete', {
+      entity: 'scan',
+      entityId: id,
+      detail: {
+        point_name: gone.point_name,
+        provider_name: gone.provider_name,
+        checked_in_at: new Date(gone.checked_in_at).toISOString(),
+        outcome: gone.outcome,
+        voided: gone.voided_at != null,
+      },
+    })
   })
   return { ok: true }
 })
@@ -515,21 +576,26 @@ route('POST', '/admin/api-keys', async ({ req, body }) => {
   const { admin } = await requireAdmin(req)
   const name = str(body.name, { field: 'name', max: KEY_NAME_MAX_LENGTH, required: true })
   const key = randomToken(API_KEY_PREFIX)
-  const { rows } = await query(
-    'insert into api_keys (name, key_prefix, key_hash) values ($1, $2, $3) returning id, name, key_prefix, created_at',
-    [name, key.slice(0, 8), sha256(key)],
-  )
-  await audit(admin, 'api_key.create', 'api_key', rows[0].id, { name })
-  return { status: 201, json: { api_key: rows[0], key } }
+  const created = await tx(async (c) => {
+    const { rows } = await c.query(
+      'insert into api_keys (name, key_prefix, key_hash) values ($1, $2, $3) returning id, name, key_prefix, created_at',
+      [name, key.slice(0, 8), sha256(key)],
+    )
+    await audit(c, adminActor(admin), 'api_key.create', { entity: 'api_key', entityId: rows[0].id, detail: { name } })
+    return rows[0]
+  })
+  return { status: 201, json: { api_key: created, key } }
 })
 
 // Revoking keeps the row (it shows as revoked, with when it was last used); the key stops working at once.
 route('POST', '/admin/api-keys/:id/revoke', async ({ req, params }) => {
   const { admin } = await requireAdmin(req)
   const id = requireUuid(params.id)
-  const r = await query('update api_keys set revoked_at = now() where id = $1 and revoked_at is null returning id', [id])
-  if (!r.rows.length) throw notFound('api_key_not_found', 'API key not found')
-  await audit(admin, 'api_key.revoke', 'api_key', id)
+  await tx(async (c) => {
+    const r = await c.query('update api_keys set revoked_at = now() where id = $1 and revoked_at is null returning id', [id])
+    if (!r.rows.length) throw notFound('api_key_not_found', 'API key not found')
+    await audit(c, adminActor(admin), 'api_key.revoke', { entity: 'api_key', entityId: id })
+  })
   return { ok: true }
 })
 
@@ -538,8 +604,14 @@ route('POST', '/admin/api-keys/:id/revoke', async ({ req, params }) => {
 route('DELETE', '/admin/api-keys/:id', async ({ req, params }) => {
   const { admin } = await requireAdmin(req)
   const id = requireUuid(params.id)
-  const r = await query('delete from api_keys where id = $1 returning name, key_prefix, revoked_at', [id])
-  if (!r.rows.length) throw notFound('api_key_not_found', 'API key not found')
-  await audit(admin, 'api_key.delete', 'api_key', id, { name: r.rows[0].name, key_prefix: r.rows[0].key_prefix, was_revoked: r.rows[0].revoked_at != null })
+  await tx(async (c) => {
+    const r = await c.query('delete from api_keys where id = $1 returning name, key_prefix, revoked_at', [id])
+    if (!r.rows.length) throw notFound('api_key_not_found', 'API key not found')
+    await audit(c, adminActor(admin), 'api_key.delete', {
+      entity: 'api_key',
+      entityId: id,
+      detail: { name: r.rows[0].name, key_prefix: r.rows[0].key_prefix, was_revoked: r.rows[0].revoked_at != null },
+    })
+  })
   return { ok: true }
 })
