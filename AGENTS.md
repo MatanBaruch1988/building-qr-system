@@ -395,10 +395,12 @@ reviewing agent should apply it too.
   upload, the audit log, an active session or phone), changes a retention period without the owner's decision, or answers
   a `/cron/` request without checking `CRON_SECRET` (a missing secret must refuse, never allow).
 - A committee write whose `audit_log` row is not written in the transaction of the change, an update or a delete of
-  `audit_log` or `scan_refusals`, or a change that weakens their triggers or sets their delete setting.
+  `audit_log` or `scan_refusals`, a migration that creates `scan_refusals` (or makes `audit_log` append-only) without
+  the triggers that refuse an update, a delete and a truncate, or a change that weakens those triggers or sets their
+  delete setting.
 - An error record, a heartbeat body or an error report of an app that holds anything beyond the fields that the Safety
-  rules allow, a record written for a request that its guard refused, `HEALTH_HEARTBEAT_URL` in a log, an answer or a
-  file, or a new public endpoint that writes.
+  rules allow, a record written for a request that its guard refused or for a 4xx of a public route,
+  `HEALTH_HEARTBEAT_URL` in a log, an answer or a file, or a new public endpoint that writes.
 - A route added to the `PUBLIC` list of `server/access.js` without a reason that justifies answering without
   credentials, a protected route made public (moved to that list, or a path rule changed so that it no longer owns the
   route), a change to `server/router.js` that runs any code of a handler (or reads the body, the query or the parameters
