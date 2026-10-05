@@ -36,7 +36,8 @@ entry hold counts only (a number for each kind of row, nothing else).
   file, and through the committee's own API (`GET /api/admin/scan-refusals`). The active phones of a provider, and what
   each reported about itself, can be read through the committee's own API too (`GET /api/admin/providers/:id/devices`: the
   version of the app, what waits on the phone and since when, the totals, the times of the last report and of the last
-  upload); the committee app has no screen for them yet.
+  upload). The Providers tab of the committee app shows the same, read only: a line on the card of a provider whose phones
+  have visits waiting, and a dialog that lists each phone (the card's button ("מכשירים")).
   A member can also read the audit log, every entry with its details (who did what and when, and the names, e-mail
   addresses and reasons that the details hold, and the current name of the point, provider, member or agent key that an
   entry is about, taken from the committee's own lists), through the committee's own endpoint (`GET /api/admin/audit`,
