@@ -379,6 +379,52 @@ describe('what is never shown', () => {
     expect(row.textContent).not.toContain(token)
   })
 
+  it('does not show a current name (`entity_name`) that looks like a token, and uses the name that the detail kept instead', async () => {
+    const token = 'qrk_AbCdEfGhIjKlMnOpQrStUvWx'
+    const row = await rowFor({ action: 'api_key.delete', entity: 'api_key', entity_name: token, detail: { name: 'מפתח ישן', key_prefix: 'qrk_ab12', was_revoked: true } }, "מחיקת מפתח אייג'נט")
+    expect(document.body.textContent).not.toContain(token)
+    expect(within(row).getByText('מפתח ישן')).toBeTruthy() // the kept name takes its place
+    expect(row.querySelector('.a-audit__subject').textContent).toBe('מפתח ישן')
+  })
+
+  it('shows no subject at all when the current name looks like a token and the detail kept none', async () => {
+    const hash = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
+    for (const name of [hash, '3f2a9c1e-7b4d-4e8a-9c3f-1a2b3c4d5e6f', 'qra_0123456789abcdefghijklmn']) {
+      const row = await rowFor({ action: 'api_key.revoke', entity: 'api_key', entity_name: name, detail: null }, "השבתת מפתח אייג'נט")
+      expect(document.body.textContent, name).not.toContain(name)
+      expect(row.querySelector('.a-audit__subject'), name).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('does not show the name of the actor when it looks like a token: "חבר ועד" stands in, with the mark of a deleted member', async () => {
+    const token = 'qrk_AbCdEfGhIjKlMnOpQrStUvWx'
+    const row = await rowFor({ actor_name: token }, 'עדכון נקודה')
+    expect(document.body.textContent).not.toContain(token)
+    expect(row.querySelector('.a-audit__who').textContent).toBe('על ידי חבר ועד')
+    cleanup()
+    const gone = await rowFor({ actor_name: token, actor_deleted: true }, 'עדכון נקודה')
+    expect(document.body.textContent).not.toContain(token)
+    expect(gone.querySelector('.a-audit__who').textContent).toBe('על ידי חבר ועד (נמחק)')
+  })
+
+  it('still shows an ordinary name, however long: a name is cut, not taken for a secret', async () => {
+    const long = 'Cleaning Company of the Northern Tower and the Parking Levels'
+    const row = await rowFor({ entity_name: long, actor_name: 'someone.with.a.long.address@example.test' }, 'עדכון נקודה')
+    expect(within(row).getByText(long)).toBeTruthy()
+    expect(within(row).getByText('someone.with.a.long.address@example.test')).toBeTruthy()
+  })
+
+  it('describeEntry filters every string that the API sends: both names, whatever the entity', () => {
+    const token = 'qrk_AbCdEfGhIjKlMnOpQrStUvWx'
+    for (const entity of ['point', 'provider', 'admin', 'api_key', 'scan', 'widget', null]) {
+      const described = describeEntry(entry({ entity, entity_name: token, actor_name: token, detail: { name: 'נשמר' } }))
+      expect(JSON.stringify(described), String(entity)).not.toContain(token)
+      expect(described.actor.name).toBe('חבר ועד')
+      expect(described.subject).toBe(entity === 'scan' || entity === 'provider' ? null : 'נשמר') // a visit is named by its point and a provider by its company, not by `name`
+    }
+  })
+
   it('draws text as text: a detail that holds markup shows the characters, and makes no element', async () => {
     const row = await rowFor({ action: 'scan.void', entity: 'scan', entity_id: 's1', entity_name: null, detail: { reason: '<img src=x onerror=alert(1)><b>bold</b>' } }, 'ביטול נוכחות')
     expect(row.querySelector('img')).toBeNull()

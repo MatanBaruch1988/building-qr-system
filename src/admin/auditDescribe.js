@@ -4,7 +4,9 @@
 //
 // The detail is read by KNOWN KEYS only (the table at the top of server/audit.js): a key that is not named here is never shown,
 // whatever it holds, so a field that a later change adds to a detail stays out of the screen until it is added here. A string
-// that looks like a key, a hash or a token is left out too (looksSecret), even under a key that is known. Details written
+// that looks like a key, a hash or a token is left out too (looksSecret), even under a key that is known, and so is a name that
+// the API itself sends (`entity_name`, `actor_name`): a current name that looks like one falls back to the name that the
+// detail kept, or to nothing. Details written
 // before #78 have the older shapes (the fields that were sent, flat, instead of `changes`; `provider_ids` as a list instead
 // of `{ added, removed }`), so both are read.
 import { formatDay, formatDateTime } from '../../shared/datetime.js'
@@ -82,7 +84,7 @@ const plain = (value) => (typeof value === 'string' && value.trim() && !looksSec
 
 /**
  * What the entry is about, from the name that the detail kept, for a thing that is gone (a delete): the API's own
- * `entity_name` is the current name and wins. A provider is "Company – Contact", as the committee's history names one.
+ * `entity_name` is the current name and wins (when it is fit to show). A provider is "Company – Contact", as the committee's history names one.
  * @param {string | null | undefined} entity
  * @param {Record<string, unknown>} detail
  */
@@ -195,13 +197,15 @@ export function describeEntry(entry) {
     : { text: action && !looksSecret(action) ? clip(action) : UNKNOWN_ACTION, known: false }
 
   // A sign-in is about the member who signs in, who is the actor already, so it names no subject.
-  const named = typeof entry.entity_name === 'string' && entry.entity_name.trim() ? clip(entry.entity_name.trim()) : null
+  // Every string that comes from the API goes through the same filter as the detail (`plain`): a current name that looks like a key,
+  // a hash or a token (a key's name that was filled with the key itself) is not shown, and the name that the detail kept, or none, is.
+  const named = plain(entry.entity_name)
   const subject = action.startsWith('session.') ? null : named ?? keptName(entry.entity, detail)
 
   let actor
   if (entry.actor_type === 'system') actor = { name: SYSTEM_ACTOR, deleted: false }
   else if (entry.actor_type === 'script') actor = { name: SCRIPT_ACTOR, deleted: false }
-  else actor = { name: typeof entry.actor_name === 'string' && entry.actor_name.trim() ? entry.actor_name.trim() : UNKNOWN_ACTOR, deleted: entry.actor_deleted === true }
+  else actor = { name: plain(entry.actor_name) ?? UNKNOWN_ACTOR, deleted: entry.actor_deleted === true }
 
   return { phrase, subject, actor, lines: detailLines(entry, detail, subject) }
 }
