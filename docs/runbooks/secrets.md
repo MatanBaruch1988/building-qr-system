@@ -13,7 +13,7 @@ one. Dates are DD/MM/YYYY.
 | `CLAUDE_CODE_OAUTH_TOKEN` | GitHub Actions secret of the repository. Read by `claude.yml` and `claude-review.yml` only | The owner (a repository admin sets the secret; the token comes from the owner's Claude subscription) | About one year after it is made | Not created yet: write the date here when you create it |
 | `SMOKE_AGENT_KEY` | GitHub Actions secret of the repository. Read by `smoke.yml` only | The owner, or a committee member who can open the Agent tab of `/admin` (to make and revoke the key) | Never, until it is revoked | Write the date when the secret is set |
 | The production database credentials (`DATABASE_URL`, `DATABASE_URL_UNPOOLED`) | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local` | The owner, in Vercel | Never, until rotated | 03/10/2026 |
-| `CRON_SECRET` | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local`, never in the Preview or Development environments | The owner, in Vercel (a long random value, see below) | Never, until rotated | Not set yet: write the date here when you set it |
+| `CRON_SECRET` | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local`, never in the Preview or Development environments | The owner, in Vercel (a long random value, see below) | Never, until rotated | 05/10/2026 (set by the owner in Vercel, Production) |
 | `MIGRATION_GITHUB_TOKEN` | Not used. Only a private fork needs it, in its Vercel project, so that the build can read the migrations from GitHub (`deploy-and-rollback.md`) | The owner of that fork | Set by the owner of the fork when the token is made | Not applicable |
 | `GOOGLE_CLIENT_ID` | Vercel (Production) and `.env.local`. It is public by nature: it is in the code that every browser loads | Nobody needs to rotate it: it identifies the app, it does not protect anything | Never | Not applicable |
 | Agent keys of the committee's own AI agent | The secrets vault of the agent platform that the committee uses, never in a chat (`docs/agent-prompt.md`) | The committee, in the Agent tab of `/admin` | Never, until revoked | Each key shows its own date in the Agent tab |
@@ -81,3 +81,4 @@ and migrates production in the production build (ADR 0002).
 One line per creation or rotation, with no value in it.
 
 - `03/10/2026`: the production database credentials were rotated with Vercel's Rotate Secrets, followed by a redeploy.
+- `05/10/2026`: `CRON_SECRET` was set by the owner in the Production environment of Vercel (sensitive), for the daily retention job.
