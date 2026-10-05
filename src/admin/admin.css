@@ -147,10 +147,16 @@ select.a-input {
 .a-scan__who { color: var(--w-text-2); font-size: 0.9375rem; overflow-wrap: anywhere; }
 .a-scan__flags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
 .a-scan__tools { grid-column: 3; grid-row: 1; display: flex; align-items: center; margin-inline-end: -10px; } /* phone: the icons sit at the end of the first row */
+.a-scan__stamp { direction: ltr; unicode-bidi: isolate; font-variant-numeric: tabular-nums; } /* a date and time inside a line of Hebrew */
 @media (min-width: 768px) {
   .a-scan { grid-template-columns: 76px minmax(0, 1.2fr) minmax(0, 1fr) auto; }
   .a-scan__flags { grid-column: auto; }
   .a-scan__tools { grid-column: auto; grid-row: auto; }
+}
+/* A row with no actions (a visit that was not counted, in the history): no column is kept for the icons. */
+.a-scan--readonly { grid-template-columns: auto minmax(0, 1fr); }
+@media (min-width: 768px) {
+  .a-scan--readonly { grid-template-columns: 76px minmax(0, 1.2fr) minmax(0, 1fr); }
 }
 
 /* The build id line at the foot of the Committee tab (src/ui/BuildLabel.jsx), under the building card and lined up with it. */

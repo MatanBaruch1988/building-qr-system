@@ -9,7 +9,7 @@ import { requireAdmin, isAdminToken, guardLogin } from '../auth.js'
 import { verifyGoogleCredential } from '../google.js'
 import { readAddress, saveAddress, parseAddress } from '../building.js'
 import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvRow } from '../scans.js'
-import { audit, adminActor } from '../audit.js'
+import { audit, adminActor, changesOf, idsChanged } from '../audit.js'
 import { ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, API_KEY_PREFIX } from '../config.js'
 import {
   GPS_MODES, GPS_MODE_REQUIRED, DEFAULT_GPS_MODE,
@@ -33,6 +33,11 @@ function baseUrl(req) {
 // adminActor(admin), ...)` with the client of that transaction: server/audit.js), so there is no change without its row and no
 // row without its change. Slow or outside work (a password hash, a call to Google, the validation of the body) comes before
 // the transaction, and the reads that only build the answer (POINT_SELECT, PROVIDER_SELECT) come after the commit.
+//
+// The row says what really happened (the detail of each action is described at the top of server/audit.js). So an update reads
+// the row it changes first, under its lock and in the same transaction, and writes `changes` (the fields whose value differs,
+// each `{ from, to }`: changesOf); a change that changes nothing writes nothing, not the row and not its audit entry, and the
+// route answers as it always did.
 
 /** Builds "col = $n, …" from an object of already-validated fields. */
 function setClause(fields, startAt = 1) {
@@ -157,14 +162,34 @@ route('POST', '/admin/admins', async ({ req, body }) => {
   const email = str(body.email, { field: 'email', max: EMAIL_MAX_LENGTH, required: true }).toLowerCase()
   if (!EMAIL_RE.test(email)) throw bad('invalid_field', 'Not a valid e-mail address', { field: 'email' })
   const name = str(body.name, { field: 'name', max: NAME_MAX_LENGTH }) ?? ''
+  // Three cases, one answer (201 and the member): a new e-mail is added (`admin.add`); the e-mail of a member who was switched off
+  // switches them back on (`admin.enable`, with the e-mail and what changed); the e-mail of a member who is already on the list
+  // changes nothing and writes no entry (the name in the request is ignored, as it always was). The row of an existing member is
+  // locked before it is read, so that the entry says what it really was.
   const added = await tx(async (c) => {
-    const { rows } = await c.query(
-      `insert into admins (email, name) values ($1, $2)
-       on conflict (email) do update set is_active = true returning id, email, name, is_active`,
-      [email, name],
-    )
-    await audit(c, adminActor(admin), 'admin.add', { entity: 'admin', entityId: rows[0].id, detail: { email } })
-    return rows[0]
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const inserted = await c.query(
+        `insert into admins (email, name) values ($1, $2)
+         on conflict (email) do nothing returning id, email, name, is_active`,
+        [email, name],
+      )
+      if (inserted.rows.length) {
+        await audit(c, adminActor(admin), 'admin.add', { entity: 'admin', entityId: inserted.rows[0].id, detail: { email } })
+        return inserted.rows[0]
+      }
+      const found = await c.query('select id, email, name, is_active from admins where email = $1 for update', [email])
+      if (!found.rows.length) continue // removed at the very moment between the two statements: try the insert again
+      const member = found.rows[0]
+      if (member.is_active) return member
+      const enabled = await c.query('update admins set is_active = true where id = $1 returning id, email, name, is_active', [member.id])
+      await audit(c, adminActor(admin), 'admin.enable', {
+        entity: 'admin',
+        entityId: member.id,
+        detail: { email, changes: changesOf(member, { is_active: true }) },
+      })
+      return enabled.rows[0]
+    }
+    throw conflict('admin_list_changed', 'The committee list changed at the same moment, try again')
   })
   return { status: 201, json: { admin: added } }
 })
@@ -178,11 +203,19 @@ route('PATCH', '/admin/admins/:id', async ({ req, params, body }) => {
   // at the same moment waits for the answer instead of slipping a new session in), and a failure of any step leaves the member as
   // they were, never switched off with sessions that still work.
   const member = await tx(async (c) => {
-    const found = await c.query('select id from admins where id = $1 for update', [id])
+    const found = await c.query('select id, email, name, is_active from admins where id = $1 for update', [id])
     if (!found.rows.length) throw notFound('admin_not_found', 'Admin not found')
+    const current = found.rows[0]
+    // A member who is already in the state that was asked for changes nothing: no write, no sign-out (a member who is off has no
+    // session that works: a sign-in and a session both need is_active), no entry. The answer is the same.
+    if (current.is_active === body.is_active) return current
     const r = await c.query('update admins set is_active = $2 where id = $1 returning id, email, name, is_active', [id, body.is_active])
     if (!body.is_active) await c.query('update admin_sessions set revoked_at = now() where admin_id = $1 and revoked_at is null', [id])
-    await audit(c, adminActor(admin), body.is_active ? 'admin.enable' : 'admin.disable', { entity: 'admin', entityId: id })
+    await audit(c, adminActor(admin), body.is_active ? 'admin.enable' : 'admin.disable', {
+      entity: 'admin',
+      entityId: id,
+      detail: { changes: changesOf(current, { is_active: body.is_active }) },
+    })
     return r.rows[0]
   })
   return { admin: member }
@@ -219,8 +252,12 @@ route('PUT', '/admin/building', async ({ req, body }) => {
   const { admin } = await requireAdmin(req)
   const address = parseAddress(body.address)
   await tx(async (c) => {
-    await saveAddress(c, admin.id, address)
-    await audit(c, adminActor(admin), 'building.update', { entity: 'building', detail: { address } })
+    const { changed, before } = await saveAddress(c, admin.id, address)
+    if (!changed) return // the address that is already saved: nothing to record
+    await audit(c, adminActor(admin), 'building.update', {
+      entity: 'building',
+      detail: { changes: changesOf({ address: before }, { address }) },
+    })
   })
   return { building: { address } }
 })
@@ -288,18 +325,26 @@ function providerIds(body) {
   return [...new Set(body.provider_ids.map((i) => i.toLowerCase()))]
 }
 
+/**
+ * Replaces the providers who may scan at a point, and says what the list was and what it is now, as sorted lists of ids, so
+ * that the audit entry holds real ids: the ones the delete took away (the statement itself says which) and the ones that were
+ * inserted (the demo account is dropped first, it is never listed).
+ */
 async function replaceAssignments(c, pointId, ids) {
-  await c.query('delete from point_providers where point_id = $1', [pointId])
-  if (!ids.length) return
+  const was = await c.query('delete from point_providers where point_id = $1 returning provider_id', [pointId])
+  const before = was.rows.map((r) => r.provider_id).sort()
+  if (!ids.length) return { before, after: [] }
   const found = await c.query('select id, is_demo from providers where id = any($1::uuid[])', [ids])
   if (found.rows.length !== ids.length) throw bad('unknown_provider', 'One of the providers does not exist')
   // The demo account may scan every point (see recordScan), so it is never listed per point.
-  const real = found.rows.filter((r) => !r.is_demo).map((r) => r.id)
-  if (!real.length) return
-  await c.query(
-    'insert into point_providers (point_id, provider_id) select $1, unnest($2::uuid[])',
-    [pointId, real],
-  )
+  const real = found.rows.filter((r) => !r.is_demo).map((r) => r.id).sort()
+  if (real.length) {
+    await c.query(
+      'insert into point_providers (point_id, provider_id) select $1, unnest($2::uuid[])',
+      [pointId, real],
+    )
+  }
+  return { before, after: real }
 }
 
 route('GET', '/admin/points', async ({ req }) => {
@@ -320,8 +365,12 @@ route('POST', '/admin/points', async ({ req, body }) => {
       `insert into points (${cols.join(', ')}) values (${vals.map((_, i) => `$${i + 1}`).join(', ')}) returning id`,
       vals,
     )
-    await replaceAssignments(c, rows[0].id, ids)
-    await audit(c, adminActor(admin), 'point.create', { entity: 'point', entityId: rows[0].id, detail: fields })
+    const { after } = await replaceAssignments(c, rows[0].id, ids)
+    await audit(c, adminActor(admin), 'point.create', {
+      entity: 'point',
+      entityId: rows[0].id,
+      detail: { ...fields, provider_ids: after },
+    })
     return rows[0].id
   })
   const { rows } = await query(`${POINT_SELECT} where p.id = $1 group by p.id`, [created])
@@ -338,12 +387,24 @@ route('PATCH', '/admin/points/:id', async ({ req, params, body }) => {
     const current = await c.query('select * from points where id = $1 for update', [id])
     if (!current.rows.length) throw notFound('point_not_found', 'Point not found')
     assertLocatable({ ...current.rows[0], ...fields })
-    if (Object.keys(fields).length) {
-      const { sql, values } = setClause({ ...fields, updated_at: new Date() })
+    // Only the fields whose value differs are written (a request that repeats the saved values leaves even updated_at alone) and
+    // recorded.
+    const changes = changesOf(current.rows[0], fields)
+    const detail = {}
+    if (Object.keys(changes).length) {
+      const written = Object.fromEntries(Object.keys(changes).map((key) => [key, fields[key]]))
+      const { sql, values } = setClause({ ...written, updated_at: new Date() })
       await c.query(`update points set ${sql} where id = $${values.length + 1}`, [...values, id])
+      detail.changes = changes
     }
-    if (ids !== undefined) await replaceAssignments(c, id, ids)
-    await audit(c, adminActor(admin), 'point.update', { entity: 'point', entityId: id, detail: { ...fields, provider_ids: ids } })
+    if (ids !== undefined) {
+      const { before, after } = await replaceAssignments(c, id, ids)
+      const assignments = idsChanged(before, after)
+      if (assignments.added.length || assignments.removed.length) detail.provider_ids = assignments
+    }
+    if (Object.keys(detail).length) {
+      await audit(c, adminActor(admin), 'point.update', { entity: 'point', entityId: id, detail })
+    }
   })
   const { rows } = await query(`${POINT_SELECT} where p.id = $1 group by p.id`, [id])
   return { point: pointJson(rows[0], req) }
@@ -433,23 +494,31 @@ route('PATCH', '/admin/providers/:id', async ({ req, params, body }) => {
   const id = requireUuid(params.id)
   const fields = providerFields(body, { create: false })
   const pw = password(body.password)
-  if (pw) fields.password_hash = await hashPassword(pw)
-  if (!Object.keys(fields).length) throw bad('nothing_to_update', 'No fields to update')
+  const passwordHash = pw ? await hashPassword(pw) : undefined
+  if (!Object.keys(fields).length && !passwordHash) throw bad('nothing_to_update', 'No fields to update')
 
-  const { password_hash, ...loggable } = fields
   await tx(async (c) => {
-    const { sql, values } = setClause({ ...fields, updated_at: new Date() })
-    const r = await c.query(`update providers set ${sql} where id = $${values.length + 1} returning id`, [...values, id])
-    if (!r.rows.length) throw notFound('provider_not_found', 'Provider not found')
+    // Only the columns that an entry may show are read: the hash of the password is written and never read, and never recorded.
+    const found = await c.query(
+      'select company, contact_name, service_type, is_active, is_demo from providers where id = $1 for update',
+      [id],
+    )
+    if (!found.rows.length) throw notFound('provider_not_found', 'Provider not found')
+    const changes = changesOf(found.rows[0], fields)
+    // A new password is always a change (a new salt makes a new hash). The values that are saved already: nothing to write or record.
+    if (!Object.keys(changes).length && !passwordHash) return
+    const written = Object.fromEntries(Object.keys(changes).map((key) => [key, fields[key]]))
+    if (passwordHash) written.password_hash = passwordHash
+    const { sql, values } = setClause({ ...written, updated_at: new Date() })
+    await c.query(`update providers set ${sql} where id = $${values.length + 1}`, [...values, id])
     // Deactivating or resetting a password signs the person out of every phone.
-    if (fields.is_active === false || pw) {
+    if (changes.is_active?.to === false || passwordHash) {
       await c.query('update provider_devices set revoked_at = now() where provider_id = $1 and revoked_at is null', [id])
     }
-    await audit(c, adminActor(admin), 'provider.update', {
-      entity: 'provider',
-      entityId: id,
-      detail: { ...loggable, password_changed: !!password_hash },
-    })
+    const detail = {}
+    if (Object.keys(changes).length) detail.changes = changes
+    if (passwordHash) detail.password_changed = true
+    await audit(c, adminActor(admin), 'provider.update', { entity: 'provider', entityId: id, detail })
   })
   const out = await query(`${PROVIDER_SELECT} where p.id = $1`, [id])
   return { provider: out.rows[0] }
@@ -517,17 +586,19 @@ async function setVoid(req, params, body, voided) {
   const id = requireUuid(params.id)
   const reason = voided ? str(body.reason, { field: 'reason', max: VOID_REASON_MAX_LENGTH }) || null : null
   const row = await tx(async (c) => {
-    const r = await c.query(
-      `update scans set voided_at = $2, void_reason = $3
-        where id = $1 and (voided_at is null) = $4 returning *`,
-      [id, voided ? new Date() : null, reason, voided],
-    )
-    if (!r.rows.length) {
-      const exists = await c.query('select 1 from scans where id = $1', [id])
-      if (!exists.rows.length) throw notFound('scan_not_found', 'Scan not found')
+    // The row is read under its lock first: restoring a scan clears its reason, and the entry keeps the reason that it cleared.
+    const found = await c.query('select voided_at, void_reason from scans where id = $1 for update', [id])
+    if (!found.rows.length) throw notFound('scan_not_found', 'Scan not found')
+    const was = found.rows[0]
+    if ((was.voided_at == null) !== voided) {
       throw conflict(voided ? 'already_voided' : 'not_voided', voided ? 'Scan is already voided' : 'Scan is not voided')
     }
-    await audit(c, adminActor(admin), voided ? 'scan.void' : 'scan.unvoid', { entity: 'scan', entityId: id, detail: { reason } })
+    const r = await c.query('update scans set voided_at = $2, void_reason = $3 where id = $1 returning *', [id, voided ? new Date() : null, reason])
+    await audit(c, adminActor(admin), voided ? 'scan.void' : 'scan.unvoid', {
+      entity: 'scan',
+      entityId: id,
+      detail: voided ? { reason } : { previous_reason: was.void_reason },
+    })
     return r.rows[0]
   })
   return { scan: scanJson(row) }
