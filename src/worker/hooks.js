@@ -7,6 +7,8 @@ import { getCachedPoint, setCachedPoint, dropCachedPoint } from './pointCache.js
 import { getCachedAddress, setCachedAddress } from './buildingCache.js'
 import { flushQueue } from './scanQueue.js'
 import { createDeviceReporter } from './deviceStatus.js'
+import { createErrorReporter } from '../ui/errorReport.js'
+import { APP_PROVIDER } from '../appKind.js'
 import { isoDay } from '../../shared/datetime.js'
 
 /** Provider names for the login tiles. Shows the last list instantly and refreshes in the background. */
@@ -157,7 +159,7 @@ export function useQueueSync({ session, queue, onSignedOut, onDone, onFlushed })
     } catch (err) {
       if (err.status === 401 && stillSame()) {
         signedOut = true
-        cb.current.onSignedOut()
+        cb.current.onSignedOut(err.code)
       }
     } finally {
       busy.current = false
@@ -231,4 +233,50 @@ export function useDeviceStatus({ session, queue, confirmedToken, onSignedOut })
   }, [token, reporter])
 
   return reporter.report
+}
+
+/**
+ * Tells the server what went wrong on this phone (src/ui/errorReport.js, ADR 0007 decision 3): a screen that crashed, an error that
+ * nothing caught, a sign-out that the server forced. They are noted on the phone where they happen and wait there; this sends them
+ * to POST /api/my/errors with the session's token, which is why a crash before sign-in waits for the next one. It sends:
+ *  - once when the app has started and the server has confirmed the stored session (`confirmedToken` is that session's token),
+ *    or when somebody has just signed in (the app passes the new token the same way);
+ *  - when the app comes back to the foreground.
+ * The reporter decides by itself whether to send (at most once a minute, never offline, never with nothing noted, and not at all for
+ * the rest of the run after a 404), so calling it often is fine. Nothing on the screen changes and nothing reaches the console. A 401
+ * signs the person out the way the other calls of the app do (`onSignedOut`, with the code that the server answered). A reporter lives
+ * as long as the app does: "Try again" on the crash screen starts the app again, and with it a new one.
+ * @param {object} args
+ * @param {import('./session.js').Session | null} args.session
+ * @param {string | null} args.confirmedToken
+ * @param {(code?: string) => void} args.onSignedOut
+ * @param {() => import('./session.js').Session | null} [args.liveSession]  who is signed in this very moment, for an app that learns of a
+ *   forced sign-out before it has drawn it: nothing is sent for a session that has just ended, though `session` still names it until the
+ *   next render. Without it `session` is trusted
+ */
+export function useErrorReport({ session, confirmedToken, onSignedOut, liveSession }) {
+  const current = useRef({ session, liveSession })
+  current.current = { session, liveSession }
+  const signOut = useRef(onSignedOut)
+  signOut.current = onSignedOut
+  const [reporter] = useState(() =>
+    createErrorReporter({
+      app: APP_PROVIDER,
+      getSession: () => (current.current.liveSession ? current.current.liveSession() : current.current.session)?.token ?? null,
+      send: (body, token) => api('/my/errors', { method: 'POST', token, timeoutMs: 8000, body }),
+      onUnauthorized: (token, code) => current.current.session?.token === token && signOut.current(code),
+    }),
+  )
+  const token = session?.token
+
+  useEffect(() => {
+    if (token && token === confirmedToken) reporter.report()
+  }, [token, confirmedToken, reporter])
+
+  useEffect(() => {
+    if (!token) return
+    const onVisible = () => document.visibilityState === 'visible' && reporter.report()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [token, reporter])
 }
