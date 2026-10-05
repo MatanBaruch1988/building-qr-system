@@ -89,12 +89,36 @@ export function normalizeGps(gps) {
 }
 
 /**
+ * The name of a provider as a record keeps it (scans.provider_name, scan_refusals.provider_name): a snapshot made when the
+ * record is written, so that it stays readable after the provider is renamed or deleted. "Company – contact" (an en dash),
+ * or just the company when there is no contact name.
+ * @param {{ company: string, contact_name?: string | null }} provider
+ */
+export const providerSnapshotName = (provider) =>
+  provider.contact_name ? `${provider.company} – ${provider.contact_name}` : provider.company
+
+/**
+ * Attaches to a refusal the point that the code named, for the record that server/scanRefusals.js keeps of it. It is a
+ * property that cannot be enumerated, so it is never serialized: not by JSON.stringify, not by a spread, not by a log of the
+ * error. The answer that a client gets is built from `code`, `message` and `extra` only (server/router.js, the sync handler
+ * in server/routes/provider.js), so nothing about the refusal's record reaches a phone.
+ */
+function attachRefusedPoint(err, point) {
+  if (point && err && typeof err === 'object') {
+    Object.defineProperty(err, 'refusal', { value: point, enumerable: false, configurable: true, writable: true })
+  }
+  return err
+}
+
+/**
  * Records one scan on behalf of an authenticated provider.
  * Safe to call again with the same `input.id` (offline retries): the stored row is returned.
  * Returns { scan, duplicate }, where `duplicate` means an equal visit was already recorded within the cooldown.
  * Every refusal is an ApiError whose code is one of the SCAN_ERROR_* constants of shared/contract.js: as the item of a
  * sync batch it reaches the phone, which decides from the code what to do with the queued scan. A new refusal is a new
- * constant there, and tests/contract.test.js fails until the phone classifies it.
+ * constant there, and tests/contract.test.js fails until the phone classifies it. An error thrown after the point was found
+ * carries `refusal` ({ pointId, pointName }, not enumerable): the callers record the refused visit with it
+ * (server/scanRefusals.js).
  */
 export async function recordScan({ provider, deviceId, input, source, now = new Date() }) {
   const id = requireUuid(input?.id, SCAN_ERROR_INVALID_SCAN_ID)
@@ -108,6 +132,7 @@ export async function recordScan({ provider, deviceId, input, source, now = new 
     return { scan: scanJson(row), duplicate: false, replay: true }
   }
 
+  let named = null // the point that the code named, once it is known: only for the record of a refusal
   return tx(async (c) => {
     const existing = await c.query('select * from scans where id = $1', [id])
     if (existing.rows.length) return replay(existing.rows[0])
@@ -115,6 +140,7 @@ export async function recordScan({ provider, deviceId, input, source, now = new 
     const found = await c.query('select * from points where qr_token = $1', [token])
     if (!found.rows.length) throw notFound(SCAN_ERROR_UNKNOWN_CODE, 'QR code not found in the system')
     const point = found.rows[0]
+    named = { pointId: point.id, pointName: point.name }
     if (!point.is_active) throw new ApiError(409, SCAN_ERROR_POINT_INACTIVE, 'This point is not active')
 
     // The demo account may scan every point (it exists to try the whole system, and its scans are tagged 'demo'
@@ -157,7 +183,7 @@ export async function recordScan({ provider, deviceId, input, source, now = new 
         point.id,
         provider.id,
         point.name,
-        provider.contact_name ? `${provider.company} – ${provider.contact_name}` : provider.company,
+        providerSnapshotName(provider),
         point.service_type ?? provider.service_type ?? null,
         clock.checkedInAt,
         clock.clientTime,
@@ -176,6 +202,8 @@ export async function recordScan({ provider, deviceId, input, source, now = new 
       return replay(winner.rows[0])
     }
     return { scan: scanJson(inserted.rows[0]), duplicate: false }
+  }).catch((err) => {
+    throw attachRefusedPoint(err, named)
   })
 }
 
@@ -199,7 +227,7 @@ function decodeCursor(cursor) {
 
 // A real calendar day (2026-02-30 is not one) / a full ISO time that says which time zone it means.
 const ISO_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/
-function parseBound(name, value) {
+export function parseBound(name, value) {
   if (DATE_RE.test(value)) {
     const d = new Date(`${value}T00:00:00Z`)
     if (!Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value) return { date: value }

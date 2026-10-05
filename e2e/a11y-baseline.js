@@ -11,5 +11,6 @@
 //   target: the CSS target that axe reports for the element
 //   reason: why it is not fixed
 //
-// Empty today: the first scan found nothing that WCAG 2.1 A and AA, as axe checks them, calls a problem.
+// Empty today: the scan found nothing that WCAG 2.1 A and AA, or axe's best-practice rules, call a problem that the code
+// could not fix.
 export const A11Y_BASELINE = []

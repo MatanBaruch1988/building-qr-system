@@ -11,6 +11,7 @@ export {
   PROVIDER_TOKEN_PREFIX,
   MAX_TOKEN_LENGTH,
 } from '../shared/contract.js'
+import { NAME_MAX_LENGTH } from '../shared/contract.js'
 
 export const TIMEZONE = 'Asia/Jerusalem'
 
@@ -78,6 +79,13 @@ export const ERROR_RECORD_TIMEOUT_MS = 1500
 // (db/migrations/007_audit_log_append_only.sql), so the code cuts a longer name instead of failing the action.
 export const AUDIT_ACTOR_NAME_MAX_LENGTH = 200
 
+// A refused visit (scan_refusals, db/migrations/008_scan_refusals.sql) keeps the names of the point and of the provider as they
+// were, like a scan does. The columns refuse more than this many characters (the limit of a name elsewhere, and for a
+// provider "company", a separator of 3 characters and "contact"), so the code cuts a longer name (an imported one can be)
+// instead of losing the record of the refusal.
+export const REFUSAL_POINT_NAME_MAX_LENGTH = NAME_MAX_LENGTH
+export const REFUSAL_PROVIDER_NAME_MAX_LENGTH = 2 * NAME_MAX_LENGTH + 3
+
 // Every secret the server mints starts with a prefix that says what it is. The same constants are used where a secret is
 // minted and where it is checked, so the two can never drift apart. A token that does not start with its prefix cannot
 // be one of ours, so it is refused before any database query (see server/auth.js).
@@ -100,6 +108,8 @@ export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 20_000
 
 export const DEFAULT_PAGE_SIZE = 100
 export const MAX_PAGE_SIZE = 500
+// The most refused visits that one page of the committee's list holds (GET /api/admin/scan-refusals).
+export const MAX_REFUSAL_PAGE_SIZE = 200
 
 // The text filters of the scan listing (service_type, flag) are cut to this many characters before they are compared.
 export const FILTER_TEXT_MAX_LENGTH = 60
