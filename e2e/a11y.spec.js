@@ -351,6 +351,17 @@ test.describe('committee app', () => {
     await openTab(page, 'history', 'היסטוריית נוכחות')
     await expect(page.getByText('אין נוכחויות בטווח הזה')).toBeVisible()
     await scanBothThemes(page, 'committee phone: history, empty')
+
+    // The visits that the server did not count, for a stretch of time in which there were none: its own empty state.
+    await page.getByLabel('סוג').selectOption({ label: 'לא נקלטו' })
+    const from = page.getByLabel('מתאריך')
+    const until = page.getByLabel('עד תאריך')
+    await from.fill('')
+    await from.pressSequentially('01012020')
+    await until.fill('')
+    await until.pressSequentially('02012020')
+    await expect(page.getByRole('heading', { level: 2, name: 'אין ביקורים שלא נקלטו בטווח הזה' })).toBeVisible()
+    await scanBothThemes(page, 'committee phone: history, no visits not counted')
   })
 })
 
@@ -382,6 +393,11 @@ test.describe('committee app with the sample data filled in', () => {
     await scanBothThemes(page, 'committee phone: providers')
     await openTab(page, 'history', 'היסטוריית נוכחות')
     await scanBothThemes(page, 'committee phone: history')
+    // the same screen switched to the visits that the server did not count (the seed has some, from a queue and online)
+    await page.getByLabel('סוג').selectOption({ label: 'לא נקלטו' })
+    await expect(page.getByText('נקודה כבויה').first()).toBeVisible()
+    await expect(page.getByText('מהתור בטלפון').first()).toBeVisible()
+    await scanBothThemes(page, 'committee phone: history, visits not counted')
     await openTab(page, 'agent', "גישה לאייג'נט")
     await scanBothThemes(page, 'committee phone: agent')
     await openTab(page, 'committee', 'חברי הוועד')
@@ -408,6 +424,10 @@ test.describe('committee app with the sample data filled in', () => {
     await scanBothThemes(page, 'committee computer: points')
     await openTab(page, 'history', 'היסטוריית נוכחות')
     await scanBothThemes(page, 'committee computer: history')
+    await page.getByLabel('סוג').selectOption({ label: 'לא נקלטו' })
+    await expect(page.getByText('נקודה כבויה').first()).toBeVisible()
+    await expect(page.getByText('מהתור בטלפון').first()).toBeVisible()
+    await scanBothThemes(page, 'committee computer: history, visits not counted')
   })
 
   test('the dialogs of the points and the providers', async ({ page }) => {

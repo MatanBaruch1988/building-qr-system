@@ -16,6 +16,37 @@ export async function adminApi(path, opts) {
   }
 }
 
+/**
+ * One refused visit, as GET /api/admin/scan-refusals shows it (refusalJson in server/scanRefusals.js). The times are ISO 8601.
+ * @typedef {object} ScanRefusal
+ * @property {number} id
+ * @property {string} at  when the server refused it
+ * @property {string | null} scan_id  the phone's id of the check-in
+ * @property {string} source  a SCAN_SOURCES word: online, or from the phone's queue
+ * @property {string} code  a SCAN_ERROR_* code (a newer server may send one that this screen does not know)
+ * @property {string} provider_id
+ * @property {string} provider_name
+ * @property {string | null} point_id  null when the code named no point
+ * @property {string | null} point_name
+ * @property {string | null} client_time  the phone's clock, when it can be believed
+ */
+
+/**
+ * The visits that the server refused (GET /api/admin/scan-refusals), newest first, one page at a time:
+ * `{ refusals, next_cursor }`. `params` are the endpoint's own (`from`, `to`, `point_id`, `provider_id`, `limit`, `cursor`);
+ * an empty one is left out. They are not scans: they never count as attendance.
+ * @param {Record<string, string | number | null | undefined>} [params]
+ * @returns {Promise<{ refusals: ScanRefusal[], next_cursor: string | null }>}
+ */
+export function scanRefusals(params = {}) {
+  const q = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== '' && value != null) q.set(key, String(value))
+  }
+  const text = q.toString()
+  return adminApi(`/scan-refusals${text ? `?${text}` : ''}`)
+}
+
 const MESSAGES = {
   not_an_admin: 'החשבון הזה אינו ברשימת הוועד. בקשו מחבר ועד להוסיף את כתובת ה-Gmail שלכם.',
   google_account_mismatch: 'כתובת המייל הזאת קשורה לחשבון Google אחר.',

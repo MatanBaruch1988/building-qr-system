@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { adminApi, errorText } from '../api.js'
+import { adminApi, errorText, scanRefusals } from '../api.js'
 import { useLoad } from '../hooks.js'
 import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, DateInput, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconList, IconDownload, IconRefresh, IconBan, IconUndo, IconAlert, IconTrash } from '../icons.jsx'
 import { formatDay, formatDateTime, formatTime, isoDay } from '../../../shared/datetime.js'
 import {
   OUTCOME_ACCEPTED, OUTCOME_REJECTED_FAR, OUTCOME_REJECTED_NO_LOCATION, VOID_REASON_MAX_LENGTH,
+  SCAN_ERROR_INVALID_CODE, SCAN_ERROR_UNKNOWN_CODE, SCAN_ERROR_POINT_INACTIVE, SCAN_ERROR_NOT_ASSIGNED,
+  SCAN_ERROR_INVALID_SCAN_ID, SCAN_ERROR_SCAN_ID_CONFLICT, SCAN_ERROR_INVALID_ITEM, SOURCE_ONLINE, SOURCE_OFFLINE_SYNC,
 } from '../../../shared/contract.js'
 
 const daysAgo = (n) => isoDay(new Date(Date.now() - n * 86_400_000))
@@ -23,20 +25,75 @@ const FLAGS = {
 }
 const OUTCOMES = { [OUTCOME_REJECTED_FAR]: 'נדחתה: רחוק מהנקודה', [OUTCOME_REJECTED_NO_LOCATION]: 'נדחתה: חסר מיקום' }
 
+// The fourth choice of the "type" filter, and the only one that is not a kind of scan: the visits that the server refused (a
+// point that was switched off, a person who is not assigned, a code that names nothing, ...). They are another list (GET
+// /api/admin/scan-refusals), not scans, so this screen shows that list instead and offers nothing that is about a scan.
+const NOT_COUNTED = 'not_counted'
+
+// Why a visit was not counted, in the words of the committee. Keyed by the codes of the contract, never by strings. A code
+// that is not here (a newer server) gets OTHER_REASON. "warn" is a reason that the committee can act on (switch the point
+// on, assign the person, print the code again); "neutral" is a fault of the data, which nobody on the committee can mend.
+const REFUSAL_REASONS = new Map([
+  [SCAN_ERROR_POINT_INACTIVE, { label: 'נקודה כבויה', tone: 'warn' }],
+  [SCAN_ERROR_NOT_ASSIGNED, { label: 'לא משויך לנקודה', tone: 'warn' }],
+  [SCAN_ERROR_UNKNOWN_CODE, { label: 'קוד לא מוכר', tone: 'warn' }],
+  [SCAN_ERROR_INVALID_CODE, { label: 'קוד לא מוכר', tone: 'warn' }],
+  [SCAN_ERROR_INVALID_SCAN_ID, { label: 'נתונים לא תקינים', tone: 'neutral' }],
+  [SCAN_ERROR_SCAN_ID_CONFLICT, { label: 'נתונים לא תקינים', tone: 'neutral' }],
+  [SCAN_ERROR_INVALID_ITEM, { label: 'נתונים לא תקינים', tone: 'neutral' }],
+])
+const OTHER_REASON = { label: 'סיבה אחרת', tone: 'neutral' }
+// How the visit reached the server. A source that is not here shows no badge.
+const REFUSAL_SOURCES = new Map([
+  [SOURCE_OFFLINE_SYNC, { label: 'מהתור בטלפון', tone: 'info' }],
+  [SOURCE_ONLINE, { label: 'בזמן אמת', tone: 'neutral' }],
+])
+const NO_POINT = 'קוד לא מוכר' // a refusal that named no point: the code that was scanned is not one of ours
+
 const DEFAULTS = () => ({ from: daysAgo(6), to: isoDay(new Date()), point_id: '', provider_id: '', outcome: OUTCOME_ACCEPTED, include_voided: false, include_demo: false })
 const PAGE = 100
 
 // A date typed digit by digit passes through nonsense ("0002-…"); only complete, sensible dates are sent.
 const goodDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v) && Number(v.slice(0, 4)) >= 2000
 
-function query(f, extra = {}) {
-  const p = new URLSearchParams()
+/** The filters that are set, as the API takes them: nothing empty or off, and only a complete, sensible date. */
+function params(f, extra = {}) {
+  const out = {}
   for (const [k, v] of Object.entries({ ...f, ...extra })) {
     if (v === '' || v === false || v == null) continue
     if ((k === 'from' || k === 'to') && !goodDate(v)) continue
-    p.set(k, String(v))
+    out[k] = String(v)
   }
-  return p.toString()
+  return out
+}
+const query = (f, extra) => new URLSearchParams(params(f, extra)).toString()
+
+/** The refused visits for the same dates, point and provider (the other filters are about scans), one page. */
+function refusalsPage(f, extra) {
+  const { from, to, point_id, provider_id, limit, cursor } = params(f, extra)
+  return scanRefusals({ from, to, point_id, provider_id, limit, cursor })
+}
+
+/** One refused visit: read only, so there are no actions on it. The time is the server's; the phone's own clock is added
+ * when it tells something (the visit came from the queue, or the phone's minute is not the server's). */
+function RefusalRow({ r }) {
+  const reason = REFUSAL_REASONS.get(r.code) ?? OTHER_REASON
+  const source = REFUSAL_SOURCES.get(r.source)
+  const onPhone = r.client_time && (r.source === SOURCE_OFFLINE_SYNC || formatDateTime(r.client_time) !== formatDateTime(r.at))
+  return (
+    <li className="a-scan a-scan--readonly">
+      <span className="a-scan__time">{formatTime(r.at)}</span>
+      <div className="a-scan__main">
+        <div className="a-scan__point">{r.point_name || NO_POINT}</div>
+        <div className="a-scan__who">{r.provider_name}</div>
+        {onPhone && <div className="a-scan__who">נסרק בטלפון: <span className="a-scan__stamp">{formatDateTime(r.client_time)}</span></div>}
+      </div>
+      <div className="a-scan__flags">
+        <Badge tone={reason.tone}>{reason.label}</Badge>
+        {source && <Badge tone={source.tone}>{source.label}</Badge>}
+      </div>
+    </li>
+  )
 }
 
 function VoidDialog({ scan, onClose, onDone }) {
@@ -75,7 +132,9 @@ export default function HistoryView() {
   // A date field that is half typed shows something other than what is queried (the last good date). The list may stay,
   // but the export must not quietly use a range that differs from the fields, so it waits until both are finished.
   const [unfinished, setUnfinished] = useState({ from: false, to: false })
-  const [{ rows, cursor, status }, setList] = useState({ rows: [], cursor: null, status: 'loading' })
+  // `kind` says which list the rows are (scans or refusals), set when they arrive: the filter can already say another one
+  // while the pause before a query runs, and rows are never drawn as the wrong kind.
+  const [{ rows, cursor, status, kind }, setList] = useState({ rows: [], cursor: null, status: 'loading', kind: 'scans' })
   const [voiding, setVoiding] = useState(null)
   const confirm = useConfirm()
   const [busy, run] = useAction(toast, errorText)
@@ -88,13 +147,15 @@ export default function HistoryView() {
 
   const load = useCallback(async () => {
     const mine = ++seq.current
-    setList({ rows: [], cursor: null, status: 'loading' }) // never show the old filter's rows under the new one
+    const refused = applied.outcome === NOT_COUNTED
+    const kind = refused ? 'refusals' : 'scans'
+    setList({ rows: [], cursor: null, status: 'loading', kind }) // never show the old filter's rows under the new one
     try {
-      const res = await adminApi(`/scans?${query(applied, { limit: PAGE })}`)
-      if (mine === seq.current) setList({ rows: res.scans, cursor: res.next_cursor, status: 'ready' })
+      const res = refused ? await refusalsPage(applied, { limit: PAGE }) : await adminApi(`/scans?${query(applied, { limit: PAGE })}`)
+      if (mine === seq.current) setList({ rows: refused ? res.refusals : res.scans, cursor: res.next_cursor, status: 'ready', kind })
     } catch (err) {
       if (mine !== seq.current) return
-      setList({ rows: [], cursor: null, status: 'error' })
+      setList({ rows: [], cursor: null, status: 'error', kind })
       toast.error(errorText(err))
     }
   }, [applied, toast])
@@ -102,11 +163,13 @@ export default function HistoryView() {
 
   const more = async () => {
     const mine = seq.current
-    const res = await run(() => adminApi(`/scans?${query(applied, { limit: PAGE, cursor })}`))
+    const refused = kind === 'refusals'
+    const res = await run(() => (refused ? refusalsPage(applied, { limit: PAGE, cursor }) : adminApi(`/scans?${query(applied, { limit: PAGE, cursor })}`)))
     if (!res || mine !== seq.current) return // the filters changed meanwhile: this page belongs to an old query
+    const page = refused ? res.refusals : res.scans
     setList((s) => {
       const have = new Set(s.rows.map((r) => r.id))
-      return { ...s, rows: [...s.rows, ...res.scans.filter((r) => !have.has(r.id))], cursor: res.next_cursor }
+      return { ...s, rows: [...s.rows, ...page.filter((r) => !have.has(r.id))], cursor: res.next_cursor }
     })
   }
 
@@ -133,26 +196,35 @@ export default function HistoryView() {
   }
 
   const set = (k, v) => setFilters((f) => ({ ...f, [k]: v }))
+  const refusals = kind === 'refusals'
   const groups = useMemo(() => {
     const out = []
     for (const s of rows) {
+      const date = refusals ? isoDay(s.at) : s.local_date // a refusal has no local_date: its building day comes from its time
       const last = out[out.length - 1]
-      if (last && last.date === s.local_date) last.items.push(s)
-      else out.push({ date: s.local_date, items: [s] })
+      if (last && last.date === date) last.items.push(s)
+      else out.push({ date, items: [s] })
     }
     return out
-  }, [rows])
+  }, [rows, refusals])
+  // What the filter says now (not what was last loaded): the controls that are about scans leave at once.
+  const choseRefusals = filters.outcome === NOT_COUNTED
 
   return (
     <>
       <div className="a-head">
         <div>
           <h1>היסטוריית נוכחות</h1>
-          <p>כל הנוכחויות שנרשמו. אפשר לבטל נוכחות ולשחזר אותה, או למחוק שורה לצמיתות.</p>
+          {choseRefusals
+            ? <p>ביקורים שהשרת לא קלט, למשל בגלל נקודה כבויה. הם לא נספרים כנוכחות, והרשימה רק לקריאה.</p>
+            : <p>כל הנוכחויות שנרשמו. אפשר לבטל נוכחות ולשחזר אותה, או למחוק שורה לצמיתות.</p>}
         </div>
         <div className="a-actions">
           <IconButton icon={IconRefresh} label="רענון" onClick={load} />
-          <IconButton icon={IconDownload} label="ייצוא ל-Excel" href={`/api/admin/scans?${query(applied, { format: 'csv' })}`} download="scans.csv" disabled={unfinished.from || unfinished.to} />
+          {/* The file is of scans only: it has no refused visits, so there is nothing to export in this view. */}
+          {!choseRefusals && applied.outcome !== NOT_COUNTED && (
+            <IconButton icon={IconDownload} label="ייצוא ל-Excel" href={`/api/admin/scans?${query(applied, { format: 'csv' })}`} download="scans.csv" disabled={unfinished.from || unfinished.to} />
+          )}
         </div>
       </div>
 
@@ -176,27 +248,30 @@ export default function HistoryView() {
             <option value={OUTCOME_ACCEPTED}>נוכחויות שנרשמו</option>
             <option value="rejected">ניסיונות שנדחו</option>
             <option value="all">הכול</option>
+            <option value={NOT_COUNTED}>לא נקלטו</option>
           </select>
         </Field>
-        <div className="a-stack" style={{ gap: 0 }}>
-          <Switch checked={filters.include_voided} onChange={(v) => set('include_voided', v)} label="כולל מבוטלות" />
-          <Switch checked={filters.include_demo} onChange={(v) => set('include_demo', v)} label="כולל חשבון דמו" />
-        </div>
+        {!choseRefusals && (
+          <div className="a-stack" style={{ gap: 0 }}>
+            <Switch checked={filters.include_voided} onChange={(v) => set('include_voided', v)} label="כולל מבוטלות" />
+            <Switch checked={filters.include_demo} onChange={(v) => set('include_demo', v)} label="כולל חשבון דמו" />
+          </div>
+        )}
       </div>
 
       {status === 'loading' && <Spinner />}
       {status === 'error' && (
         <EmptyState icon={IconAlert} title="לא הצלחנו לטעון" action={<button className="w-btn w-btn--small" onClick={load}>נסו שוב</button>} />
       )}
-      {status === 'ready' && rows.length === 0 && (
-        <EmptyState icon={IconList} title="אין נוכחויות בטווח הזה">נסו להרחיב את טווח התאריכים או לשנות את הסינון.</EmptyState>
-      )}
+      {status === 'ready' && rows.length === 0 && (refusals
+        ? <EmptyState icon={IconList} title="אין ביקורים שלא נקלטו בטווח הזה">נסו להרחיב את טווח התאריכים או לשנות את הסינון.</EmptyState>
+        : <EmptyState icon={IconList} title="אין נוכחויות בטווח הזה">נסו להרחיב את טווח התאריכים או לשנות את הסינון.</EmptyState>)}
 
       {groups.map((g) => (
         <section key={g.date} aria-label={dayLabel(g.date)}>
           <h2 className="a-day">{dayLabel(g.date)} · {g.items.length}</h2>
           <ul className="a-scans">
-            {g.items.map((s) => (
+            {refusals ? g.items.map((r) => <RefusalRow key={r.id} r={r} />) : g.items.map((s) => (
               <li key={s.id} className={`a-scan${s.voided ? ' is-void' : ''}`}>
                 <span className="a-scan__time">{formatTime(s.checked_in_at)}</span>
                 <div className="a-scan__main">
