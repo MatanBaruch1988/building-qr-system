@@ -1,13 +1,15 @@
 // Tunable rules in one place. Kept as plain constants: this is a one-building app.
 //
 // A value that the phone must agree on is NOT written here but in shared/contract.js, and re-exported below so that the
-// server code keeps importing it from here: MAX_SYNC_BATCH, GPS_MAX_USABLE_ACCURACY_M, GPS_MAX_STALE_AGE_S and
-// PASSWORD_MIN_LENGTH. This file holds what only the server uses.
+// server code keeps importing it from here: MAX_SYNC_BATCH, GPS_MAX_USABLE_ACCURACY_M, GPS_MAX_STALE_AGE_S,
+// PASSWORD_MIN_LENGTH, PROVIDER_TOKEN_PREFIX and MAX_TOKEN_LENGTH. This file holds what only the server uses.
 export {
   MAX_SYNC_BATCH,
   GPS_MAX_USABLE_ACCURACY_M,
   GPS_MAX_STALE_AGE_S,
   PASSWORD_MIN_LENGTH,
+  PROVIDER_TOKEN_PREFIX,
+  MAX_TOKEN_LENGTH,
 } from '../shared/contract.js'
 
 export const TIMEZONE = 'Asia/Jerusalem'
@@ -66,13 +68,13 @@ export const RETENTION_DEVICE_LABEL_DAYS = 90
 // Every secret the server mints starts with a prefix that says what it is. The same constants are used where a secret is
 // minted and where it is checked, so the two can never drift apart. A token that does not start with its prefix cannot
 // be one of ours, so it is refused before any database query (see server/auth.js).
-export const PROVIDER_TOKEN_PREFIX = 'qrp_' // a provider's phone (Authorization: Bearer ...)
+// PROVIDER_TOKEN_PREFIX (a provider's phone: Authorization: Bearer ...) and MAX_TOKEN_LENGTH are in shared/contract.js and
+// re-exported at the top of this file: the phone checks the same shape on the session that it kept (src/worker/session.js).
+// A minted token is its 4-character prefix plus 43 characters (32 random bytes, base64url): 47 in all, and anything longer
+// than MAX_TOKEN_LENGTH is not ours either, so it is refused without being hashed or looked up. It leaves room to grow, but
+// not for a request that wants us to hash something huge.
 export const ADMIN_TOKEN_PREFIX = 'qra_' // a committee session (the HttpOnly cookie)
 export const API_KEY_PREFIX = 'qrk_' // a read-only agent key (Authorization: Bearer ...)
-// A minted token is its 4-character prefix plus 43 characters (32 random bytes, base64url): 47 in all. Anything longer
-// than this is not ours either, so it is refused without being hashed or looked up. It leaves room to grow, but not for
-// a request that wants us to hash something huge.
-export const MAX_TOKEN_LENGTH = 200
 
 // The shortest password of a service provider, PASSWORD_MIN_LENGTH (8), is in shared/contract.js: the committee form checks it too.
 

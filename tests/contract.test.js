@@ -130,6 +130,8 @@ describe('the offline sync contract: the phone and the server', () => {
     expect(config.GPS_MAX_USABLE_ACCURACY_M).toBe(GPS_MAX_USABLE_ACCURACY_M)
     expect(config.GPS_MAX_STALE_AGE_S).toBe(GPS_MAX_STALE_AGE_S)
     expect(config.PASSWORD_MIN_LENGTH).toBe(contract.PASSWORD_MIN_LENGTH)
+    expect(config.PROVIDER_TOKEN_PREFIX).toBe(contract.PROVIDER_TOKEN_PREFIX)
+    expect(config.MAX_TOKEN_LENGTH).toBe(contract.MAX_TOKEN_LENGTH)
   })
 })
 
@@ -524,6 +526,8 @@ const PINNED = [
   ['ADDRESS_MAX_LENGTH', contract.ADDRESS_MAX_LENGTH, 200, `${OLD_FORM} It is also the check constraint of building_settings.address.`],
   ['QR_TOKEN_PREFIX', contract.QR_TOKEN_PREFIX, 'BQR-', 'Every QR code that was ever printed starts with it (the old system printed the same prefix). A different prefix stops them all.'],
   ['QR_TOKEN_RE (its source)', contract.QR_TOKEN_RE.source, '^BQR-[A-Za-z0-9-]{6,80}$', 'It has to accept every QR code that was ever printed, including the old system\'s, so it is never narrowed: a narrower pattern turns a printed code into "not one of ours".'],
+  ['PROVIDER_TOKEN_PREFIX', contract.PROVIDER_TOKEN_PREFIX, 'qrp_', `Every device token that the server minted starts with it, and the phone drops a stored session whose token does not (src/worker/session.js), so a different prefix signs out every installed phone the next time it starts. The server also refuses a token without it. ${OLD_PHONES}`],
+  ['MAX_TOKEN_LENGTH', contract.MAX_TOKEN_LENGTH, 200, `The server refuses a token longer than this without a query, and the phone drops a stored session whose token is longer. A minted token is 47 characters: a value below that would refuse every token that exists, and every installed phone would be signed out. ${OLD_PHONES}`],
   ['QR_TOKEN_RE (its flags)', contract.QR_TOKEN_RE.flags, '', 'A global or sticky flag makes test() remember where it stopped, and the next scan of a valid code fails.'],
 ]
 
@@ -609,6 +613,7 @@ describe('src/ and server/ hold no copy of a number or a pattern that moved to s
     ['the radius bounds or default', /radius[^\n]*\b(?:50|1000)\b|\bmin:\s*1,\s*max:\s*1000\b/i, BOTH, 'POINT_RADIUS_MIN_M, POINT_RADIUS_MAX_M or POINT_RADIUS_DEFAULT_M'],
     ['the shortest password', /\.length\s*<\s*8\b/, BOTH, 'PASSWORD_MIN_LENGTH'],
     ['the QR token pattern or prefix', /BQR-/, BOTH, 'QR_TOKEN_RE, QR_TOKEN_PREFIX or parseQrToken from shared/'],
+    ['the prefix of a provider device token', /['"`]qrp_/, BOTH, 'PROVIDER_TOKEN_PREFIX'],
   ]
 
   it('finds no copy', () => {
@@ -626,7 +631,7 @@ describe('src/ and server/ hold no copy of a number or a pattern that moved to s
   })
 
   it('the scan can see a copy (it flags a planted one)', () => {
-    const planted = ["const BATCH = 10", 'maxLength={120}', "radius_m: '50'", 'x.length < 8', "const t = 'BQR-abc'"]
+    const planted = ["const BATCH = 10", 'maxLength={120}', "radius_m: '50'", 'x.length < 8', "const t = 'BQR-abc'", "token.startsWith('qrp_')"]
     const hits = planted.filter((line) => COPIES.some(([, pattern]) => pattern.test(line)))
     expect(hits).toEqual(planted)
   })

@@ -1,8 +1,13 @@
 // A screen that breaks while it renders is replaced by a message and a way back, not by a blank page (src/ui/ErrorBoundary.jsx).
 //
 // The break is real and it happens in the production build: the server answers with a shape that a screen cannot draw (a
-// session check with no provider in it, a committee member whose name is an object), which the test sets up by routing that
+// list of visits that is not a list, a committee member whose name is an object), which the test sets up by routing that
 // one answer. Nothing exists in the app for the sake of this test.
+//
+// (The provider app used to break on a session check that answered with no provider in it. It no longer does: it ignores such an
+// answer and a stored session without provider details is removed when it is read, see e2e/provider.spec.js. A screen of the
+// provider app that still breaks on a shape it cannot draw is the list of today's visits, so the tests route that one. If
+// the app is made to tolerate that answer too, this test needs the next real way to break a screen, not a hook in the app.)
 import { test, expect, he, en, PEOPLE, adminSignIn, signIn, allowConsoleErrors } from './fixtures.js'
 
 // The service worker is not what is tested here, and a page that it controls can send a request round the test's route.
@@ -12,7 +17,7 @@ const COMPUTER = { width: 1280, height: 800 }
 // The greeting of the home screen. The sign-in screen's heading ("Hi {name}") has no comma: it must not match.
 const HOME_HE = /^שלום,/
 const HOME_EN = /^Hello,/
-const SESSION_CHECK = '**/api/session'
+const VISITS_LIST = '**/api/my/scans'
 const ADMIN_ME = '**/api/admin/me'
 
 /** The lines that the app logs for a crash. The page's console guard fails the test on anything else. */
@@ -25,10 +30,10 @@ function watchCrashLines(page) {
   return lines
 }
 
-/** The session check of the provider app answers with no provider: the home screen cannot draw its greeting. */
-const breakSessionCheck = (page) =>
-  page.route(SESSION_CHECK, (route) =>
-    route.request().method() === 'GET' ? route.fulfill({ json: { provider: null } }) : route.continue())
+/** The list of the person's visits answers with something that is not a list: the home screen cannot draw its rows. */
+const breakVisitsList = (page) =>
+  page.route(VISITS_LIST, (route) =>
+    route.request().method() === 'GET' ? route.fulfill({ json: { scans: null } }) : route.continue())
 
 const fitsTheWidth = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
 
@@ -42,7 +47,7 @@ test('a broken screen of the provider app shows a message and two ways back, and
   await signIn(page, PEOPLE.ploni)
   await expect(page.getByRole('heading', { name: HOME_HE })).toBeVisible()
 
-  await breakSessionCheck(page)
+  await breakVisitsList(page)
   await page.reload()
   const heading = page.getByRole('heading', { name: he['crash.title'] })
   const tryAgain = page.getByRole('button', { name: he['crash.retry'], exact: true })
@@ -56,16 +61,16 @@ test('a broken screen of the provider app shows a message and two ways back, and
   expect(await heading.evaluate((el) => el.closest('[dir]').getAttribute('dir'))).toBe('rtl')
 
   // Try again: once the cause is gone the app is back, with the person still signed in.
-  await page.unroute(SESSION_CHECK)
+  await page.unroute(VISITS_LIST)
   await tryAgain.click()
   await expect(page.getByRole('heading', { name: HOME_HE })).toContainText(PEOPLE.ploni.name)
   await expect(heading).toHaveCount(0)
 
   // Reload the app: the same, by loading the page again.
-  await breakSessionCheck(page)
+  await breakVisitsList(page)
   await page.reload()
   await expect(heading).toBeVisible()
-  await page.unroute(SESSION_CHECK)
+  await page.unroute(VISITS_LIST)
   await reload.click()
   await expect(page.getByRole('heading', { name: HOME_HE })).toContainText(PEOPLE.ploni.name)
 
@@ -81,7 +86,7 @@ test('the broken screen speaks the language and wears the theme that the person 
   await signIn(page, PEOPLE.john, en)
   await expect(page.getByRole('heading', { name: HOME_EN })).toBeVisible()
 
-  await breakSessionCheck(page)
+  await breakVisitsList(page)
   await page.reload()
   const heading = page.getByRole('heading', { name: en['crash.title'] })
   await expect(heading).toBeVisible()
