@@ -19,7 +19,7 @@ import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
 import { getPool, setPool } from '../server/db.js'
 import { sha256 } from '../server/crypto.js'
 import { scanJson } from '../server/scans.js'
-import { parseDeviceStatusReport } from '../server/deviceStatus.js'
+import { parseDeviceStatusReport, reportDeviceStatus } from '../server/deviceStatus.js'
 import {
   APP_BUILD_RE,
   SYNC_QUEUE_MAX_ITEMS,
@@ -62,6 +62,8 @@ const sync = (scans, token) => call('POST', '/api/scans/sync', { token, body: { 
 
 /** The whole row of a phone, as JSON: two of these are equal exactly when nothing in the row changed. */
 const wholeRow = async (deviceId) => (await db.pool.query('select to_jsonb(d) as row from provider_devices d where id = $1', [deviceId])).rows[0].row
+/** A row of wholeRow() without `last_seen_at`: the guard touches it when it is over 5 minutes old, so it can move during a request that passes the guard. */
+const steady = (row) => Object.fromEntries(Object.entries(row).filter(([column]) => column !== 'last_seen_at'))
 /** The reported columns of a phone, as the database holds them. */
 const reported = async (deviceId) =>
   (
@@ -105,11 +107,11 @@ async function withStatements(fn) {
   }
 }
 
-/** Makes every statement that mentions `last_sync_at` fail as `error`, and lets everything else through. */
+/** Makes the statement that stamps `last_sync_at` fail as `error`, and lets everything else through (a read of the column included). */
 function lastSyncUpdateFails(error) {
   const real = db.pool.query.bind(db.pool)
   return vi.spyOn(db.pool, 'query').mockImplementation((text, params) =>
-    typeof text === 'string' && text.includes('last_sync_at') ? Promise.reject(error) : real(text, params),
+    typeof text === 'string' && text.startsWith('update provider_devices set last_sync_at') ? Promise.reject(error) : real(text, params),
   )
 }
 
@@ -261,7 +263,7 @@ describe('POST /api/my/device-status', () => {
     expect((await wholeRow(ids.a.deviceId)).label).toBe(labelBefore)
   })
 
-  it('answers the same whatever it was sent: ok, and the server build (null when the server has none)', async () => {
+  it('answers the same whatever it was sent: ok, and the server build (null when the server has none)', { timeout: 120_000 }, async () => {
     await blank(ids.a.deviceId)
     const bodies = [
       { build: BUILD, waiting: 1, oldest_waiting_at: agoIso(HOUR), not_accepted: 1, overflowed: 1 },
@@ -332,7 +334,7 @@ describe('POST /api/my/device-status', () => {
     })
   })
 
-  it('takes an empty body, no body, and a body that is not an object: it stores that the phone reported, and nothing else', async () => {
+  it('takes an empty body, no body, and a body that is not an object: it stores that the phone reported, and nothing else', { timeout: 120_000 }, async () => {
     for (const body of [{}, undefined, null, [], 'text', 42]) {
       await blank(ids.a.deviceId)
       const res = await report(body, ids.a.token)
@@ -366,7 +368,7 @@ describe('POST /api/my/device-status', () => {
     const res = await report(body, ids.a.token)
     expect(res.status).toBe(200)
     const after = await wholeRow(ids.a.deviceId)
-    expect(after).toEqual({ ...before, app_build: BUILD, waiting_count: 2, status_at: expect.any(String) })
+    expect(steady(after)).toEqual({ ...steady(before), app_build: BUILD, waiting_count: 2, status_at: expect.any(String) })
     expect(after.label).toBe('Fake Browser A')
     expect(after.revoked_at).toBeNull()
   })
@@ -391,7 +393,7 @@ describe('POST /api/my/device-status', () => {
         const throttled = await report({ build: 'dev', waiting: 99, oldest_waiting_at: agoIso(HOUR), not_accepted: 50, overflowed: 50 }, ids.a.token)
         expect(throttled.status).toBe(200)
         expect(throttled.json.ok).toBe(true)
-        expect(await wholeRow(ids.a.deviceId), `${seconds ?? 0} seconds after the last one`).toEqual(first)
+        expect(steady(await wholeRow(ids.a.deviceId)), `${seconds ?? 0} seconds after the last one`).toEqual(steady(first))
       }
 
       // After the period it is stored, and the totals go on from what they were.
@@ -429,7 +431,7 @@ describe('POST /api/my/device-status', () => {
   })
 
   describe('the running totals', () => {
-    it('add up from report to report, and a report adds at most DEVICE_STATUS_MAX_COUNT', async () => {
+    it('add up from report to report, and a report adds at most DEVICE_STATUS_MAX_COUNT', { timeout: 120_000 }, async () => {
       await blank(ids.a.deviceId)
       const total = async () => {
         const { not_accepted_total, overflow_total } = await reported(ids.a.deviceId)
@@ -470,15 +472,15 @@ describe('POST /api/my/device-status', () => {
       return (await reported(ids.a.deviceId)).oldest_waiting_at
     }
 
-    it('is stored inside its window, and becomes null outside it', async () => {
+    // Every edge of the window is proved on the reader above (no database); here one case on each side of each edge shows that the
+    // database gets what the reader decided. Each report is several round trips to a remote database, hence the longer limit.
+    it('is stored inside its window, and becomes null outside it', { timeout: 120_000 }, async () => {
       await blank(ids.a.deviceId)
       for (const [label, value, stored] of [
         ['2 hours ago', agoIso(2 * HOUR), true],
-        ['59 days ago', agoIso(59 * DAY), true],
         ['4 minutes ahead (a phone clock that runs a little fast)', aheadIso(4 * 60 * 1000), true],
         ['61 days ago', agoIso(61 * DAY), false],
         ['6 minutes ahead', aheadIso(6 * 60 * 1000), false],
-        ['a year ahead', aheadIso(365 * DAY), false],
         ['not a time', 'soon', false],
       ]) {
         // Something is stored first, so that "becomes null" is a change and not the starting value.
@@ -489,7 +491,7 @@ describe('POST /api/my/device-status', () => {
       }
     })
 
-    it('keeps its value when a report does not send it, is cleared when a report sends null or says that nothing waits', async () => {
+    it('keeps its value when a report does not send it, is cleared when a report sends null or says that nothing waits', { timeout: 120_000 }, async () => {
       await blank(ids.a.deviceId)
       const when = agoIso(5 * HOUR)
       expect(await oldestAfter({ waiting: 6, oldest_waiting_at: when })).toEqual(new Date(when))
@@ -540,8 +542,8 @@ describe('POST /api/my/device-status', () => {
       const res = await report({ build: 'dev', waiting: 50, not_accepted: 9 }, phone.token)
       expect(res.status).toBe(401)
       expect(res.json).toEqual({ error: { code: 'invalid_session', message: 'Session expired' } })
-      expect(await wholeRow(phone.deviceId)).toEqual(revoked)
-      expect(revoked).toEqual({ ...stored, revoked_at: expect.any(String) })
+      expect(steady(await wholeRow(phone.deviceId))).toEqual(steady(revoked))
+      expect(steady(revoked)).toEqual({ ...steady(stored), revoked_at: expect.any(String) })
     })
 
     it('is refused without a token, and with the token of a phone that does not exist', async () => {
@@ -554,9 +556,6 @@ describe('POST /api/my/device-status', () => {
     it('does not touch the row of a revoked phone even when the guard has just let it in (the write checks revoked_at itself)', async () => {
       const phone = await signIn(ids.b, 'Fake Browser B3')
       // The guard finds the phone, then the phone is revoked before the report is written.
-      const { requireProvider } = await import('../server/auth.js')
-      const { reportDeviceStatus } = await import('../server/deviceStatus.js')
-      expect(requireProvider).toBeTypeOf('function')
       await db.pool.query('update provider_devices set revoked_at = now() where id = $1', [phone.deviceId])
       const before = await wholeRow(phone.deviceId)
       expect(await reportDeviceStatus(phone.deviceId, parseDeviceStatusReport({ build: BUILD, waiting: 3 }))).toBe(false)
@@ -574,7 +573,7 @@ describe('POST /api/scans/sync stamps last_sync_at', () => {
   const accepted = () => ({ id: randomUUID(), code: ids.point.qr_token, client_time: agoIso(2 * HOUR) })
   const refused = () => ({ id: randomUUID(), code: ids.inactive.qr_token, client_time: agoIso(2 * HOUR) })
 
-  it('sets it after a sync, on the phone that synced and on no other', async () => {
+  it('sets it after a sync, on the phone that synced and on no other', { timeout: 120_000 }, async () => {
     await blank(ids.a.deviceId)
     await blank(ids.b.deviceId)
     const sibling = await signIn(ids.a, 'Fake Browser A3')
@@ -814,11 +813,10 @@ describe('GET /api/admin/providers/:id/devices', () => {
   it('answers an empty list for a provider whose phones are all signed out, or that never signed in', async () => {
     const fresh = await makeProvider('Fake Plumbers')
     expect((await list(fresh.id)).json).toEqual({ devices: [] })
-    const phone = await signIn(fresh, LABEL)
+    await signIn(fresh, LABEL)
     expect((await list(fresh.id)).json.devices).toHaveLength(1)
-    await call('POST', `/api/admin/providers/${fresh.id}/revoke-devices`, { cookie, body: {} })
+    expect((await call('POST', `/api/admin/providers/${fresh.id}/revoke-devices`, { cookie, body: {} })).status).toBe(200)
     expect((await list(fresh.id)).json).toEqual({ devices: [] })
-    expect(phone.deviceId).toBeDefined()
   })
 
   describe('outdated: the phone reported a build, the server knows its own, and they differ', () => {
