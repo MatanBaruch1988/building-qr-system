@@ -10,6 +10,8 @@ import HistoryView from '../admin/views/HistoryView.jsx'
 import AgentView from '../admin/views/AgentView.jsx'
 import CommitteeView from '../admin/views/CommitteeView.jsx'
 import { useTab } from '../admin/tab.js'
+import { useErrorReport } from '../admin/hooks.js'
+import { noteClientError, setPlace, currentPlace } from '../ui/errorReport.js'
 import { applyUpdate, isUpdateReady, subscribeUpdate } from '../worker/update.js'
 import ThemeSwitch, { HEBREW_THEME_LABELS as THEME_LABELS } from '../ui/ThemeSwitch.jsx'
 import { IconPin, IconUsers, IconList, IconKey, IconShield, IconLogout, IconQr, IconDevice, IconAlert, IconRefresh } from '../admin/icons.jsx'
@@ -50,6 +52,7 @@ function ShellTools({ onSignOut }) {
 function Shell({ admin, onSignedOut }) {
   const toast = useToast()
   const [tab, goTo] = useTab(TAB_KEYS)
+  setPlace(`committee:${tab}`) // the screen for an error report (src/ui/errorReport.js), told while rendering so that a first draw that breaks is on this tab
   const { View, label } = TABS.find((t) => t.key === tab)
   const updateReady = useSyncExternalStore(subscribeUpdate, isUpdateReady)
   const mainRef = useRef(null)
@@ -127,9 +130,27 @@ export default function AdminApp() {
   }, [])
   useEffect(() => { load() }, [load])
 
-  // Any call that finds the session gone sends the person back to the sign-in screen.
+  // The screen for an error report (src/ui/errorReport.js): the shell sets its own tab, so what is left is the sign-in and what is
+  // outside any screen (the first load, the screen that says there is no connection).
+  if (boot.status !== 'ready') setPlace('committee:app')
+  else if (!boot.admin) setPlace('committee:login')
+
+  // Any call that finds the session gone sends the person back to the sign-in screen. This is the one place where a session that the
+  // server ended is noted for the report (a sign-out that the person chose, Shell's `signOut`, is not). Calls that find it gone
+  // together note it once.
+  const signedIn = useRef(false)
+  signedIn.current = Boolean(boot.admin)
+
+  // What went wrong in the app goes to the server once somebody is signed in, and when the page comes back to the foreground. Not for a
+  // session that has just ended: the sign-in screen is drawn a moment after the ref above says so.
+  useErrorReport(Boolean(boot.admin), () => signedIn.current)
+
   useEffect(() => {
     const expired = () => {
+      if (signedIn.current) {
+        signedIn.current = false
+        noteClientError({ kind: 'signed_out', place: currentPlace(), code: 'admin_required' })
+      }
       setNotice('פג תוקף ההתחברות. היכנסו שוב.')
       setBoot((b) => (b.status === 'ready' ? { ...b, admin: null } : b))
     }
