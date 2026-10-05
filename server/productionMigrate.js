@@ -7,6 +7,7 @@ import pg from 'pg'
 import { normalizeConnectionString, guardPool } from './db.js'
 import { DEFAULT_DIR, migrate, pendingMigrations } from './migrate.js'
 import { MARKER_TABLE, markerTableName, maskDatabaseHost, readEnvironmentMarker } from './dbGuard.js'
+import { SafeMessageError, failureLabel, oneLine } from './logSafe.js'
 
 // Vercel puts the full commit hash in VERCEL_GIT_COMMIT_SHA for a deployment that it built from Git.
 const FULL_SHA = /^[0-9a-f]{40}$/
@@ -24,6 +25,18 @@ const GITHUB_RETRY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 30_000]
 
 const present = (value) => typeof value === 'string' && value.length > 0
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * The text that the production build prints when the migration fails (scripts/vercel-build.mjs). The build log is read by more
+ * people than the owner, and the message of a database or library error can quote a row value (a duplicate key, a failed
+ * check, a value that does not cast) or the host of the database, so only an error that our own code wrote is printed as its
+ * message: a SafeMessageError (the errors of this file, the lock error and MigrationError of server/migrate.js, which says the
+ * file and the SQLSTATE). Anything else, a database or a network error, is printed as failureLabel says: its code or its name,
+ * never its message. The answer is one short line. It decides only what is printed, never whether the build fails.
+ */
+export function buildFailureText(err) {
+  return err instanceof SafeMessageError ? oneLine(err.message, 500) : failureLabel(err)
+}
 
 /**
  * Decides what the build does about the database, from the build environment (the caller passes `process.env`).
@@ -77,7 +90,7 @@ function hostOf(connectionString) {
   } catch {
     // the empty host is refused below, the same as a URL without one
   }
-  if (!hostname) throw new Error('DATABASE_URL_UNPOOLED is not a valid connection URL')
+  if (!hostname) throw new SafeMessageError('DATABASE_URL_UNPOOLED is not a valid connection URL')
   return hostname
 }
 
@@ -108,7 +121,7 @@ async function markProduction(pool, table) {
 
 /** An error that retrying cannot change (a different file, a refused token). */
 function finalError(message) {
-  return Object.assign(new Error(message), { final: true })
+  return Object.assign(new SafeMessageError(message), { final: true })
 }
 
 /**
@@ -133,7 +146,7 @@ async function fetchFromGithubMaster({ file, url, token, fetchFile, delays }) {
       last = err?.name === 'TimeoutError' ? 'timed out' : 'network error'
     }
   }
-  throw new Error(
+  throw new SafeMessageError(
     `Migration ${file} could not be read from GitHub master after ${delays.length + 1} tries (${last}). Is it merged to ` +
       'master? A private repository needs MIGRATION_GITHUB_TOKEN',
   )
@@ -150,7 +163,7 @@ async function verifyOnGithubMaster({ files, dir, owner, slug, token, fetchFile,
     const url = `${GITHUB_RAW}/${owner}/${slug}/refs/heads/master/db/migrations/${encodeURIComponent(file)}`
     const remote = await fetchFromGithubMaster({ file, url, token, fetchFile, delays })
     if (!remote.equals(fs.readFileSync(path.join(dir, file)))) {
-      throw new Error(`Migration ${file} differs from the file on GitHub master: only merged migrations are applied`)
+      throw new SafeMessageError(`Migration ${file} differs from the file on GitHub master: only merged migrations are applied`)
     }
     log(`Migration ${file}: verified against GitHub master`)
   }
@@ -193,16 +206,18 @@ export async function migrateProduction({
   // The name is interpolated into SQL below, so it is checked first (see server/dbGuard.js).
   const table = markerTableName(markerTable)
   if (!connectionString) {
-    throw new Error('DATABASE_URL_UNPOOLED is not set: the production migration needs the direct connection string of the database')
+    throw new SafeMessageError(
+      'DATABASE_URL_UNPOOLED is not set: the production migration needs the direct connection string of the database',
+    )
   }
   if (hostOf(connectionString).includes('-pooler')) {
-    throw new Error(
+    throw new SafeMessageError(
       'DATABASE_URL_UNPOOLED points at a pooled host (-pooler): the migration lock needs a direct connection, a ' +
         'session of its own',
     )
   }
   if (!REPO_OWNER.test(repoOwner ?? '') || !REPO_SLUG.test(repoSlug ?? '')) {
-    throw new Error('The GitHub repository (VERCEL_GIT_REPO_OWNER and VERCEL_GIT_REPO_SLUG) is missing or not a valid name')
+    throw new SafeMessageError('The GitHub repository (VERCEL_GIT_REPO_OWNER and VERCEL_GIT_REPO_SLUG) is missing or not a valid name')
   }
 
   log(`Production migration target: ${maskDatabaseHost(connectionString)}`)
@@ -217,7 +232,7 @@ export async function migrateProduction({
   try {
     const marker = await readEnvironmentMarker(pool, table)
     if (marker === 'nonprod') {
-      throw new Error(
+      throw new SafeMessageError(
         'This production build points at a non-production database: check the Production environment variables in Vercel',
       )
     }
