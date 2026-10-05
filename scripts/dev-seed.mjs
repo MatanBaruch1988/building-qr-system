@@ -39,6 +39,9 @@ const { getPool, query } = await import('../server/db.js')
 const { migrate } = await import('../server/migrate.js')
 const { hashPassword } = await import('../server/crypto.js')
 const { SAMPLE_POINT, SAMPLE_PROVIDER_NAMES } = await import('./sample-data.mjs')
+const { providerSnapshotName } = await import('../server/scans.js')
+const { SCAN_ERROR_POINT_INACTIVE, SCAN_ERROR_NOT_ASSIGNED, SCAN_ERROR_UNKNOWN_CODE, SCAN_ERROR_INVALID_ITEM, SOURCE_ONLINE, SOURCE_OFFLINE_SYNC } =
+  await import('../shared/contract.js')
 
 await migrate(getPool())
 const { rows } = await query('select count(*)::int n from providers')
@@ -51,9 +54,9 @@ if (rows[0].n === 0) {
       [company, contact, service, await hashPassword(pw), demo],
     )).rows[0].id
   const ploni = await provider('ניקיון', SAMPLE_PROVIDER_NAMES.cleaner, 'cleaning', 'dev-pass-1')
-  await provider('גינון', SAMPLE_PROVIDER_NAMES.gardener, 'gardening', 'dev-pass-2')
-  await provider('Уборка', 'Иван', 'cleaning', 'dev-pass-3')
-  await provider('Cleaning Co', 'John', 'cleaning', 'dev-pass-4')
+  const almoni = await provider('גינון', SAMPLE_PROVIDER_NAMES.gardener, 'gardening', 'dev-pass-2')
+  const ivan = await provider('Уборка', 'Иван', 'cleaning', 'dev-pass-3')
+  const john = await provider('Cleaning Co', 'John', 'cleaning', 'dev-pass-4')
   await provider('דמו', 'לקוח דמה', null, 'dev-pass-5', true)
 
   const point = async (name, mode, token, extra = {}) =>
@@ -65,9 +68,25 @@ if (rows[0].n === 0) {
   await point('לובי', 'optional', 'BQR-dev00000000000000000001')
   await point('מינוס 1', 'none', 'BQR-dev00000000000000000002')
   const gym = await point('גימבורי', 'required', 'BQR-dev00000000000000000003')
-  await point('נקודה ישנה', 'optional', 'BQR-dev00000000000000000004', { active: false })
+  const old = await point('נקודה ישנה', 'optional', 'BQR-dev00000000000000000004', { active: false })
   await query('insert into point_providers (point_id, provider_id) values ($1,$2)', [gym, ploni])
-  console.log('Seeded sample admin, 5 providers (one demo), 4 points.')
+
+  // A few visits that the server refused (ADR 0007, "Visits not counted"), so that the committee's list of them has rows to
+  // show in development and in the E2E tests: a point that was switched off (from a phone's queue, with the phone's own
+  // clock), a person who is not assigned (online), a code that names no point (from a queue) and one item of bad data.
+  // Their times are relative to the moment of seeding, so that they fall in the history's default week. The names are the
+  // snapshots that a refusal keeps, as the server writes them. Fake people and the seed's own points, like the rest.
+  const refusal = (code, source, who, pointRow, minutesAgo, phoneMinutesAgo = null) =>
+    query(
+      `insert into scan_refusals (at, source, code, provider_id, provider_name, point_id, point_name, client_time)
+       values (now() - make_interval(mins => $1::int), $2, $3, $4, $5, $6, $7, now() - make_interval(mins => $8::int))`,
+      [minutesAgo, source, code, who.id, providerSnapshotName(who), pointRow?.id ?? null, pointRow?.name ?? null, phoneMinutesAgo],
+    )
+  await refusal(SCAN_ERROR_POINT_INACTIVE, SOURCE_OFFLINE_SYNC, { id: ploni, company: 'ניקיון', contact_name: SAMPLE_PROVIDER_NAMES.cleaner }, { id: old, name: 'נקודה ישנה' }, 180, 205)
+  await refusal(SCAN_ERROR_NOT_ASSIGNED, SOURCE_ONLINE, { id: almoni, company: 'גינון', contact_name: SAMPLE_PROVIDER_NAMES.gardener }, { id: gym, name: 'גימבורי' }, 120)
+  await refusal(SCAN_ERROR_UNKNOWN_CODE, SOURCE_OFFLINE_SYNC, { id: john, company: 'Cleaning Co', contact_name: 'John' }, null, 60, 100)
+  await refusal(SCAN_ERROR_INVALID_ITEM, SOURCE_OFFLINE_SYNC, { id: ivan, company: 'Уборка', contact_name: 'Иван' }, null, 30)
+  console.log('Seeded sample admin, 5 providers (one demo), 4 points, 4 refused visits.')
 }
 // An invented address, so that the header of the provider app shows a line in development and in the E2E tests (the
 // committee sets the real one in the committee app). Only when it is still empty: a value typed since is kept.

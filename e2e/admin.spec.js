@@ -1,6 +1,7 @@
 // The committee screens on a phone and on a computer: the same icons, nothing spilling off the screen, and deleting.
 import { randomUUID } from 'node:crypto'
 import { test, expect, he, PEOPLE, POINTS, FAR, SAMPLE_POINT, adminSignIn, clearScans, allowConsoleErrors } from './fixtures.js'
+import { SCAN_ERROR_POINT_INACTIVE } from '../shared/contract.js'
 
 const COMPUTER = { width: 1280, height: 800 }
 // Each tab and the heading of its page (every view renders its own h1 above its content)
@@ -240,6 +241,82 @@ test('every screen has its actions in the same order and places, with the red tr
     await phone.dispose()
     await page.request.delete(`/api/admin/admins/${member.id}`)
     for (const key of [live, dead]) await page.request.delete(`/api/admin/api-keys/${key.id}`)
+  }
+})
+
+// ---- the visits that the server did not count ------------------------------------------------------------------------
+
+test('History lists the visits that were not counted, with no action on them, on a phone and on a computer', async ({ page, playwright }) => {
+  await adminSignIn(page)
+  // One visit that is refused online, through the real route, so that the list has a row that came the way a person's visit
+  // does. The seed (scripts/dev-seed.mjs) has the others: from a phone's queue, a person who is not assigned, a code of no point.
+  const phone = await playwright.request.newContext({ baseURL: page.url().split('/admin')[0] })
+  try {
+    const providers = (await (await phone.get('/api/public/providers')).json()).providers
+    const ploni = providers.find((p) => p.contact_name === PEOPLE.ploni.name)
+    const session = await (await phone.post('/api/session', { data: { provider_id: ploni.id, password: PEOPLE.ploni.password } })).json()
+    const refused = await phone.post('/api/scan', { headers: { authorization: `Bearer ${session.token}` }, data: { id: randomUUID(), code: POINTS.switchedOff, gps: null } })
+    expect((await refused.json()).error.code).toBe(SCAN_ERROR_POINT_INACTIVE)
+  } finally {
+    await phone.dispose()
+  }
+
+  // a row of the list, by what it says (the reasons and the two sources are the words of the screen)
+  const rows = page.getByRole('listitem').filter({ hasText: /מהתור בטלפון|בזמן אמת/ })
+  const withReason = (reason) => rows.filter({ hasText: reason })
+  const stamp = /נסרק בטלפון: \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}/
+
+  for (const size of [null, COMPUTER]) {
+    if (size) await page.setViewportSize(size)
+    const where = size ? 'computer' : 'phone'
+    // from another tab, so that History opens with its own filters again (the same address would keep the ones of the last round)
+    await page.goto('/admin#points')
+    await loaded(page, 'נקודות סריקה')
+    await page.goto('/admin#history')
+    await loaded(page, 'היסטוריית נוכחות')
+    await page.getByLabel('סוג').selectOption({ label: 'לא נקלטו' })
+
+    // the visit from the queue: when the phone scanned it, next to the time of the server
+    const queued = withReason('נקודה כבויה').filter({ hasText: 'מהתור בטלפון' }).first()
+    await expect(queued).toBeVisible()
+    await expect(queued).toContainText('נקודה ישנה')
+    await expect(queued).toContainText(PEOPLE.ploni.name)
+    await expect(queued).toContainText(stamp)
+    // the visit that came online, a moment ago
+    const online = withReason('נקודה כבויה').filter({ hasText: 'בזמן אמת' }).first()
+    await expect(online).toBeVisible()
+    await expect(online).toContainText(PEOPLE.ploni.name)
+    // the other reasons of the seed: a person who is not assigned, and a code that names no point
+    await expect(withReason('לא משויך לנקודה').first()).toContainText('גימבורי')
+    await expect(withReason('נתונים לא תקינים').first()).toContainText('קוד לא מוכר') // no point: its name is "unknown code"
+    await expect(page.getByRole('heading', { level: 2 }).filter({ hasText: /^\d{2}\/\d{2}\/\d{4} · \d+$/ }).first()).toBeVisible()
+
+    // read only: no action on any row, no file, and none of the filters that are about scans
+    for (const row of await rows.all()) await expect(row.getByRole('button'), `${where}: an action on a row`).toHaveCount(0)
+    await expect(page.getByRole('link', { name: 'ייצוא ל-Excel' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'ייצוא ל-Excel' })).toHaveCount(0)
+    await expect(page.getByLabel('כולל מבוטלות')).toHaveCount(0)
+    await expect(page.getByLabel('כולל חשבון דמו')).toHaveCount(0)
+    expect(await noHorizontalScroll(page), `the list of visits not counted at ${where} width`).toBe(true)
+
+    // the point filter applies: only the point that was switched off is left
+    await page.getByLabel('נקודה').selectOption({ label: 'נקודה ישנה' })
+    await expect(withReason('לא משויך לנקודה')).toHaveCount(0)
+    await expect(withReason('נקודה כבויה').first()).toBeVisible()
+    await page.getByLabel('נקודה').selectOption({ label: 'כל הנקודות' })
+    await expect(withReason('לא משויך לנקודה').first()).toBeVisible()
+
+    // a stretch of time with none of them: the empty state, and the filter can go back to the scans (and their file)
+    const from = page.getByLabel('מתאריך')
+    const until = page.getByLabel('עד תאריך')
+    await from.fill('')
+    await from.pressSequentially('01012020')
+    await until.fill('')
+    await until.pressSequentially('02012020')
+    await expect(page.getByRole('heading', { level: 2, name: 'אין ביקורים שלא נקלטו בטווח הזה' })).toBeVisible()
+    await page.getByLabel('סוג').selectOption({ label: 'נוכחויות שנרשמו' })
+    await expect(page.getByRole('link', { name: 'ייצוא ל-Excel' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 2, name: 'אין נוכחויות בטווח הזה' })).toBeVisible()
   }
 })
 

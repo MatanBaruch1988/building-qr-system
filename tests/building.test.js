@@ -185,6 +185,7 @@ describe('the committee routes', () => {
 describe('who changed it, and when', () => {
   it('records the committee member and the time on the row, and an entry in the audit log', async () => {
     const before = (await stored())[0].updated_at
+    const previousAddress = (await stored())[0].address
     await new Promise((resolve) => setTimeout(resolve, 20))
     const r = await save('רחוב הביקורת 8')
     expect(r.status).toBe(200)
@@ -196,8 +197,20 @@ describe('who changed it, and when', () => {
       "select actor_type, actor_id, entity, entity_id, detail from audit_log where action = 'building.update' order by id desc limit 1",
     )
     expect(rows[0]).toMatchObject({ actor_type: 'admin', actor_id: adminId, entity: 'building', entity_id: null })
-    // the address and nothing else: no e-mail, no name, no session
-    expect(rows[0].detail).toEqual({ address: 'רחוב הביקורת 8' })
+    // the address that was replaced and the new one, and nothing else: no e-mail, no name, no session
+    expect(rows[0].detail).toEqual({ changes: { address: { from: previousAddress, to: 'רחוב הביקורת 8' } } })
+  })
+
+  it('writes no audit entry, and does not touch the time or the member, when the address is the one that is saved', async () => {
+    const count = async () => (await db.pool.query("select count(*)::int n from audit_log where action = 'building.update'")).rows[0].n
+    expect((await save('רחוב שלא משתנה 5')).status).toBe(200)
+    const row = (await stored())[0]
+    const before = await count()
+    const again = await save('  רחוב שלא משתנה 5 ')
+    expect(again.status).toBe(200)
+    expect(again.json).toEqual({ building: { address: 'רחוב שלא משתנה 5' } })
+    expect(await count()).toBe(before)
+    expect((await stored())[0]).toEqual(row)
   })
 
   it('writes no audit entry for a refused save', async () => {

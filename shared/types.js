@@ -119,4 +119,27 @@
  * @typedef {{ results: SyncItemResult[] }} SyncResponse
  */
 
+/**
+ * What a phone reports about itself: the body of POST /api/my/device-status (limits in section 8 of shared/contract.js, read by
+ * parseDeviceStatusReport in server/deviceStatus.js). It is a request of its own, never a field of the sync request. EVERY field
+ * is optional, and the server ignores a field that is not valid (it never answers 400 for one) and a field that it does not know,
+ * so a phone of another version can send fewer or more.
+ * @typedef {object} DeviceStatusReport
+ * @property {string} [build]  the build id of the app (APP_BUILD_RE); anything else is ignored
+ * @property {number} [waiting]  how many visits wait in the phone's queue, a whole number from 0 to SYNC_QUEUE_MAX_ITEMS
+ * @property {string | null} [oldest_waiting_at]  ISO 8601 with a zone, the phone's clock for the oldest of them; stored only when
+ *   it is not older than DEVICE_STATUS_MAX_AGE_DAYS and not more than 5 minutes ahead of the server, otherwise stored as nothing.
+ *   Send it as null (or `waiting: 0`) when nothing waits
+ * @property {number} [not_accepted]  visits that the server refused for good since the phone's last report; added to a running
+ *   total, cut to 0..DEVICE_STATUS_MAX_COUNT
+ * @property {number} [overflowed]  visits that left a full queue since the phone's last report; the same way
+ */
+
+/**
+ * The answer of POST /api/my/device-status, always, also when the server stored nothing (a report within
+ * DEVICE_STATUS_MIN_INTERVAL_S of the last one). `build` is the first 7 characters of the commit that the server runs, or null when
+ * it has none (a local server), so that a phone can tell that it is outdated.
+ * @typedef {{ ok: true, build: string | null }} DeviceStatusAnswer
+ */
+
 export {}

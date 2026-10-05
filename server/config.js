@@ -61,7 +61,8 @@ export const ADMIN_COOKIE = 'qr_admin'
 // log, an active session or an active phone. Changing a number is the owner's decision, and docs/privacy.md changes with it.
 //  - a committee session is deleted this many days after it expired or was revoked,
 //  - a login attempt is deleted after this many days (guardLogin in server/auth.js prunes the same way when someone signs in),
-//  - the label of a phone (the browser string it sent at sign-in) is cleared this many days after the phone was revoked,
+//  - the label of a phone (the browser string it sent at sign-in) is cleared this many days after the phone was revoked, together
+//    with what the phone reported about itself (migration 010: its build, how many visits waited and since when, the totals),
 //  - a recorded error (app_errors: safe fields only, no personal data) is deleted this many days after its last event.
 export const RETENTION_SESSION_DAYS = 30
 export const RETENTION_LOGIN_ATTEMPT_DAYS = 1

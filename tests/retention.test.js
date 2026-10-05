@@ -3,9 +3,11 @@
 // exactly that and nothing more:
 //   - it deletes the committee sessions that expired or were revoked more than 30 days ago, the login attempts older than
 //     1 day, and the recorded errors (app_errors) whose last event is older than 90 days, and it clears the label of a phone
-//     that was revoked more than 90 days ago;
-//   - it never touches a scan, the audit log, an active session or phone, or anything that is not yet due (every table that
-//     the job may not change is compared row for row before and after);
+//     that was revoked more than 90 days ago TOGETHER WITH everything that the phone reported about itself (migration 010:
+//     build, time of the report, what waited and since when, the two totals, the last upload), also when the label of that
+//     phone is empty;
+//   - it never touches a scan, the audit log, an active session or phone (label and reported status alike), or anything that is
+//     not yet due (every table that the job may not change is compared row for row before and after);
 //   - it writes one audit row, with the four counts and nothing else, and a second run finds nothing more;
 //   - the route refuses every request without the secret, and every request at all when CRON_SECRET is not set, before any
 //     database statement.
@@ -56,7 +58,15 @@ const LABELS_KEPT = { 'revoked-89d': 'Fake Browser B', active: 'Fake Browser C' 
 // is old but whose last one is recent is still in use.
 const ERRORS_GONE = ['due-91d', 'due-400d']
 const ERRORS_KEPT = ['kept-89d', 'kept-now', 'kept-first-old-last-recent']
-const COUNTS = { sessions: 3, loginAttempts: 2, deviceLabels: 2, appErrors: 2 }
+// A phone that has no label but still holds what it reported is due too: a status must not outlive the period because the label was empty.
+const STATUS_ONLY_CLEARED = ['revoked-91d-no-label']
+const PHONES_CLEARED = [...LABELS_CLEARED, ...STATUS_ONLY_CLEARED]
+// A phone that is revoked and due but holds nothing to clear (no label, no status) is not touched and not counted.
+const NOTHING_TO_CLEAR = 'revoked-91d-nothing'
+const COUNTS = { sessions: 3, loginAttempts: 2, deviceLabels: 3, appErrors: 2 }
+// What a phone reports about itself (migration 010): every phone of the fixture but NOTHING_TO_CLEAR has this, and a cleared phone has CLEARED.
+const REPORTED = { app_build: 'abcdef1', waiting_count: 12, not_accepted_total: 4, overflow_total: 2 }
+const CLEARED = { label: '', app_build: null, status_at: null, waiting_count: null, oldest_waiting_at: null, last_sync_at: null, not_accepted_total: 0, overflow_total: 0 }
 
 /**
  * Replaces the sessions, login attempts, phones and recorded errors of the schema with the fixture above, and adds two scans (one from a
@@ -122,7 +132,8 @@ async function seed() {
     { name: 'revoked-89d', label: 'Fake Browser B', revoked: 89 },
     { name: 'active', label: 'Fake Browser C', revoked: null },
     { name: 'revoked-400d-with-scan', label: 'Fake Browser D', revoked: 400 },
-    { name: 'revoked-91d-no-label', label: '', revoked: 91 },
+    { name: 'revoked-91d-no-label', label: '', revoked: 91 }, // holds a status
+    { name: NOTHING_TO_CLEAR, label: '', revoked: 91 },
   ].map((d) => ({ ...d, id: randomUUID(), token: `token-${d.name}-${randomUUID()}` }))
   const devices = Object.fromEntries(fixtures.map((d) => [d.name, d.id]))
   await q(
@@ -131,6 +142,17 @@ async function seed() {
             case when revoked is null then null else now() - make_interval(days => revoked) end
        from jsonb_to_recordset($2::jsonb) as t(id uuid, token text, label text, revoked int)`,
     [providerId, JSON.stringify(fixtures)],
+  )
+  // What the phones reported about themselves (migration 010), on every phone but the one that has nothing to clear: the active one,
+  // the one revoked 89 days ago and the ones that are due all hold a status, and the status is the same on each, so that a
+  // difference after a run can only come from the job.
+  await q(
+    `update provider_devices
+        set app_build = $2, status_at = now() - interval '2 days', waiting_count = $3,
+            oldest_waiting_at = now() - interval '3 days', not_accepted_total = $4, overflow_total = $5,
+            last_sync_at = now() - interval '2 days'
+      where id <> $1`,
+    [devices[NOTHING_TO_CLEAR], REPORTED.app_build, REPORTED.waiting_count, REPORTED.not_accepted_total, REPORTED.overflow_total],
   )
 
   // Two scans, one from a phone whose label is due to be cleared and one from an active phone. (A scan holds the id of the
@@ -175,6 +197,8 @@ const errorRows = async (places) =>
   (await db.pool.query('select to_jsonb(e) as row from app_errors e where place = any($1) order by place', [places])).rows
 const errorPlaces = async () => (await db.pool.query('select place from app_errors')).rows.map((r) => r.place).sort()
 const hashes = async (table, column) => (await db.pool.query(`select ${column} as name from ${table}`)).rows.map((r) => r.name).sort()
+/** One phone as JSON: its label and everything that it reported, with the other columns. */
+const phoneRow = async (id) => (await db.pool.query('select to_jsonb(d) as row from provider_devices d where id = $1', [id])).rows[0].row
 const labelsByName = async (devices) => {
   const { rows } = await db.pool.query('select id, label from provider_devices')
   const byId = Object.fromEntries(rows.map((r) => [r.id, r.label]))
@@ -231,12 +255,18 @@ describe('runRetention', () => {
     expect(await hashes('admin_sessions', 'token_hash')).toEqual([...SESSIONS_GONE, ...SESSIONS_KEPT].sort())
     expect(await hashes('auth_attempts', 'key')).toEqual([...ATTEMPTS_GONE, ...ATTEMPTS_KEPT].sort())
     expect(await errorPlaces()).toEqual([...ERRORS_GONE, ...ERRORS_KEPT].sort())
-    expect([SESSIONS_GONE.length, ATTEMPTS_GONE.length, LABELS_CLEARED.length, ERRORS_GONE.length]).toEqual([
+    expect([SESSIONS_GONE.length, ATTEMPTS_GONE.length, PHONES_CLEARED.length, ERRORS_GONE.length]).toEqual([
       COUNTS.sessions,
       COUNTS.loginAttempts,
       COUNTS.deviceLabels,
       COUNTS.appErrors,
     ])
+    // The phones of the fixture hold what the lists say (a fixture without a status would make the check below an empty one).
+    const phonesBefore = Object.fromEntries(before.provider_devices.map((d) => [d.id, d]))
+    for (const [name, id] of Object.entries(devices)) {
+      if (name === NOTHING_TO_CLEAR) expect(phonesBefore[id], name).toMatchObject(CLEARED)
+      else expect(phonesBefore[id], name).toMatchObject({ ...REPORTED, status_at: expect.any(String), oldest_waiting_at: expect.any(String), last_sync_at: expect.any(String) })
+    }
 
     expect(await runRetention()).toEqual(COUNTS)
 
@@ -252,16 +282,24 @@ describe('runRetention', () => {
     // well), and the others are the very same rows, also the one whose first event is old but whose last one is recent.
     expect(await errorPlaces()).toEqual([...ERRORS_KEPT].sort())
     expect(await errorRows(ERRORS_KEPT)).toEqual(keptErrors)
-    // Phones: every row is still there, only the two labels are empty. No other column changed, on any phone.
+    // Phones: every row is still there. A phone that is due has its label AND everything that it reported cleared, and no other
+    // column changed. A phone that is not due (an active one, one revoked 89 days ago) is the very same row, status included, and a
+    // due phone that holds nothing is the same row too.
     const labels = await labelsByName(devices)
     for (const name of LABELS_CLEARED) expect(labels[name], name).toBe('')
     for (const [name, label] of Object.entries(LABELS_KEPT)) expect(labels[name], name).toBe(label)
     expect(labels['revoked-91d-no-label']).toBe('')
     const after = await snapshot()
-    const withoutLabel = (state) =>
-      state.provider_devices.map((d) => Object.fromEntries(Object.entries(d).filter(([column]) => column !== 'label')))
-    expect(withoutLabel(after)).toEqual(withoutLabel(before))
+    const phonesAfter = Object.fromEntries(after.provider_devices.map((d) => [d.id, d]))
+    expect(Object.keys(phonesAfter).sort()).toEqual(Object.keys(phonesBefore).sort())
+    for (const [name, id] of Object.entries(devices)) {
+      expect(phonesAfter[id], name).toEqual(PHONES_CLEARED.includes(name) ? { ...phonesBefore[id], ...CLEARED } : phonesBefore[id])
+    }
     expect(after.provider_devices.filter((d) => d.label !== '').length).toBe(Object.keys(LABELS_KEPT).length)
+    // What is left of a reported status is on the phones that are not due, and nowhere else.
+    expect(after.provider_devices.filter((d) => d.app_build !== null).map((d) => d.id).sort()).toEqual(
+      [devices['revoked-89d'], devices.active].sort(),
+    )
     // Scans, committee members, providers, points, keys, settings: all of it, row for row.
     sameExceptWhatMayChange(before, after)
     expect(after.scans.length).toBeGreaterThanOrEqual(2)
@@ -281,7 +319,7 @@ describe('runRetention', () => {
       action: 'retention.run',
       entity: null,
       entity_id: null,
-      detail: { sessions: 3, login_attempts: 2, device_labels: 2, app_errors: 2 },
+      detail: { sessions: 3, login_attempts: 2, device_labels: 3, app_errors: 2 },
     })
   })
 
@@ -340,6 +378,42 @@ describe('runRetention', () => {
     expect(await errorPlaces()).toEqual(['busy-old-row', 'under-90d'])
     expect(await errorRows(['under-90d', 'busy-old-row'])).toEqual(keptBefore)
     expect((await runRetention()).appErrors).toBe(0)
+  })
+
+  it('never touches an active phone: its label and everything it reported stay, however old its last report is', async () => {
+    const { devices } = await seed()
+    await db.pool.query(
+      `update provider_devices set status_at = now() - interval '1000 days', oldest_waiting_at = now() - interval '1000 days',
+              last_sync_at = now() - interval '1000 days' where id = $1`,
+      [devices.active],
+    )
+    const activeBefore = await phoneRow(devices.active)
+    const notDueBefore = await phoneRow(devices['revoked-89d'])
+    expect(activeBefore).toMatchObject({ label: 'Fake Browser C', ...REPORTED })
+    expect(notDueBefore).toMatchObject({ label: 'Fake Browser B', ...REPORTED })
+    await runRetention()
+    expect(await phoneRow(devices.active)).toEqual(activeBefore)
+    expect(await phoneRow(devices['revoked-89d'])).toEqual(notDueBefore)
+  })
+
+  it('finds a due phone by any one thing that it reported, also when its label is empty, and counts it once', async () => {
+    const { devices } = await seed()
+    await runRetention() // clears what the fixture has that is due, so that only the phone below is left to find
+    const id = devices[NOTHING_TO_CLEAR]
+    expect(await phoneRow(id)).toMatchObject(CLEARED)
+    for (const set of [
+      `app_build = 'abcdef1'`,
+      'status_at = now()',
+      'waiting_count = 0',
+      'oldest_waiting_at = now()',
+      'last_sync_at = now()',
+      'not_accepted_total = 1',
+      'overflow_total = 1',
+    ]) {
+      await db.pool.query(`update provider_devices set ${set} where id = $1`, [id])
+      expect(await runRetention(), set).toEqual({ sessions: 0, loginAttempts: 0, deviceLabels: 1, appErrors: 0 })
+      expect(await phoneRow(id), set).toMatchObject(CLEARED)
+    }
   })
 
   it('is all or nothing: when its audit row cannot be written, no session, attempt or label is touched', async () => {
@@ -467,9 +541,9 @@ describe('GET /api/cron/retention', () => {
       log.mockRestore()
     }
     expect(res.status).toBe(200)
-    expect(res.json).toEqual({ ok: true, sessions: 3, login_attempts: 2, device_labels: 2, app_errors: 2 })
+    expect(res.json).toEqual({ ok: true, sessions: 3, login_attempts: 2, device_labels: 3, app_errors: 2 })
     expect(res.headers['cache-control']).toBe('no-store')
-    expect(logged).toEqual([['retention: sessions=3 login_attempts=2 device_labels=2 app_errors=2']])
+    expect(logged).toEqual([['retention: sessions=3 login_attempts=2 device_labels=3 app_errors=2']])
     // The job really ran: the due rows are gone, the labels are cleared, nothing else moved.
     expect(await hashes('admin_sessions', 'token_hash')).toEqual([...SESSIONS_KEPT].sort())
     expect(await hashes('auth_attempts', 'key')).toEqual([...ATTEMPTS_KEPT].sort())
@@ -477,6 +551,8 @@ describe('GET /api/cron/retention', () => {
     const labels = await labelsByName(devices)
     for (const name of LABELS_CLEARED) expect(labels[name], name).toBe('')
     for (const [name, label] of Object.entries(LABELS_KEPT)) expect(labels[name], name).toBe(label)
+    for (const name of PHONES_CLEARED) expect(await phoneRow(devices[name]), name).toMatchObject(CLEARED) // what they reported goes with the label
+    for (const name of Object.keys(LABELS_KEPT)) expect(await phoneRow(devices[name]), name).toMatchObject(REPORTED)
     sameExceptWhatMayChange(before, await snapshot())
     // Called again (Vercel Cron can deliver twice), it finds nothing more.
     const again = await get({ token: SECRET })

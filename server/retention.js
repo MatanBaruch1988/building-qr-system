@@ -5,8 +5,11 @@
 //   - deletes the committee sessions that expired, or were revoked, more than RETENTION_SESSION_DAYS ago,
 //   - deletes the login attempts older than RETENTION_LOGIN_ATTEMPT_DAYS,
 //   - clears the label of a phone (provider_devices.label, the browser string it sent at sign-in) when the phone was revoked
-//     more than RETENTION_DEVICE_LABEL_DAYS ago. The row stays (a scan keeps the id of the phone that made it, and the
-//     owner's decision is to clear the text, not the row): only the string that can identify a person's device goes.
+//     more than RETENTION_DEVICE_LABEL_DAYS ago, and in the same statement everything that the phone reported about itself
+//     (migration 010: the build, the time of the report, how many visits waited and since when, the two running totals, the time
+//     of the last upload). The row stays (a scan keeps the id of the phone that made it, and the owner's decision is to clear the
+//     text, not the row): only what can identify a person's device, or says what it did, goes. A phone with no label that still
+//     holds a status is cleared too, so a status never outlives the period because the label happened to be empty.
 //   - deletes the recorded errors (app_errors, safe fields only: server/errorLog.js) whose last event is older than
 //     RETENTION_APP_ERROR_DAYS,
 //   - writes one audit_log row (`retention.run`, actor `system`) that holds the four counts and nothing else.
@@ -25,8 +28,9 @@ import {
 } from './config.js'
 
 /**
- * Runs the job once and returns what it removed: `{ sessions, loginAttempts, deviceLabels, appErrors }` (numbers of rows).
- * The four statements and the audit row are one transaction, so the audit row says what really happened: all of it or none of it.
+ * Runs the job once and returns what it removed: `{ sessions, loginAttempts, deviceLabels, appErrors }` (numbers of rows;
+ * `deviceLabels` is the number of phones that were cleared, the label and the reported status together). The four statements
+ * and the audit row are one transaction, so the audit row says what really happened: all of it or none of it.
  * Each statement still has the 15 second limit of the app (server/db.js). A failure is thrown as it is and the router
  * answers 500 and logs only its code (server/router.js); nothing here logs an error or a row.
  */
@@ -41,9 +45,14 @@ export async function runRetention() {
     const attempts = await c.query('delete from auth_attempts where at < now() - make_interval(days => $1::int)', [
       RETENTION_LOGIN_ATTEMPT_DAYS,
     ])
+    // The `or` list is what is left to clear: a phone that was cleared matches none of it, so a second run finds nothing.
     const labels = await c.query(
-      `update provider_devices set label = ''
-        where revoked_at < now() - make_interval(days => $1::int) and label <> ''`,
+      `update provider_devices
+          set label = '', app_build = null, status_at = null, waiting_count = null, oldest_waiting_at = null,
+              last_sync_at = null, not_accepted_total = 0, overflow_total = 0
+        where revoked_at < now() - make_interval(days => $1::int)
+          and (label <> '' or app_build is not null or status_at is not null or waiting_count is not null
+               or oldest_waiting_at is not null or last_sync_at is not null or not_accepted_total <> 0 or overflow_total <> 0)`,
       [RETENTION_DEVICE_LABEL_DAYS],
     )
     // By the time of the last event, not the first: a row that still gets events is not old.

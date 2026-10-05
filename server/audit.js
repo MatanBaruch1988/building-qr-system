@@ -18,6 +18,43 @@
 // Slow or outside work (a password hash, a call to Google, the validation of the body) happens before the transaction, and
 // the reads that only build the answer happen after the commit, so the transaction holds its locks for as short a time as
 // it can.
+//
+// The detail of each action. `detail` is a JSON object, or null. Every id is a uuid as text, and an id in a detail is never the
+// only way to tell what happened: a name or an e-mail is there only where it was before this table was read by a screen
+// (docs/privacy.md). A change that changes nothing writes no row at all (the route still answers as it always did). An update
+// writes `changes`: one key for each field whose value really changed, each `{ from, to }` (null is an empty value), read inside
+// the transaction under the row's lock, so `from` is what the row held when the change was made. Only the changed fields are
+// there, and a field that holds a secret is never a key (changesOf refuses it): a password is `password_changed: true`.
+//
+//   action                    entity    entity_id   detail
+//   admin.add                 admin     member      { email }                                    a new member
+//   admin.enable              admin     member      { email, changes: { is_active } }            POST of the e-mail of a switched-off member
+//                                                   { changes: { is_active } }                   PATCH is_active: true
+//   admin.disable             admin     member      { changes: { is_active } }                   is_active goes from true to false
+//   admin.delete              admin     member      { email, name }                              what the member was
+//   building.update           building  (null)      { changes: { address } }
+//   point.create              point     point       { name, description?, service_type?, gps_mode?, lat?, lng?, radius_m?, is_active?,
+//                                                     provider_ids }   the fields that were sent, and the providers who may scan
+//                                                                      there (a list of ids: the real ones, never the demo account)
+//   point.update              point     point       { changes?: { name, description, service_type, gps_mode, lat, lng, radius_m,
+//                                                                 is_active }, provider_ids?: { added, removed } }
+//                                                   the coordinates are the point's own place, never a person's position;
+//                                                   provider_ids is there only when the list changed, and holds real ids (the demo
+//                                                   account is dropped before it is compared); one of the two keys is always there
+//   point.delete              point     point       { name, scans_kept }
+//   point.regenerate_qr       point     point       null                                         the code itself is never recorded
+//   provider.create           provider  provider    { company }
+//   provider.update           provider  provider    { changes?: { company, contact_name, service_type, is_active, is_demo },
+//                                                     password_changed?: true }                  one of the two keys is always there
+//   provider.delete           provider  provider    { company, contact_name, scans_kept }
+//   provider.revoke_devices   provider  provider    { devices }                                  how many phones were signed out (0 is possible)
+//   scan.void                 scan      scan        { reason }                                   the reason that was typed, or null
+//   scan.unvoid               scan      scan        { previous_reason }                          the reason that the restore cleared, or null
+//   scan.delete               scan      scan        { point_name, provider_name, checked_in_at, outcome, voided }
+//   api_key.create            api_key   key         { name }
+//   api_key.revoke            api_key   key         null
+//   api_key.delete            api_key   key         { name, key_prefix, was_revoked }
+//   retention.run             (null)    (null)      { sessions, login_attempts, device_labels }  counts only (the system actor)
 import pg from 'pg'
 import { AUDIT_ACTOR_NAME_MAX_LENGTH } from './config.js'
 
@@ -71,4 +108,41 @@ export async function audit(c, actor, action, { entity, entityId, detail } = {})
     'insert into audit_log (actor_type, actor_id, actor_name, action, entity, entity_id, detail) values ($1,$2,$3,$4,$5,$6,$7)',
     [actor.type, actor.id ?? null, actor.name ?? null, action, entity ?? null, entityId ?? null, detail ? JSON.stringify(detail) : null],
   )
+}
+
+// A key that names a secret never goes into `changes`, whatever the caller passes: a hash, a token, a password or a key.
+const SECRET_FIELD = /hash|token|password|secret|key/i
+
+/**
+ * What an update changed, for `detail.changes`: one `{ from, to }` for each field of `fields` (the validated values the route is
+ * about to write) whose value differs from the one in `before` (the row, read inside the transaction before the update). An
+ * empty object means the update changes nothing. A missing value and null are the same (`null`). Throws for a field that holds a
+ * secret, so that a hash can never be recorded by a mistake of a route: say `password_changed: true` instead.
+ * @param {Record<string, unknown>} before
+ * @param {Record<string, unknown>} fields
+ * @returns {Record<string, { from: unknown, to: unknown }>}
+ */
+export function changesOf(before, fields) {
+  /** @type {Record<string, { from: unknown, to: unknown }>} */
+  const changes = {}
+  for (const [key, value] of Object.entries(fields)) {
+    if (SECRET_FIELD.test(key)) throw new TypeError(`changesOf() never records the field ${key}: it holds a secret`)
+    const from = before[key] ?? null
+    const to = value ?? null
+    if (from !== to) changes[key] = { from, to }
+  }
+  return changes
+}
+
+/**
+ * What a list of ids gained and lost, sorted so that the entry does not depend on the order of a query.
+ * @param {string[]} before
+ * @param {string[]} after
+ * @returns {{ added: string[], removed: string[] }}
+ */
+export function idsChanged(before, after) {
+  return {
+    added: after.filter((id) => !before.includes(id)).sort(),
+    removed: before.filter((id) => !after.includes(id)).sort(),
+  }
 }
