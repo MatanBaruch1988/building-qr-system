@@ -21,6 +21,10 @@ A merge to `master` is the only way to reach production. Nobody runs a deploy, a
      environment is unknown, open the Vercel project settings, Environment Variables, and switch on "Automatically expose
      System Environment Variables".
    - `Deploy gate: skip (...)`: a Vercel preview or development build. It builds and touches no database.
+     Branches other than master are not deployed by themselves (`git.deploymentEnabled` in `vercel.json`: `"**": false,
+     "master": true`), so a pull request gets no automatic preview: the checks run in CI, and the daily deployment quota of
+     the Hobby plan stays for production. A preview of one branch can still be made on purpose from the Vercel dashboard
+     (Deployments, Create Deployment, the branch); it is a preview build and never migrates.
 6. If the script exits 0, Vercel promotes the deployment: production now serves the new code.
 
 The old deployment serves traffic during steps 2 to 6, which is why every migration must work for the old code and the new
