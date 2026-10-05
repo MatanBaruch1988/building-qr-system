@@ -7,11 +7,12 @@
 // and `to` (a building day, or an ISO time with a zone), the same page size, the same 400 codes (`invalid_filter` with
 // `field`, `invalid_cursor`). Newest first, `at desc, id desc`, which is the order of the index audit_log_at_idx, and a
 // filter on one thing (`entity` with `entity_id`) is what audit_log_entity_idx is for (db/migrations/007). The page is cut
-// from the log first and joined with `admins` after that, so the join costs a few rows, not the table.
+// from the log first and joined with the names (`admins`, and the point, provider, member or key that the entry is about)
+// after that, so the joins cost a few rows, not the table.
 import { route } from '../router.js'
 import { query } from '../db.js'
 import { bad, isUuid } from '../http.js'
-import { pageLimit, parseBound } from '../scans.js'
+import { pageLimit, parseBound, providerSnapshotName } from '../scans.js'
 import { TIMEZONE, FILTER_TEXT_MAX_LENGTH, MAX_AUDIT_PAGE_SIZE } from '../config.js'
 
 /** @import { AuditEntry, AuditPage } from '../../shared/types.js' */
@@ -103,9 +104,24 @@ export function auditQuery(q = {}) {
 
   // The `admins` row is only for the name of a member who was on the committee when the row was written. The snapshot of
   // the name on the row wins (it is what the member was called then, and it outlives the member); the current name or
-  // e-mail is the fallback of an older row. A system actor (the daily job) has neither. Nothing else of `admins` is read.
+  // e-mail is the fallback of an older row. A system actor (the daily job) has neither.
+  //
+  // The name of what the entry is about (`entity_name`) is the CURRENT name of that row, found by `entity_id` (text on the log,
+  // a uuid in the four tables, so the join compares text; an entity_id that is not an id matches nothing and cannot fail). Only
+  // the four kinds that the committee app names are looked up, each join is for its own `entity`, and a thing that is gone, or
+  // any other entity, has no name here (the screen then falls back to the names that the details of a delete hold). A provider
+  // is named as the committee's history names one (providerSnapshotName), so the company and the contact are read apart.
+  // Nothing else of these five tables is read: the name, the company, the contact name and the e-mail of a member.
   const sql = `
-    select l.id, l.at, l.at_exact, l.action, l.entity, l.entity_id, l.actor_type, l.actor_id,
+    select l.id, l.at, l.at_exact, l.action, l.entity, l.entity_id,
+           case l.entity
+             when 'point' then ep.name
+             when 'provider' then ev.company
+             when 'admin' then coalesce(nullif(ea.name, ''), ea.email)
+             when 'api_key' then ek.name
+           end as entity_name,
+           case when l.entity = 'provider' then ev.contact_name end as entity_contact,
+           l.actor_type, l.actor_id,
            coalesce(nullif(l.actor_name, ''), case when l.actor_type = 'admin' then coalesce(nullif(a.name, ''), a.email) end) as actor_name,
            (l.actor_type = 'admin' and l.actor_id is not null and a.id is null) as actor_deleted,
            l.detail
@@ -115,8 +131,18 @@ export function auditQuery(q = {}) {
              order by at desc, id desc
              limit ${limit + 1}) l
       left join admins a on l.actor_type = 'admin' and a.id::text = l.actor_id
+      left join points ep on l.entity = 'point' and ep.id::text = l.entity_id
+      left join providers ev on l.entity = 'provider' and ev.id::text = l.entity_id
+      left join admins ea on l.entity = 'admin' and ea.id::text = l.entity_id
+      left join api_keys ek on l.entity = 'api_key' and ek.id::text = l.entity_id
      order by l.at desc, l.id desc`
   return { sql, params, limit }
+}
+
+/** The current name of the thing that an entry is about, or null (it is gone, or it is not a thing that has a name here). */
+const entityName = (r) => {
+  if (r.entity_name === null || r.entity_name === undefined) return null
+  return r.entity === 'provider' ? providerSnapshotName({ company: r.entity_name, contact_name: r.entity_contact }) : r.entity_name
 }
 
 /**
@@ -132,6 +158,7 @@ function auditEntry(r) {
     action: r.action,
     entity: r.entity,
     entity_id: r.entity_id,
+    entity_name: entityName(r),
     actor_type: r.actor_type,
     actor_id: r.actor_id,
     actor_name: r.actor_name ?? null,

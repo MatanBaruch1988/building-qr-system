@@ -118,13 +118,17 @@
 
 /**
  * One entry of the audit log, as the committee reads it (GET /api/admin/audit, auditEntry in server/routes/audit.js). It is
- * the row of `audit_log` and the name of the member, nothing else: no session, no token. The agent API never has it.
+ * the row of `audit_log`, the name of the member and the current name of what the entry is about, nothing else: no session, no
+ * token. The agent API never has it.
  * @typedef {object} AuditEntry
  * @property {number} id  the row's number, which orders two entries with the same `at` (a number, like the id of a refused visit)
  * @property {string} at  ISO 8601, UTC
  * @property {string} action  `<group>.<what>`, for example `point.update` or `api_key.revoke`
  * @property {string | null} entity  what the action was about (`point`, `provider`, `scan`, ...); null for `retention.run`
  * @property {string | null} entity_id  null when the entity is one thing (`building`) or there is none
+ * @property {string | null} entity_name  the CURRENT name of the thing that the entry is about, found by `entity_id`: the point's name, a
+ *   provider's company (and contact, `Company - Contact`, as the history names a provider), a member's name or e-mail, a key's name.
+ *   null for any other entity, and when that row no longer exists (a delete: the names in its `detail` are what is left)
  * @property {string} actor_type  `admin` (a committee member), `system` (the daily job) or `script` (a command run on the owner's machine)
  * @property {string | null} actor_id  the member's id; null for `system`; whatever the writer gave for `script`
  * @property {string | null} actor_name  the name as it was at the time of the action (their e-mail when they had no name), else the

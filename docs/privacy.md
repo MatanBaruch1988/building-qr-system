@@ -31,7 +31,8 @@ that is not yet past its period is left as it is.
   list: the providers, the scans and their history (also as a CSV file), the points and the agent keys. The visits that the
   server refused can be read through the committee's own API (`GET /api/admin/scan-refusals`); the committee app has no
   screen for them yet. A member can also read the audit log, every entry with its details (who did what and when, and the
-  names, e-mail addresses and reasons that the details hold), through the committee's own endpoint
+  names, e-mail addresses and reasons that the details hold, and the current name of the point, provider, member or agent
+  key that an entry is about, taken from the committee's own lists), through the committee's own endpoint
   (`GET /api/admin/audit`, the same sign-in), and a read-only screen in the committee app will show the same entries. The
   committee app does not show the label of a phone, the sessions or the login attempts.
 - **The committee's own AI agent**, through the read-only agent API (`docs/agent-api.md`), with a key that the committee

@@ -13,13 +13,14 @@ import { randomUUID } from 'node:crypto'
 import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
 import '../server/index.js' // importing it registers every route file with the router
 import { routeTable } from '../server/router.js'
+import { providerSnapshotName } from '../server/scans.js'
 import { tx } from '../server/db.js'
 import { auditQuery, AUDIT_GROUPS, AUDIT_FILTERS } from '../server/routes/audit.js'
 import { schemaDoc } from '../server/schemaDoc.js'
 import { API_KEY_PREFIX, DEFAULT_PAGE_SIZE, MAX_AUDIT_PAGE_SIZE } from '../server/config.js'
 
 let db, cookie, adminId, secondId, noNameId, goneId
-const ids = {} // the ids of the things that the real actions are about (a point, a provider)
+const ids = {} // the ids of the things that the real actions are about (a point, a provider), and of the live ones
 const idOf = {} // label -> the row's number, as the API writes it (text)
 const labelOf = {} // the other way round
 
@@ -167,7 +168,39 @@ beforeAll(async () => {
     actor('actor-system-with-id', { actor_type: 'system', actor_id: adminId, actor_name: null }),
   ]
 
+  // 6) What an entry is about: things that exist now (with a name that is not the one in any detail), things that are gone,
+  //    and entities that have no name here. The rows of the other datasets are about ids that exist nowhere.
+  const live = { point: randomUUID(), provider: randomUUID(), providerAlone: randomUUID(), key: randomUUID() }
+  Object.assign(ids, { live })
+  await db.pool.query("insert into points (id, name, qr_token) values ($1, 'Current lobby', 'fake-qr-live')", [live.point])
+  await db.pool.query("insert into providers (id, company, contact_name) values ($1, 'Fake Cleaning Ltd', 'Fake Person')", [live.provider])
+  await db.pool.query("insert into providers (id, company, contact_name) values ($1, 'Fake Gardens Ltd', '')", [live.providerAlone])
+  await db.pool.query("insert into api_keys (id, name, key_prefix, key_hash) values ($1, 'Current agent', 'fake', 'fake-hash-live')", [live.key])
+  const about = (label, entity, entity_id) => ({
+    label, ...second, at: minutes('2026-07-01T08:00:00Z', 0), action: 'test.name', entity, entity_id, detail: { old_name: 'Name in the detail' },
+  })
+  const names = [
+    about('name-point-live', 'point', live.point),
+    about('name-point-gone', 'point', randomUUID()),
+    about('name-point-not-an-id', 'point', 'not-a-uuid'),
+    about('name-provider-live', 'provider', live.provider),
+    about('name-provider-no-contact', 'provider', live.providerAlone),
+    about('name-provider-gone', 'provider', randomUUID()),
+    about('name-admin-named', 'admin', secondId),
+    about('name-admin-no-name', 'admin', noNameId),
+    about('name-admin-gone', 'admin', goneId),
+    about('name-key-live', 'api_key', live.key),
+    about('name-key-gone', 'api_key', randomUUID()),
+    // No name here, even when the id is the id of a live point, a live provider or a live member.
+    about('name-scan', 'scan', live.point),
+    about('name-widget', 'widget', live.provider),
+    about('name-building', 'building', null),
+    about('name-no-entity', null, null),
+    about('name-wrong-entity', 'provider', live.point), // a point's id under the entity provider: no provider has it
+  ]
+
   await addRows([...tie, ...micro, ...border, ...real, retention, trap])
+  await addRows(names.map((row, i) => ({ ...row, at: minutes('2026-07-01T08:00:00Z', i) })))
   await addRows(named.map((row, i) => ({ ...row, at: minutes('2026-06-01T08:00:00Z', i) })))
   await db.pool.query('delete from admins where id = $1', [goneId]) // after its rows were written
 })
@@ -319,8 +352,11 @@ describe('the filters', () => {
 
   it('never puts the text of a group into the SQL: it is a parameter, and only from the list', () => {
     const { sql, params } = auditQuery({ group: 'point' })
-    expect(sql).not.toContain('point')
+    // The text of the statement is the same for every group: the group is only in the parameter.
+    for (const group of AUDIT_GROUPS) expect(auditQuery({ group }).sql, group).toBe(sql)
+    expect(sql).toContain('starts_with(action, $1)')
     expect(params).toEqual(['point.'])
+    expect(auditQuery({ group: 'api_key' }).params).toEqual(['api_key.'])
     expect(() => auditQuery({ group: "point' or '1'='1" })).toThrow(/group must be one of/)
   })
 
@@ -341,10 +377,10 @@ describe('the filters', () => {
     const provider = await get(`entity=provider&entity_id=${ids.V1}`)
     expect(labels(provider.json.entries)).toEqual(['provider.delete', 'provider.revoke_devices', 'provider.update', 'provider.create'])
     // entity alone is every row about points; entity_id alone is every row about that id.
-    expect(labels((await get('entity=point')).json.entries)).toHaveLength(5)
+    expect(labels((await get('group=point&entity=point')).json.entries)).toHaveLength(5)
     expect(labels((await get(`entity_id=${ids.P1}`)).json.entries)).toEqual(labels(point.json.entries))
     // The entity of the building row, and an entity that has no rows.
-    expect(labels((await get('entity=building')).json.entries)).toEqual(['building.update'])
+    expect(labels((await get('group=building&entity=building')).json.entries)).toEqual(['building.update'])
     expect((await get('entity=nothing')).json.entries).toEqual([])
   })
 
@@ -470,7 +506,7 @@ describe('the name of the actor', () => {
   it('has no name for the system actor (the daily job), which is not a deleted member', async () => {
     const r = (await get('group=retention')).json.entries
     expect(r).toHaveLength(1)
-    expect(r[0]).toMatchObject({ action: 'retention.run', actor_type: 'system', actor_id: null, actor_name: null, actor_deleted: false, entity: null, entity_id: null })
+    expect(r[0]).toMatchObject({ action: 'retention.run', actor_type: 'system', actor_id: null, actor_name: null, actor_deleted: false, entity: null, entity_id: null, entity_name: null })
     expect(r[0].detail).toEqual({ sessions: 0, login_attempts: 3, device_labels: 0 })
     expect(await byLabel('actor-system')).toMatchObject({ actor_type: 'system', actor_name: null, actor_deleted: false })
   })
@@ -494,8 +530,80 @@ describe('the name of the actor', () => {
   })
 })
 
+describe('the name of what an entry is about (entity_name)', () => {
+  // The rows of the names dataset, by label.
+  const byLabel = async () => {
+    const all = (await get('limit=200')).json.entries
+    return Object.fromEntries(all.filter((e) => e.action === 'test.name').map((e) => [labelOf[e.id], e]))
+  }
+
+  it('is the current name of a live point, and not the name in the detail', async () => {
+    const e = (await byLabel())['name-point-live']
+    expect(e).toMatchObject({ entity: 'point', entity_id: ids.live.point, entity_name: 'Current lobby' })
+    expect(e.detail).toEqual({ old_name: 'Name in the detail' })
+  })
+
+  it('is the company and the contact of a live provider, as the history names a provider, or the company alone', async () => {
+    const rows = await byLabel()
+    expect(rows['name-provider-live'].entity_name).toBe(providerSnapshotName({ company: 'Fake Cleaning Ltd', contact_name: 'Fake Person' }))
+    expect(rows['name-provider-live'].entity_name).toContain('Fake Cleaning Ltd')
+    expect(rows['name-provider-live'].entity_name).toContain('Fake Person')
+    expect(rows['name-provider-no-contact'].entity_name).toBe('Fake Gardens Ltd')
+  })
+
+  it('is the name of a live member, else the e-mail, and the name of a live agent key', async () => {
+    const rows = await byLabel()
+    expect(rows['name-admin-named'].entity_name).toBe('Second Member')
+    expect(rows['name-admin-no-name'].entity_name).toBe('noname@test.local')
+    expect(rows['name-key-live'].entity_name).toBe('Current agent')
+  })
+
+  it('is null when the thing is gone: a point, a provider, a member and a key that no longer exist', async () => {
+    const rows = await byLabel()
+    for (const label of ['name-point-gone', 'name-provider-gone', 'name-admin-gone', 'name-key-gone']) {
+      expect(rows[label].entity_name, label).toBeNull()
+      expect(rows[label].detail, label).toEqual({ old_name: 'Name in the detail' }) // what the screen falls back to
+    }
+    expect((await db.pool.query('select 1 from admins where id = $1', [goneId])).rows).toEqual([])
+  })
+
+  it('is null for an entity that has no name here, even when its id is the id of a live thing', async () => {
+    const rows = await byLabel()
+    for (const label of ['name-scan', 'name-widget', 'name-building', 'name-no-entity']) expect(rows[label].entity_name, label).toBeNull()
+    // The id of a point under the entity "provider" finds no provider (each join is for its own entity).
+    expect(rows['name-wrong-entity'].entity_name).toBeNull()
+  })
+
+  it('is null, and does not fail, for an entity_id that is not an id', async () => {
+    const rows = await byLabel()
+    expect(rows['name-point-not-an-id']).toMatchObject({ entity: 'point', entity_id: 'not-a-uuid', entity_name: null })
+  })
+
+  it('is null for the daily job (retention.run has no entity) and for the rows of ids that exist nowhere', async () => {
+    const r = (await get('group=retention')).json.entries
+    expect(r[0]).toMatchObject({ action: 'retention.run', entity: null, entity_id: null, entity_name: null })
+    const rows = (await walk('', 100)).entries
+    // The other datasets are about things that were never in the tables: no name is made up for them.
+    for (const e of rows.filter((x) => x.action !== 'test.name')) expect(e.entity_name, e.action + ' ' + e.entity).toBeNull()
+  })
+
+  it('follows a rename of the live thing at once (it is the current name, not a copy)', async () => {
+    await db.pool.query("update points set name = 'Renamed lobby' where id = $1", [ids.live.point])
+    try {
+      expect((await byLabel())['name-point-live'].entity_name).toBe('Renamed lobby')
+    } finally {
+      await db.pool.query("update points set name = 'Current lobby' where id = $1", [ids.live.point])
+    }
+  })
+
+  it('reads only the name: nothing else of a point, a provider or a key is in the answer', async () => {
+    const text = JSON.stringify(await byLabel())
+    for (const secret of ['fake-qr-live', 'fake-hash-live', 'qr_token', 'key_hash', 'service_type', 'is_demo']) expect(text).not.toContain(secret)
+  })
+})
+
 describe('privacy: what an entry holds', () => {
-  const FIELDS = ['action', 'actor_deleted', 'actor_id', 'actor_name', 'actor_type', 'at', 'detail', 'entity', 'entity_id', 'id']
+  const FIELDS = ['action', 'actor_deleted', 'actor_id', 'actor_name', 'actor_type', 'at', 'detail', 'entity', 'entity_id', 'entity_name', 'id']
 
   it('has exactly the listed fields, on every row of the log, and nothing from the admins row or a session', async () => {
     const all = await walk('', 40)
@@ -515,6 +623,7 @@ describe('privacy: what an entry holds', () => {
       expect(typeof e.at).toBe('string')
       expect(typeof e.action).toBe('string')
       expect(['string', 'object']).toContain(typeof e.entity) // text or null
+      expect(['string', 'object']).toContain(typeof e.entity_name) // text or null
       expect(typeof e.actor_deleted).toBe('boolean')
       expect(['admin', 'system', 'script']).toContain(e.actor_type)
     }
