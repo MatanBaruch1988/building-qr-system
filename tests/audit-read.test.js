@@ -118,21 +118,21 @@ beforeAll(async () => {
   const P1 = randomUUID(), P2 = randomUUID(), V1 = randomUUID(), S1 = randomUUID(), K1 = randomUUID(), A1 = randomUUID()
   const real = [
     ['admin.add', 'admin', A1, { email: 'new@test.local' }],
-    ['admin.enable', 'admin', A1, null],
-    ['admin.disable', 'admin', A1, null],
+    ['admin.enable', 'admin', A1, { changes: { is_active: { from: false, to: true } } }],
+    ['admin.disable', 'admin', A1, { changes: { is_active: { from: true, to: false } } }],
     ['admin.delete', 'admin', A1, { email: 'new@test.local', name: 'New Member' }],
-    ['building.update', 'building', null, { address: 'Fake street 1' }],
-    ['point.create', 'point', P1, { name: 'Fake lobby', gps_mode: 'optional', lat: 31.5, lng: 34.8 }],
-    ['point.update', 'point', P1, { name: 'Fake lobby 2', provider_ids: [V1] }, 'point.update P1'],
+    ['building.update', 'building', null, { changes: { address: { from: null, to: 'Fake street 1' } } }],
+    ['point.create', 'point', P1, { name: 'Fake lobby', gps_mode: 'optional', lat: 31.5, lng: 34.8, provider_ids: [] }],
+    ['point.update', 'point', P1, { changes: { name: { from: 'Fake lobby', to: 'Fake lobby 2' } }, provider_ids: { added: [V1], removed: [] } }, 'point.update P1'],
     ['point.regenerate_qr', 'point', P1, null],
-    ['point.update', 'point', P2, { is_active: false }, 'point.update P2'],
+    ['point.update', 'point', P2, { changes: { is_active: { from: true, to: false } } }, 'point.update P2'],
     ['point.delete', 'point', P2, { name: 'Fake roof', scans_kept: 2 }],
     ['provider.create', 'provider', V1, { company: 'Fake Cleaning Ltd' }],
-    ['provider.update', 'provider', V1, { contact_name: 'Fake Person', password_changed: true }],
+    ['provider.update', 'provider', V1, { changes: { contact_name: { from: null, to: 'Fake Person' } }, password_changed: true }],
     ['provider.revoke_devices', 'provider', V1, { devices: 1 }],
     ['provider.delete', 'provider', V1, { company: 'Fake Cleaning Ltd', contact_name: 'Fake Person', scans_kept: 3 }],
     ['scan.void', 'scan', S1, { reason: 'a fake reason' }],
-    ['scan.unvoid', 'scan', S1, { reason: null }],
+    ['scan.unvoid', 'scan', S1, { previous_reason: 'a fake reason' }],
     ['scan.delete', 'scan', S1, { point_name: 'Fake lobby', provider_name: 'Fake Cleaning Ltd', checked_in_at: '2026-04-30T07:00:00.000Z', outcome: 'accepted', voided: false }],
     ['api_key.create', 'api_key', K1, { name: 'Fake agent' }],
     ['api_key.revoke', 'api_key', K1, null],
@@ -634,10 +634,14 @@ describe('privacy: what an entry holds', () => {
     const all = await walk('', 100)
     for (const e of all.entries) expect(e.detail, e.action).toEqual(stored.get(String(e.id)))
     const find = (label) => all.entries.find((e) => String(e.id) === idOf[label])
-    expect(find('point.update P1').detail).toEqual({ name: 'Fake lobby 2', provider_ids: [ids.V1] })
+    expect(find('point.update P1').detail).toEqual({
+      changes: { name: { from: 'Fake lobby', to: 'Fake lobby 2' } },
+      provider_ids: { added: [ids.V1], removed: [] },
+    })
     expect(find('scan.void').detail).toEqual({ reason: 'a fake reason' })
-    expect(find('building.update').detail).toEqual({ address: 'Fake street 1' })
-    expect(find('admin.enable').detail).toBeNull()
+    expect(find('building.update').detail).toEqual({ changes: { address: { from: null, to: 'Fake street 1' } } })
+    expect(find('admin.enable').detail).toEqual({ changes: { is_active: { from: false, to: true } } })
+    expect(find('point.regenerate_qr').detail).toBeNull()
     expect(find('api_key.create').detail).toEqual({ name: 'Fake agent' })
   })
 
