@@ -7,7 +7,8 @@ import { getFix } from '../worker/geo.js'
 import { performCheckIn, withScanContext } from '../worker/checkIn.js'
 import { uuid } from '../worker/uuid.js'
 import { SCAN_ERROR_POINT_INACTIVE } from '../../shared/contract.js'
-import { useProviders, useBuildingAddress, usePoint, useTodayVisits, useQueueSync, useDeviceStatus } from '../worker/hooks.js'
+import { useProviders, useBuildingAddress, usePoint, useTodayVisits, useQueueSync, useDeviceStatus, useErrorReport } from '../worker/hooks.js'
+import { noteClientError, setPlace, currentPlace } from '../ui/errorReport.js'
 import { TopBar, LoginView, HomeView, WorkingView, ResultView } from '../worker/components.jsx'
 import '../ui/ui.css'
 
@@ -58,7 +59,23 @@ function WorkerShell({ session, setSession }) {
   const [refreshKey, setRefreshKey] = useState(0)
   const startedFor = useRef(null)
 
-  const handleSignedOut = useCallback(() => {
+  // Which screen is drawn. It is decided here once, before anything below that can fail (a hook that reads the server's answer
+  // breaks a render), and told to src/ui/errorReport.js so that a crash is put on the right screen (`provider:home`, ...). A scanned
+  // code that is being looked up shows the working screen with its "loading" step, so it is the same screen.
+  const resolving = session && code && pointState.status === 'loading' && view === 'home'
+  const screen = !session ? 'login' : view === 'working' || resolving ? 'working' : view === 'result' && result ? 'result' : 'home'
+  setPlace(`provider:${screen}`)
+
+  // A session that the server ended (a 401 on a call made with the stored or the new session) comes here, whichever call met it,
+  // with the code that the server answered. This is where it is noted for the report (src/ui/errorReport.js): a sign-out that the
+  // person chose is `switchWorker`, which is not. Calls that find the session gone together note it once.
+  const signedIn = useRef(session)
+  signedIn.current = session
+  const handleSignedOut = useCallback((code = 'invalid_session') => {
+    if (signedIn.current) {
+      signedIn.current = null
+      noteClientError({ kind: 'signed_out', place: currentPlace(), code })
+    }
     clearSession()
     setSession(null)
     setView('home')
@@ -73,6 +90,8 @@ function WorkerShell({ session, setSession }) {
   // nothing to see on the screen.
   const [confirmedToken, setConfirmedToken] = useState(null)
   const reportStatus = useDeviceStatus({ session, queue, confirmedToken, onSignedOut: handleSignedOut })
+  // What went wrong on the phone (a crash, an error that nothing caught, a forced sign-out) goes to the server at the same moments.
+  useErrorReport({ session, confirmedToken, onSignedOut: handleSignedOut, liveSession: () => signedIn.current })
 
   const sync = useQueueSync({
     session,
@@ -107,7 +126,7 @@ function WorkerShell({ session, setSession }) {
         if (!isProvider(res?.provider)) return
         setSession((s) => (s && s.token === token ? { ...s, provider: res.provider } : s))
       })
-      .catch((err) => err.status === 401 && handleSignedOut())
+      .catch((err) => err.status === 401 && handleSignedOut(err.code))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- check the stored session once, at app start: a later `session` is a new sign-in, and `handleSignedOut` changes with the language
   }, [])
   // (A slow answer that arrives after "Switch person" and a new sign-in must not touch the new session:
@@ -124,7 +143,7 @@ function WorkerShell({ session, setSession }) {
       setWorkingPhase('locating')
       setView('working')
       const r = await performCheckIn({ code: theCode, point, session, deps, onPhase: setWorkingPhase })
-      if (r.kind === 'signedOut') return handleSignedOut()
+      if (r.kind === 'signedOut') return handleSignedOut(r.code)
       // There is an answer now: the code is spent. (Kept in the result for the retry button.) Clearing it here
       // also stops a later sign-out + sign-in from firing the same check-in a second time.
       stripCodeFromUrl()
@@ -193,21 +212,17 @@ function WorkerShell({ session, setSession }) {
     setView('home')
   }
 
-  // A scanned code is being looked up: show progress instead of the idle "scan a QR" screen.
-  const resolving = session && code && pointState.status === 'loading' && view === 'home'
-
   return (
     <div className="w-app">
       <div className="w-shell">
         <TopBar address={address} />
         <main style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          {!session ? (
+          {screen === 'login' ? (
             <LoginScreen pointName={pointState.point?.name} notice={loginNotice} onSignedIn={onSignedIn} />
-          ) : view === 'working' ? (
-            <WorkingView phase={workingPhase} />
-          ) : resolving ? (
-            <WorkingView phase="loading" />
-          ) : view === 'result' && result ? (
+          ) : screen === 'working' ? (
+            // a scanned code that is being looked up shows progress instead of the idle "scan a QR" screen
+            <WorkingView phase={view === 'working' ? workingPhase : 'loading'} />
+          ) : screen === 'result' ? (
             <ResultView
               result={result}
               pointName={result.point?.name}

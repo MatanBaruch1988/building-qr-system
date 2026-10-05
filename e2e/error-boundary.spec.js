@@ -8,7 +8,7 @@
 // answer and a stored session without provider details is removed when it is read, see e2e/provider.spec.js. A screen of the
 // provider app that still breaks on a shape it cannot draw is the list of today's visits, so the tests route that one. If
 // the app is made to tolerate that answer too, this test needs the next real way to break a screen, not a hook in the app.)
-import { test, expect, he, en, PEOPLE, adminSignIn, signIn, allowConsoleErrors } from './fixtures.js'
+import { test, expect, he, en, PEOPLE, adminSignIn, signIn, allowConsoleErrors, isErrorReport, expectErrorReport } from './fixtures.js'
 
 // The service worker is not what is tested here, and a page that it controls can send a request round the test's route.
 test.use({ serviceWorkers: 'block' })
@@ -19,6 +19,11 @@ const HOME_HE = /^שלום,/
 const HOME_EN = /^Hello,/
 const VISITS_LIST = '**/api/my/scans'
 const ADMIN_ME = '**/api/admin/me'
+// A crash is also noted on the device and reported once somebody is signed in (src/ui/errorReport.js): the same crashes, seen from the server's side.
+const MY_ERRORS = '/api/my/errors'
+const ADMIN_ERRORS = '/api/admin/client-errors'
+const OUTBOX = 'qr.errors.v1'
+const outboxOf = (page) => page.evaluate((key) => localStorage.getItem(key), OUTBOX)
 
 /** The lines that the app logs for a crash. The page's console guard fails the test on anything else. */
 function watchCrashLines(page) {
@@ -62,19 +67,28 @@ test('a broken screen of the provider app shows a message and two ways back, and
 
   // Try again: once the cause is gone the app is back, with the person still signed in.
   await page.unroute(VISITS_LIST)
+  const firstReport = page.waitForRequest(isErrorReport(MY_ERRORS))
   await tryAgain.click()
   await expect(page.getByRole('heading', { name: HOME_HE })).toContainText(PEOPLE.ploni.name)
   await expect(heading).toHaveCount(0)
+  // The crash that was noted on the phone goes to the server now that the app runs again: the screen, the error's name, the build and a
+  // count, and not a word of the message. The server took it, so the phone has nothing left to send.
+  await expectErrorReport(await firstReport, [{ kind: 'crash', place: 'provider:home', name: 'TypeError' }])
+  await expect.poll(() => outboxOf(page)).toBeNull()
 
   // Reload the app: the same, by loading the page again.
   await breakVisitsList(page)
   await page.reload()
   await expect(heading).toBeVisible()
   await page.unroute(VISITS_LIST)
+  const secondReport = page.waitForRequest(isErrorReport(MY_ERRORS))
   await reload.click()
   await expect(page.getByRole('heading', { name: HOME_HE })).toContainText(PEOPLE.ploni.name)
+  await expectErrorReport(await secondReport, [{ kind: 'crash', place: 'provider:home', name: 'TypeError' }]) // a count of 1: the first one was sent and removed
+  await expect.poll(() => outboxOf(page)).toBeNull()
 
-  // One line per crash, with the error's name and nothing the person or the server said.
+  // One line per crash, with the error's name and nothing the person or the server said. (Sending the reports logged nothing: the page's
+  // console guard fails this test on any other console error.)
   expect(crashes).toEqual(['Screen crash (provider app): TypeError', 'Screen crash (provider app): TypeError'])
 })
 
@@ -125,8 +139,12 @@ test('a broken screen of the committee app is Hebrew, on a phone and on a comput
   expect(await fitsTheWidth(page)).toBe(true)
 
   await page.unroute(ADMIN_ME)
+  const report = page.waitForRequest(isErrorReport(ADMIN_ERRORS))
   await tryAgain.click()
   await expect(page.getByRole('heading', { name: 'נקודות סריקה' })).toBeVisible()
   await expect(heading).toHaveCount(0)
+  // The committee app sends the crash with its cookie, through its own API client: the tab that was open, the name of the error, no message.
+  await expectErrorReport(await report, [{ kind: 'crash', place: 'committee:points', name: 'Error' }])
+  await expect.poll(() => outboxOf(page)).toBeNull()
   expect(crashes).toEqual(['Screen crash (committee app): Error'])
 })
