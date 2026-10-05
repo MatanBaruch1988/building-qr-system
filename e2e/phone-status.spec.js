@@ -23,6 +23,14 @@ async function phonesOf(request, contactName) {
   return (await answer.json()).devices
 }
 
+/**
+ * The ids of the phones that the provider has before this test signs in. Phones of earlier tests (and of the other project, which
+ * runs against the same server) stay signed in, so a test looks only at the phone that it signs in itself.
+ */
+async function phonesBefore(request, contactName) {
+  return new Set((await phonesOf(request, contactName)).map((phone) => phone.id))
+}
+
 /** What the browser does when the app comes back to the foreground. */
 const comeBackToTheApp = (page) => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
 
@@ -36,6 +44,8 @@ test('a visit that waits on the phone shows on the committee\'s list of phones, 
 
   const login = await request.post('/api/admin/dev-login', { data: { email: ADMIN_EMAIL } })
   expect(login.ok(), 'dev admin sign-in').toBeTruthy()
+  const before = await phonesBefore(request, PEOPLE.ploni.name)
+  const newPhones = async () => (await phonesOf(request, PEOPLE.ploni.name)).filter((phone) => !before.has(phone.id))
 
   // a check-in with the server down is kept on the phone
   await page.goto(`/scan?code=${POINTS.basement}`)
@@ -45,7 +55,7 @@ test('a visit that waits on the phone shows on the committee\'s list of phones, 
 
   // the app comes back to the foreground: the upload fails again, and the phone says what is waiting
   await comeBackToTheApp(page)
-  const waiting = () => phonesOf(request, PEOPLE.ploni.name).then((phones) => phones.find((phone) => phone.waiting_count === 1))
+  const waiting = () => newPhones().then((phones) => phones.find((phone) => phone.waiting_count === 1))
   await expect.poll(waiting, { timeout: 45_000, intervals: [500, 1000, 2000] }).toBeTruthy()
 
   const phone = await waiting()
@@ -83,13 +93,15 @@ test('a visit that the server refuses for good is dropped by the phone and count
   })
   const login = await request.post('/api/admin/dev-login', { data: { email: ADMIN_EMAIL } })
   expect(login.ok(), 'dev admin sign-in').toBeTruthy()
+  const before = await phonesBefore(request, PEOPLE.ploni.name)
+  const newPhones = async () => (await phonesOf(request, PEOPLE.ploni.name)).filter((phone) => !before.has(phone.id))
 
   await page.goto(`/scan?code=${POINTS.basement}`)
   await signIn(page, PEOPLE.ploni)
   await expect(page.getByRole('heading', { name: he['checkin.queued.title'] })).toBeVisible()
 
   await comeBackToTheApp(page) // the upload runs, the visit is refused for good and dropped
-  const counted = () => phonesOf(request, PEOPLE.ploni.name).then((phones) => phones.find((phone) => phone.not_accepted_total === 1))
+  const counted = () => newPhones().then((phones) => phones.find((phone) => phone.not_accepted_total === 1))
   await expect.poll(counted, { timeout: 45_000, intervals: [500, 1000, 2000] }).toBeTruthy()
   expect(await counted()).toMatchObject({ waiting_count: 0, oldest_waiting_at: null, not_accepted_total: 1, overflow_total: 0 })
   expect(await page.evaluate(() => localStorage.getItem('qr.queue.v1'))).toBe('[]') // dropped from the phone, for good
