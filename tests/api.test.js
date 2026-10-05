@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
 import { SAMPLE_POINT, SAMPLE_PROVIDER_NAMES } from '../scripts/sample-data.mjs'
+import { isoDay } from '../shared/datetime.js'
 
 let db, cookie
 const ids = {} // created ids shared across tests
@@ -481,7 +482,9 @@ describe('agent API', () => {
     expect(byPoint.every((s) => s.point_id === ids.gym)).toBe(true)
     const byFlag = (await call('GET', '/api/agent/v1/scans?flag=location_unverified', { token: key })).json.scans
     expect(byFlag.length).toBeGreaterThan(0)
-    const today = new Date().toISOString().slice(0, 10)
+    // A plain day in `from`/`to` is the building's calendar day, so "today" must be the building's too: the UTC date is
+    // the day before between midnight and 03:00 in Israel, and that filter then finds nothing.
+    const today = isoDay()
     expect((await call('GET', `/api/agent/v1/scans?from=${today}&to=${today}&limit=500`, { token: key })).json.count).toBeGreaterThan(0)
     expect((await call('GET', '/api/agent/v1/scans?from=2001-01-01&to=2001-01-02', { token: key })).json.count).toBe(0)
 
