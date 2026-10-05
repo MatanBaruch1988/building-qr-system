@@ -4,6 +4,7 @@ import { oneLine, failureLabel } from './logSafe.js'
 import { recordEvent, requestIdOf } from './errorLog.js'
 import { noteServerError } from './alerts.js'
 import { commit } from './health.js'
+import { SLOW_REQUEST_MS } from './config.js'
 
 /** @import { ApiRequest, SendResult } from './http.js' */
 /** @import { ErrorEnvelope } from '../shared/types.js' */
@@ -163,12 +164,53 @@ function stackFrames(raw) {
 }
 
 /**
+ * What a request that its guard let in leaves in app_errors besides the record of a 500 (docs/adr/0007): a `refusal` event when
+ * it is answered with a 4xx (the code is the ApiError's), and a `slow` event when it took longer than SLOW_REQUEST_MS (with the
+ * final status). The safe fields only, like the record of a 500: the route as it is written in the code, never the path that was
+ * asked for, the method, the status, the code of the refusal, the build and the Vercel request id.
+ *
+ * Who gets here is decided by the caller (`settle` in handle()): a matched route that is not public, after its guard has let the
+ * request in. A request that its guard refused, a 4xx of a public route, a 404 for an unknown path and a 405 never get here
+ * (AGENTS.md, Safety). Nothing is logged for either event: the record is the only trace, and the one log line of the router is
+ * the 500's. Like the record of a 500 it is awaited before the answer is sent (the host may freeze the function once it has
+ * answered), through recordEvent, which never throws, never queues for a connection and waits at most ERROR_RECORD_TIMEOUT_MS.
+ *
+ * @param {ApiRequest} req
+ * @param {{ method: string, pattern: string }} matched
+ * @param {{ status: number, refusal: ApiError | null, elapsedMs: number }} outcome
+ */
+async function recordAdmitted(req, matched, { status, refusal, elapsedMs }) {
+  const event = {
+    source: 'server',
+    place: matched.pattern,
+    method: matched.method,
+    appBuild: commit() ?? '',
+    requestId: requestIdOf(req.headers),
+  }
+  if (refusal && refusal.status >= 400 && refusal.status < 500) {
+    await recordEvent({ ...event, kind: 'refusal', status: refusal.status, code: refusal.code })
+  }
+  if (elapsedMs > SLOW_REQUEST_MS) await recordEvent({ ...event, kind: 'slow', status })
+}
+
+/**
  * Single entry point for every /api/* request (Vercel function and local dev server share it).
  * @param {ApiRequest} req
  * @param {import('node:http').ServerResponse} res
+ * @param {() => number} [now]  the clock in milliseconds that a slow request is measured with (performance.now()). Only the
+ *   tests pass one; the Vercel function and the dev server call handle(req, res).
  */
-export async function handle(req, res) {
+export async function handle(req, res, now = () => performance.now()) {
+  const startedAt = now()
   let matched = null
+  // Set only after the guard of a route that is not public has let the request in, and by nothing else. It is what separates a
+  // refusal of the handler (recorded) from a refusal of the guard (never recorded), and a request of a public route (never
+  // recorded) from a protected one. A request that matched no route never sets it.
+  let admitted = false
+  // Records the 4xx (when `refusal` is one) and the slowness of a request that its guard let in, before its answer is sent.
+  const settle = async (status, refusal) => {
+    if (admitted && matched) await recordAdmitted(req, matched, { status, refusal, elapsedMs: now() - startedAt })
+  }
   try {
     const url = new URL(req.url, 'http://local')
     const path = url.pathname.replace(/^\/api/, '') || '/'
@@ -183,6 +225,7 @@ export async function handle(req, res) {
       // The guard of the route runs before anything else: no code of the handler, and nothing of the request that is made
       // for it (the body, the query, the parameters), until the guard has let the request in. A refusal ends the request.
       const auth = r.access.public === true ? undefined : await r.access.check(req)
+      admitted = r.access.public !== true // only reached when the guard resolved: a refusal threw above
       const out = await r.handler({
         req,
         res,
@@ -193,6 +236,7 @@ export async function handle(req, res) {
         auth,
       })
       const shaped = out && (out.json !== undefined || out.text !== undefined || out.status) ? out : { json: out }
+      await settle(shaped.status ?? 200, null)
       return send(res, shaped)
     }
     if (sameShape.length) {
@@ -203,9 +247,15 @@ export async function handle(req, res) {
     }
     throw new ApiError(404, 'not_found', 'Unknown endpoint')
   } catch (raw) {
-    if (raw instanceof Answer) return send(res, raw.out)
+    if (raw instanceof Answer) {
+      await settle(raw.out.status ?? 200, null) // only a request that was let in: the Answer of a guard is thrown before `admitted`
+      return send(res, raw.out)
+    }
     const err = raw instanceof ApiError ? raw : fromDatabaseError(raw)
     if (err) {
+      // A 4xx that the handler (or the router, after the guard) answered is recorded as a refusal, and a slow answer as `slow`.
+      // Nothing is recorded for a refusal of the guard (`admitted` is not set), of a public route, of an unknown path or of a 405.
+      await settle(err.status, err)
       return send(res, {
         status: err.status,
         json: /** @type {ErrorEnvelope} */ ({ error: { code: err.code, message: err.message, ...(err.extra || {}) } }),
@@ -218,9 +268,9 @@ export async function handle(req, res) {
     const requestId = requestIdOf(req.headers)
     // The same event goes into app_errors (docs/adr/0007), with safe fields only, and only for a route that matched: the
     // route as it is written in the code, never the path that was asked for. A refusal (an ApiError, a 4xx) and an Answer
-    // are answered above and are not recorded. recordEvent never throws and never logs, it never queues for a connection (it
-    // does nothing while the pool is busy), and it waits for the database at most ERROR_RECORD_TIMEOUT_MS, so the answer
-    // below is sent in any case.
+    // are answered above (a refusal after the guard is recorded there as such, and a slow 500 is this record and not a second
+    // `slow` one). recordEvent never throws and never logs, it never queues for a connection (it does nothing while the pool
+    // is busy), and it waits for the database at most ERROR_RECORD_TIMEOUT_MS, so the answer below is sent in any case.
     if (matched) {
       const code = failureLabel(raw)
       await recordEvent({
