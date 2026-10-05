@@ -27,7 +27,9 @@ Mark each item OK or write what you saw. Take a screenshot of anything that look
    the Home Screen: it opens and shows the sign-in list.
 6. [ ] While in Airplane mode, scan a printed QR with the camera (or open a `/scan?code=` link from Notes): the app
    opens and says the visit is saved on the phone. Turn Airplane mode off: within about half a minute the visit is
-   sent and the home screen says so.
+   sent and the home screen says so. In the committee's list of that provider's phones
+   (`GET /api/admin/providers/<id>/devices`, signed in as the committee) the phone shows the visit waiting for as long
+   as it is not sent (`waiting_count` 1 and the time it was saved), then nothing waiting and the time of the upload.
 
 ## Location
 

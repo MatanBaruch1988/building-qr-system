@@ -199,6 +199,9 @@ test.describe('provider app', () => {
     await page.route('**/api/scans/sync', (route) => syncAnswer(route))
     await page.route('**/api/scan', (route) => route.fulfill({ status: 503, json: { error: { code: 'unavailable' } } }))
     await page.route('**/api/my/scans', (route) => route.fulfill({ json: { scans: [] } }))
+    // the phone reports its status once the session is confirmed: with a token that no server issued, the real server would
+    // answer 401 and the app would sign the person out in the middle of this test
+    await page.route('**/api/my/device-status', (route) => route.fulfill({ json: { ok: true, build: null } }))
     await page.route('**/api/session', (route) => (route.request().method() === 'GET' ? sessionAnswer(route) : route.continue()))
     // The token has the shape of a device token (the app keeps only a session whose token could be ours), but no server
     // issued it.
