@@ -181,7 +181,7 @@ select.a-input {
 
 /* ----- empty / loading ----- */
 .a-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 48px 20px; background: var(--w-surface); border: 1px dashed var(--w-border); border-radius: 20px; }
-.a-empty h3 { font-size: 1.25rem; }
+.a-empty__title { font-size: 1.25rem; }
 .a-empty__icon { width: 64px; height: 64px; display: grid; place-items: center; border-radius: 20px; background: var(--w-info-bg); color: var(--w-info); }
 .a-loading { display: grid; place-items: center; padding: 60px 0; }
 
@@ -213,19 +213,19 @@ select.a-input {
   .a-app.is-printing > *:not(.a-print-only) { display: none !important; }
   .a-app.is-printing .a-print-only { display: block; color: #000; }
   .a-sign { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3mm; padding: 4mm; overflow: hidden; break-inside: avoid; page-break-inside: avoid; }
-  .a-sign h2 { margin: 0; color: #000; overflow-wrap: anywhere; line-height: 1.2; }
+  .a-sign h1 { margin: 0; color: #000; overflow-wrap: anywhere; line-height: 1.2; }
   .a-sign p { margin: 0; color: #000; line-height: 1.25; }
   .a-sign .a-sign__langs { display: grid; gap: 1.5mm; }
   /* One sign per A4 page: 277mm of usable height. */
   .a-sign--single { height: 268mm; justify-content: center; gap: 8mm; break-after: page; page-break-after: always; }
-  .a-sign--single h2 { font-size: 40pt; }
+  .a-sign--single h1 { font-size: 40pt; }
   .a-sign--single img { width: 130mm; height: 130mm; }
   .a-sign--single p { font-size: 15pt; }
   /* Two signs per page: each gets 136mm (2 x 136 + the cut line fits in 277mm). Content needs about 120mm. */
   .a-sign--pair { height: 136mm; justify-content: center; }
   .a-sign--pair:nth-child(odd) { border-block-end: 1px dashed #999; }
   .a-sign--pair:nth-child(even) { break-after: page; page-break-after: always; }
-  .a-sign--pair h2 { font-size: 22pt; }
+  .a-sign--pair h1 { font-size: 22pt; }
   .a-sign--pair img { width: 72mm; height: 72mm; }
   .a-sign--pair p { font-size: 10.5pt; }
 }
