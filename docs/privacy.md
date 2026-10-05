@@ -29,9 +29,9 @@ that is not yet past its period is left as it is.
 
 - **The committee**, in the committee app (`/admin`), after signing in with Google and only if the e-mail is on the committee
   list: the providers, the scans and their history (also as a CSV file), the points and the agent keys. The visits that the
-  server refused can be read through the committee's own API (`GET /api/admin/scan-refusals`); the committee app has no
-  screen for them yet. The committee app does not show the label of a phone, the sessions, the login attempts or the
-  audit log.
+  server refused are listed in the History tab when its type is set to ("לא נקלטו"), read only and not part of the CSV
+  file, and through the committee's own API (`GET /api/admin/scan-refusals`). The committee app does not show the label of
+  a phone, the sessions, the login attempts or the audit log.
 - **The committee's own AI agent**, through the read-only agent API (`docs/agent-api.md`), with a key that the committee
   made: the points, the providers (company, contact name, kind of service, whether active, the time of the last scan) and the
   scans (provider name, point, times, distance, accuracy, flags). It cannot write anything, and it does not see the labels of
