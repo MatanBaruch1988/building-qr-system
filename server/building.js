@@ -29,15 +29,21 @@ export async function readAddress() {
 
 /**
  * Saves the address and who saved it, with the client `c` of the transaction that also writes the audit row (server/audit.js),
- * so the change and its record commit together. An upsert, so a row that went missing does not turn a save into an error.
+ * so the change and its record commit together. The row is locked and read first, so that the caller can say what the address
+ * was (`before`, what readAddress would have answered) when it changed it. An address that is the one already saved writes
+ * nothing (not the time and not the member either: they say who CHANGED it), and answers `changed: false`, so that the caller
+ * records nothing. An upsert, so a row that went missing does not turn a save into an error.
+ * @returns {Promise<{ changed: boolean, before: string }>}
  */
 export async function saveAddress(c, adminId, address) {
-  const { rows } = await c.query(
+  const current = await c.query('select address from building_settings where id = 1 for update')
+  const before = current.rows[0]?.address ?? ''
+  if (before === address) return { changed: false, before }
+  await c.query(
     `insert into building_settings (id, address, updated_at, updated_by) values (1, $1, now(), $2)
      on conflict (id) do update
-       set address = excluded.address, updated_at = excluded.updated_at, updated_by = excluded.updated_by
-     returning address`,
+       set address = excluded.address, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
     [address, adminId],
   )
-  return rows[0].address
+  return { changed: true, before }
 }
