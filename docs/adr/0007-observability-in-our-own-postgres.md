@@ -67,7 +67,9 @@ Bad:
 
 - If the database is down, nothing is recorded. The in-memory ping and the missing daily ping are the alert. That throttle
   lives in one function instance, so a long outage can ping more than once an hour.
-- A 500 answer waits for one bounded insert (about 1.5 s at worst).
+- A 500 answer waits for one bounded insert (about 1.5 s at worst). The database itself cancels that insert after the same
+  time, so an abandoned insert cannot hold a connection longer. The insert is skipped while the connection pool is busy
+  (it never queues and never takes the last free connection), so during a burst of failures some errors are not recorded.
 - No stack traces or messages are kept, so a deep diagnosis still needs Vercel's logs within the hour, or a reproduction.
 - Each new table is one more thing in `docs/privacy.md` and in the retention job. The audit screen also shows entries that
   hold a name or an e-mail, and `docs/privacy.md` says today that the committee app does not show the audit log, so that

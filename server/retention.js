@@ -10,7 +10,9 @@
 //     of the last upload). The row stays (a scan keeps the id of the phone that made it, and the owner's decision is to clear the
 //     text, not the row): only what can identify a person's device, or says what it did, goes. A phone with no label that still
 //     holds a status is cleared too, so a status never outlives the period because the label happened to be empty.
-//   - writes one audit_log row (`retention.run`, actor `system`) that holds the three counts and nothing else.
+//   - deletes the recorded errors (app_errors, safe fields only: server/errorLog.js) whose last event is older than
+//     RETENTION_APP_ERROR_DAYS,
+//   - writes one audit_log row (`retention.run`, actor `system`) that holds the four counts and nothing else.
 // What it never touches: a scan, the audit log, a session that is active or expired less than the period ago, a phone that
 // is not revoked or was revoked less than the period ago. Their retention waits for a legal decision (docs/privacy.md).
 //
@@ -18,12 +20,17 @@
 // condition on age, so a run deletes what is due at that moment and the next one finds nothing more.
 import { tx } from './db.js'
 import { audit } from './audit.js'
-import { RETENTION_SESSION_DAYS, RETENTION_LOGIN_ATTEMPT_DAYS, RETENTION_DEVICE_LABEL_DAYS } from './config.js'
+import {
+  RETENTION_SESSION_DAYS,
+  RETENTION_LOGIN_ATTEMPT_DAYS,
+  RETENTION_DEVICE_LABEL_DAYS,
+  RETENTION_APP_ERROR_DAYS,
+} from './config.js'
 
 /**
- * Runs the job once and returns what it removed: `{ sessions, loginAttempts, deviceLabels }` (numbers of rows; `deviceLabels` is
- * the number of phones that were cleared, the label and the reported status together). The three statements and the audit row
- * are one transaction, so the audit row says what really happened: all of it or none of it.
+ * Runs the job once and returns what it removed: `{ sessions, loginAttempts, deviceLabels, appErrors }` (numbers of rows;
+ * `deviceLabels` is the number of phones that were cleared, the label and the reported status together). The four statements
+ * and the audit row are one transaction, so the audit row says what really happened: all of it or none of it.
  * Each statement still has the 15 second limit of the app (server/db.js). A failure is thrown as it is and the router
  * answers 500 and logs only its code (server/router.js); nothing here logs an error or a row.
  */
@@ -48,14 +55,28 @@ export async function runRetention() {
                or oldest_waiting_at is not null or last_sync_at is not null or not_accepted_total <> 0 or overflow_total <> 0)`,
       [RETENTION_DEVICE_LABEL_DAYS],
     )
-    const counts = { sessions: sessions.rowCount, loginAttempts: attempts.rowCount, deviceLabels: labels.rowCount }
+    // By the time of the last event, not the first: a row that still gets events is not old.
+    const errors = await c.query('delete from app_errors where last_at < now() - make_interval(days => $1::int)', [
+      RETENTION_APP_ERROR_DAYS,
+    ])
+    const counts = {
+      sessions: sessions.rowCount,
+      loginAttempts: attempts.rowCount,
+      deviceLabels: labels.rowCount,
+      appErrors: errors.rowCount,
+    }
     // Counts only: no id, no name, no label. The audit log has no end date. The committee reads it (GET /api/admin/audit);
     // the agent API and the exports do not have it, and whoever holds the database or a backup can read it too.
     // The name of the system actor stays null on purpose: actor_name is the snapshot of a person's name, and the system actor
     // is already named by actor_type, so a screen can name it in the reader's own language (src/i18n), which a fixed English
     // string in the database could not do.
     await audit(c, { type: 'system', id: null, name: null }, 'retention.run', {
-      detail: { sessions: counts.sessions, login_attempts: counts.loginAttempts, device_labels: counts.deviceLabels },
+      detail: {
+        sessions: counts.sessions,
+        login_attempts: counts.loginAttempts,
+        device_labels: counts.deviceLabels,
+        app_errors: counts.appErrors,
+      },
     })
     return counts
   })
