@@ -35,6 +35,22 @@ function countingPool() {
   }
 }
 
+/**
+ * Like countingPool, but a transaction may be opened on it (`tx()` takes a client, and `begin` and `commit` are statements of
+ * their own): every statement of the client is written down in `queries`, in order, and finds nothing.
+ */
+function transactionPool() {
+  const queries = []
+  const client = {
+    query: async (text) => {
+      queries.push(text)
+      return { rows: [] }
+    },
+    release: () => {},
+  }
+  return { queries, query: client.query, connect: async () => client }
+}
+
 const body43 = 'a'.repeat(43) // what randomToken adds after the prefix
 const adminCookieOf = (token) => `${ADMIN_COOKIE}=${encodeURIComponent(token)}`
 
@@ -193,12 +209,19 @@ describe('signing out', () => {
     expect(pool.queries).toEqual([])
   })
 
-  it('still revokes a cookie shaped like a session token, with one query', async () => {
-    const pool = countingPool()
+  // Changed on purpose by the change that records sign-outs (`session.sign_out`): the one statement that ends the session now also
+  // names the member who owned it (a join to `admins`), and it runs in a transaction so that the entry and the session commit
+  // together. A token that matches no session still costs that one statement (inside begin and commit, which the pool of the
+  // app wrapped around a single statement already), and writes no entry because nothing was ended.
+  it('still looks up a cookie shaped like a session token, with one statement in one transaction, and writes no entry', async () => {
+    const pool = transactionPool()
     setPool(pool)
     await answers({ cookie: adminCookieOf(randomToken(ADMIN_TOKEN_PREFIX)) })
-    expect(pool.queries).toHaveLength(1)
-    expect(pool.queries[0]).toMatch(/update admin_sessions set revoked_at/)
+    expect(pool.queries).toHaveLength(3)
+    expect(pool.queries[0]).toBe('begin')
+    expect(pool.queries[1]).toMatch(/update admin_sessions s set revoked_at/)
+    expect(pool.queries[2]).toBe('commit')
+    expect(pool.queries.join(' ')).not.toMatch(/audit_log/)
   })
 })
 
