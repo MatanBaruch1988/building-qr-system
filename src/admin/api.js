@@ -47,6 +47,34 @@ export function scanRefusals(params = {}) {
   return adminApi(`/scan-refusals${text ? `?${text}` : ''}`)
 }
 
+/**
+ * One active phone of a provider, as GET /api/admin/providers/:id/devices shows it (deviceJson in server/deviceStatus.js). The
+ * times are ISO 8601. A phone that never reported (an old version of the app never does) has null in `status_at`, `app_build`,
+ * `waiting_count` and `oldest_waiting_at`. The label of the phone (the browser string) and its token are never sent.
+ * @typedef {object} ProviderDevice
+ * @property {string} id
+ * @property {string} created_at  when the person signed in on this phone
+ * @property {string | null} last_seen_at  the last request the server answered for it (written at most every 5 minutes)
+ * @property {string | null} status_at  when the server stored its last report
+ * @property {string | null} last_sync_at  when the server last finished an upload from its offline queue
+ * @property {string | null} app_build  the build of the app on the phone, as it reported it
+ * @property {number | null} waiting_count  how many visits waited in its queue at the last report
+ * @property {string | null} oldest_waiting_at  since when the oldest of them waits (the phone's clock, when it can be believed)
+ * @property {number} not_accepted_total  visits the server refused from this phone, counted by the phone since it signed in
+ * @property {number} overflow_total  visits the phone dropped because its queue was full, counted since it signed in
+ * @property {boolean} outdated  the phone reported a build and it is not the server's
+ */
+
+/**
+ * The active phones of one provider (GET /api/admin/providers/:id/devices), the one used last first: `{ devices }`, an empty list
+ * for a provider with no phone signed in.
+ * @param {string} providerId
+ * @returns {Promise<{ devices: ProviderDevice[] }>}
+ */
+export function providerDevices(providerId) {
+  return adminApi(`/providers/${providerId}/devices`)
+}
+
 const MESSAGES = {
   not_an_admin: 'החשבון הזה אינו ברשימת הוועד. בקשו מחבר ועד להוסיף את כתובת ה-Gmail שלכם.',
   google_account_mismatch: 'כתובת המייל הזאת קשורה לחשבון Google אחר.',

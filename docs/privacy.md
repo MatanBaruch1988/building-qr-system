@@ -33,8 +33,9 @@ that is not yet past its period is left as it is.
   file, and through the committee's own API (`GET /api/admin/scan-refusals`). The active phones of a provider, and what
   each reported about itself, can be read through the committee's own API too (`GET /api/admin/providers/:id/devices`: the
   version of the app, what waits on the phone and since when, the totals, the times of the last report and of the last
-  upload); the committee app has no screen for them yet. The committee app does not show the label of a phone, the
-  sessions, the login attempts or the audit log.
+  upload). The Providers tab of the committee app shows the same, read only: a line on the card of a provider whose phones
+  have visits waiting, and a dialog that lists each phone (the card's button ("מכשירים")). The committee app does not show the
+  label of a phone, the sessions, the login attempts or the audit log.
 - **The committee's own AI agent**, through the read-only agent API (`docs/agent-api.md`), with a key that the committee
   made: the points, the providers (company, contact name, kind of service, whether active, the time of the last scan) and the
   scans (provider name, point, times, distance, accuracy, flags). It cannot write anything, and it does not see the phones or

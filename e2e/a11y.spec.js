@@ -247,6 +247,27 @@ async function stubMapImages(page) {
   await page.route('https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/**', answer)
 }
 
+/**
+ * The test server does not know its build (it has no VERCEL_GIT_COMMIT_SHA), so it never calls a phone "outdated". The answers that
+ * carry that are changed here, so that the note on Ploni's card and the badge in his phones dialog are on the screens that are
+ * scanned. Only reads are touched.
+ */
+async function markPloniOutdated(page) {
+  await page.route('**/api/admin/providers', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    const response = await route.fetch()
+    const json = await response.json()
+    for (const p of json.providers) if (p.contact_name === PEOPLE.ploni.name) p.outdated_devices = 1
+    return route.fulfill({ response, json })
+  })
+  await page.route('**/api/admin/providers/*/devices', async (route) => {
+    const response = await route.fetch()
+    const json = await response.json()
+    json.devices = json.devices.map((d) => (d.app_build ? { ...d, app_build: '1234567', outdated: true } : d))
+    return route.fulfill({ response, json })
+  })
+}
+
 const NEW_PROVIDER = 'בדיקת נגישות' // the company that the provider form of the dialogs is filled with
 const NEW_KEY = 'מפתח נגישות' // the start of the name that the agent key of the dialogs is given
 
@@ -288,17 +309,25 @@ async function fillCommittee(playwright, baseURL) {
   const post = (url, data) => send(admin, url, data)
   const change = async (url, data) => expect((await admin.patch(url, { data })).ok(), `PATCH ${url}`).toBeTruthy()
 
-  // Ploni and the demo account each sign in on a phone (Ploni's card then shows a connected device) and make visits:
+  // Ploni and the demo account each sign in on a phone (Ploni's card then shows connected devices) and make visits:
   // one accepted, one refused as too far, one without a position (recorded with a flag) that is then cancelled, and
-  // the demo account's.
+  // the demo account's. Ploni has a second phone that reports nothing (an old version of the app), and the first one reports
+  // visits that wait in its queue, one of them for 30 hours: so his card shows the line and the warning, and his phones dialog
+  // both kinds of phone.
+  const waiting = { build: 'abcdef1', waiting: 3, oldest_waiting_at: new Date(Date.now() - 30 * 3600 * 1000).toISOString(), not_accepted_total: 2, overflowed_total: 1 }
   const visits = async () => {
     const providers = (await (await phone.get('/api/public/providers')).json()).providers
-    const signIn = async (name, password) => {
+    const signIn = async (name, password, { report, silentPhones = 0 } = {}) => {
       const found = providers.find((p) => p.contact_name === name)
       const { token } = await send(phone, '/api/session', { provider_id: found.id, password })
+      if (report) await send(phone, '/api/my/device-status', report, token)
+      for (let i = 0; i < silentPhones; i++) await send(phone, '/api/session', { provider_id: found.id, password })
       return (code, gps) => send(phone, '/api/scan', { id: randomUUID(), code, gps }, token)
     }
-    const [ploni, demo] = await Promise.all([signIn(PEOPLE.ploni.name, PEOPLE.ploni.password), signIn('לקוח דמה', 'dev-pass-5')])
+    const [ploni, demo] = await Promise.all([
+      signIn(PEOPLE.ploni.name, PEOPLE.ploni.password, { report: waiting, silentPhones: 1 }),
+      signIn('לקוח דמה', 'dev-pass-5'),
+    ])
     const [, , cancelled] = await Promise.all([
       ploni(POINTS.basement, null),
       ploni(POINTS.gym, { lat: FAR.latitude, lng: FAR.longitude, accuracy: FAR.accuracy }),
@@ -384,6 +413,7 @@ test.describe('committee app with the sample data filled in', () => {
 
   test('the five tabs, on a phone and on a computer', async ({ page }) => {
     allowConsoleErrors(page, /status of 401/) // the first load of /admin, before the sign-in
+    await markPloniOutdated(page)
     await adminSignIn(page)
     await signedIn(page)
     // (every screen is named by a plain string, so that tests/a11y-report.test.js can read the names from this file)
@@ -422,6 +452,14 @@ test.describe('committee app with the sample data filled in', () => {
     await page.setViewportSize(COMPUTER)
     await openTab(page, 'points', 'נקודות סריקה')
     await scanBothThemes(page, 'committee computer: points')
+    await openTab(page, 'providers', 'נותני שירות')
+    await scanBothThemes(page, 'committee computer: providers')
+    await page.getByRole('article').filter({ hasText: PEOPLE.ploni.name }).getByRole('button', { name: 'מכשירים', exact: true }).click()
+    // (a phone that an earlier test signed Ploni in on is listed too, so "at least his two": the one that reports and the one that does not)
+    await expect(page.getByRole('dialog', { name: `מכשירים: ${PEOPLE.ploni.name}` }).getByRole('heading', { level: 3 }).nth(1)).toBeVisible()
+    await scanBothThemes(page, 'committee computer: provider phones dialog')
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('dialog')).toHaveCount(0)
     await openTab(page, 'history', 'היסטוריית נוכחות')
     await scanBothThemes(page, 'committee computer: history')
     await page.getByLabel('סוג').selectOption({ label: 'לא נקלטו' })
@@ -433,6 +471,7 @@ test.describe('committee app with the sample data filled in', () => {
   test('the dialogs of the points and the providers', async ({ page }) => {
     allowConsoleErrors(page, /status of 401/) // the first load of /admin, before the sign-in
     await stubMapImages(page)
+    await markPloniOutdated(page)
     await page.addInitScript(() => {
       window.__prints = 0
       window.print = () => { window.__prints += 1 }
@@ -502,6 +541,30 @@ test.describe('committee app with the sample data filled in', () => {
     await expect(dialog(`סיסמה חדשה: ${PEOPLE.ploni.name}`)).toBeVisible()
     await scanBothThemes(page, 'committee phone: new password dialog')
     await closeWithEscape(`סיסמה חדשה: ${PEOPLE.ploni.name}`)
+
+    // the phones of a provider: what each phone reported, read only, with the sign-out of all of them at the bottom; then the
+    // same dialog for a provider whose phones were all signed out meanwhile (answered here) and when the list cannot be loaded
+    const phones = `מכשירים: ${PEOPLE.ploni.name}`
+    const phonesButton = page.getByRole('article').filter({ hasText: PEOPLE.ploni.name }).getByRole('button', { name: 'מכשירים', exact: true })
+    await phonesButton.click()
+    await expect(dialog(phones).getByRole('heading', { level: 3 }).nth(1)).toBeVisible() // at least his two phones (see the computer scan)
+    await expect(dialog(phones).getByText('ישנה', { exact: true })).toBeVisible()
+    await scanBothThemes(page, 'committee phone: provider phones dialog')
+    await closeWithEscape(phones)
+
+    await page.route('**/api/admin/providers/*/devices', (route) => route.fulfill({ json: { devices: [] } }))
+    await phonesButton.click()
+    await expect(dialog(phones).getByRole('heading', { name: 'אין מכשירים מחוברים' })).toBeVisible()
+    await scanBothThemes(page, 'committee phone: provider phones dialog, no phone')
+    await closeWithEscape(phones)
+
+    allowConsoleErrors(page, /status of 500/) // the list that is answered with an error below
+    await page.route('**/api/admin/providers/*/devices', (route) => route.fulfill({ status: 500, json: { error: { code: 'server_error', message: 'x' } } }))
+    await phonesButton.click()
+    await expect(dialog(phones).getByRole('heading', { name: 'לא הצלחנו לטעון' })).toBeVisible()
+    await expect(dialog(phones).getByRole('button', { name: 'ניתוק כל המכשירים' })).toBeVisible()
+    await scanBothThemes(page, 'committee phone: provider phones dialog, not loaded')
+    await closeWithEscape(phones)
   })
 
   test('the dialogs of the history, the agent keys and the committee', async ({ page }) => {
