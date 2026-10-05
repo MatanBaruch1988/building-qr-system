@@ -20,8 +20,8 @@ Map of the repository:
 | Path | What |
 |---|---|
 | `src/worker`, `src/i18n`, `src/pages/WorkerApp.jsx` | The provider app (`/` and `/scan?code=...`): four languages, works offline with a queue on the phone that uploads by itself |
-| `src/admin`, `src/pages/AdminApp.jsx` | The committee app (`/admin`): points, providers, history, agent keys. Google sign-in, only for people on the committee list |
-| `api/index.js`, `server/` | One Vercel function (`vercel.json` routes every `/api/*` to it) that runs `server/`: `routes/` (admin, provider, agent), the access policy (`access.js`), auth, scan rules (`scanLogic.js`, `scans.js`), Google token check, `db.js`, `migrate.js` |
+| `src/admin`, `src/pages/AdminApp.jsx` | The committee app (`/admin`): points, providers (and the health of each provider's phones), history (and the visits that were not counted), agent keys, the committee (and the audit log). Google sign-in, only for people on the committee list |
+| `api/index.js`, `server/` | One Vercel function (`vercel.json` routes every `/api/*` to it) that runs `server/`: `routes/` (admin, provider, agent), the access policy (`access.js`), auth, scan rules (`scanLogic.js`, `scans.js`), Google token check, `db.js`, `migrate.js`, and what the server records about itself (`errorLog.js`, `alerts.js`, `summary.js`, ADR 0007) |
 | `db/migrations/` | The database schema as numbered SQL files (`NNN_snake_case.sql`). Scans are append-only |
 | `shared/` | Code that runs in the browser and on the server. `shared/datetime.js` writes every date and time a person sees; `shared/contract.js` holds the values the phone and the server must agree on (the sync limits, error codes, GPS limits, vocabularies), `shared/types.js` the JSDoc shapes they exchange |
 | `tests/` | Vitest: logic, the API against a real Postgres in a throwaway schema, i18n, contrast, typography, `tests/components` |
@@ -97,13 +97,14 @@ the Claude Code edit hook all read. Change a rule there, not in a copy.
 
 ## Testing
 
-Two layers, one command each. Both use the non-production Neon project from `.env.local` (CI uses a Postgres 18
-container), always inside a throwaway schema that is dropped at the end. The tooling refuses a production database
+Two layers, one command each. Both use the non-production database in `.env.local` (the non-production Neon project, or
+a local PostgreSQL 18 on the same machine; CI uses a Postgres 18 container), always inside a throwaway schema that is
+dropped at the end. The tooling refuses a production database
 (`server/dbGuard.js`, `server/loadEnv.js`), so never `vercel env pull` from Production into `.env.local`.
 
 | Command | What it runs | When |
 |---|---|---|
-| `npm run test:unit` | Vitest: logic, API against Postgres, i18n, contrast, typography, component tests (`tests/components`, jsdom + Testing Library). About 8 minutes in full. | After every logic change. For a quick loop run one file, for example `npx vitest run tests/components`. |
+| `npm run test:unit` | Vitest: logic, API against Postgres, i18n, contrast, typography, component tests (`tests/components`, jsdom + Testing Library). About 2 minutes in full against a local database or CI's container, much longer over the network to Neon. | After every logic change. For a quick loop run one file, for example `npx vitest run tests/components`. |
 | `npm run test:e2e` | Playwright, two projects: `android-chrome` (Chromium, Pixel 7) and `iphone-webkit` (WebKit, iPhone 14). Builds the app and starts the API and the preview server by itself. | Before every commit that touches `src/`, `server/`, `vite.config.js` or the PWA files, and before a release. |
 | `npm test` | Both, unit first. | Before a release. |
 
@@ -113,7 +114,8 @@ Details that matter:
 - E2E uses ports 3100 (preview of the production build) and 3101 (API) and the scratch schema `e2e`, seeded by
   `scripts/dev-seed.mjs`. Playwright starts both servers (`playwright.config.js`); the schema is dropped before every run
   and again after it (`e2e/global-teardown.js`), so a run that was killed leaves a schema that the next run clears.
-  Nothing may already be listening on those ports, and two runs cannot share them, so do not start two at once.
+  These are the defaults: `E2E_APP_PORT`, `E2E_API_PORT` and `E2E_SCHEMA` change them (`scripts/e2e-config.mjs`, and the
+  point on two runs below). Nothing may already be listening on the ports of a run.
 - The PWA is tested on the production build, because the service worker only exists there. Do not point the E2E at `vite dev`.
 - A single spec or project: `npx playwright test e2e/pwa.spec.js --project=android-chrome`. A failing run keeps a trace
   in `test-results/` (`npx playwright show-trace <trace.zip>`).
@@ -121,12 +123,18 @@ Details that matter:
   password, a refused point, going offline) allows it with `allowConsoleErrors` in `e2e/fixtures.js`: that allows the
   message for the whole test, so keep the pattern as narrow as the message allows.
 - The offline tests run on `android-chrome` only: Playwright's WebKit cannot take a service-worker page offline.
-- Accessibility: `e2e/a11y.spec.js` scans the screens of both apps with axe (WCAG 2.1 A and AA, light and dark) through
+- Accessibility: `e2e/a11y.spec.js` scans the screens of both apps with axe (WCAG 2.1 A and AA and axe's best practices,
+  light and dark) through
   `expectNoA11yViolations` in `e2e/fixtures.js`. A new screen or dialog gets a scan there. A problem that is a design
   decision goes in `e2e/a11y-baseline.js` with its reason, matched exactly (screen, rule, element); an entry that no longer
   occurs, or names a screen that is not scanned, fails. Fix a violation rather than baseline it.
-- Two E2E runs cannot share a machine's ports or the `e2e` schema, and the seed starts before the ports bind, so a free
-  port does not prove that no run is starting. Run one at a time.
+- Two E2E runs can share a machine when each has its own app port, API port and scratch schema: `E2E_APP_PORT`,
+  `E2E_API_PORT` and `E2E_SCHEMA` (defaults 3100, 3101 and `e2e`; the rules for the values are in `scripts/e2e-config.mjs`).
+  Give a second run a different value for all three, for example
+  `E2E_APP_PORT=3200 E2E_API_PORT=3201 E2E_SCHEMA=e2e_b npx playwright test --project=iphone-webkit`; a run with another
+  schema keeps its build and report under `node_modules/.cache/bqr-e2e/<schema>`. Runs that share a port are refused by the
+  second one at once, but runs that share only a schema are not: each drops the other's data, and the seed starts before
+  the ports bind, so a free port does not prove that no run is starting. Never share a schema.
 - The icons: iOS ignores an SVG as the Home Screen icon, so the PNGs in `public/` (`apple-touch-icon.png` 180x180 on a
   solid background, `pwa-192x192.png`, `pwa-512x512.png`) are made from `public/pwa-512x512.svg` by `npm run icons`.
   To change the logo, replace that SVG, run `npm run icons`, commit the PNGs. `tests/pwa-icons.test.js` and the
