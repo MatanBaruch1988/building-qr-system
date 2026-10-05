@@ -1,6 +1,7 @@
 // Importing the route files registers them with the router.
 import './routes/provider.js'
 import './routes/admin.js'
+import './routes/audit.js'
 import './routes/refusals.js'
 import './routes/devices.js'
 import './routes/agent.js'
