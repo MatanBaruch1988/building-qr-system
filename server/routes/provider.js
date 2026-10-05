@@ -4,6 +4,7 @@ import { verifyPassword, burnPasswordCheck, randomToken, sha256 } from '../crypt
 import { ApiError, bad, notFound, requireUuid, str, clientIp } from '../http.js'
 import { requireProvider, guardLogin } from '../auth.js'
 import { recordScan, scanJson } from '../scans.js'
+import { recordRefusedVisit, isDataError } from '../scanRefusals.js'
 import { parseQrToken } from '../../shared/qrToken.js'
 import { PROVIDER_TOKEN_PREFIX } from '../config.js'
 import {
@@ -95,13 +96,17 @@ const toInput = (s) => ({ id: s?.id, code: s?.code, clientTime: s?.client_time, 
 
 route('POST', '/scan', async ({ req, body }) => {
   const { provider, deviceId } = await requireProvider(req)
-  const { scan, duplicate } = await recordScan({
-    provider,
-    deviceId,
-    input: toInput(body),
-    source: SOURCE_ONLINE,
-  })
-  return { scan, duplicate }
+  const input = toInput(body)
+  try {
+    const { scan, duplicate } = await recordScan({ provider, deviceId, input, source: SOURCE_ONLINE })
+    return { scan, duplicate }
+  } catch (err) {
+    // A refusal that the phone treats as final leaves a record for the committee (server/scanRefusals.js), then answers as
+    // it always did: the same error goes on to the router. If the record cannot be written because the database is down, that
+    // failure is the answer (a 500, which the phone keeps the visit for and sends again), so a refusal never goes unrecorded.
+    if (err instanceof ApiError) await recordRefusedVisit({ code: err.code, source: SOURCE_ONLINE, provider, deviceId, input, err })
+    throw err
+  }
 })
 
 // Batch upload of scans saved on the phone while it had no signal. Each item succeeds or fails alone. The error of an item
@@ -116,20 +121,22 @@ route('POST', '/scans/sync', async ({ req, body }) => {
   /** @type {SyncItemResult[]} */
   const results = []
   for (const item of items) {
+    const input = toInput(item)
     try {
-      const { scan, duplicate } = await recordScan({
-        provider,
-        deviceId,
-        input: toInput(item),
-        source: SOURCE_OFFLINE_SYNC,
-      })
+      const { scan, duplicate } = await recordScan({ provider, deviceId, input, source: SOURCE_OFFLINE_SYNC })
       results.push({ id: item?.id, ok: true, scan, duplicate })
     } catch (err) {
       if (err instanceof ApiError) {
+        // The phone drops an item for a permanent code and the server would keep no trace of it: record the refused visit
+        // (server/scanRefusals.js) before answering. If that fails because the database is down, the failure is thrown on
+        // like the one below: the request answers 500, the phone keeps the items and sends them again, and the items that
+        // were recorded already replay by id.
+        await recordRefusedVisit({ code: err.code, source: SOURCE_OFFLINE_SYNC, provider, deviceId, input, err })
         results.push({ id: item?.id, ok: false, error: { code: err.code, message: err.message } })
-      } else if (typeof err?.code === 'string' && /^2[23]/.test(err.code)) {
+      } else if (isDataError(err)) {
         // The database rejected this one item's data (out of range, malformed): retrying can never help,
         // and it must not block the good items queued behind it.
+        await recordRefusedVisit({ code: SCAN_ERROR_INVALID_ITEM, source: SOURCE_OFFLINE_SYNC, provider, deviceId, input, err })
         results.push({ id: item?.id, ok: false, error: { code: SCAN_ERROR_INVALID_ITEM, message: 'Item could not be stored' } })
       } else {
         throw err // infrastructure trouble (connection, timeout): fail the request so the phone retries later

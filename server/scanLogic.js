@@ -108,14 +108,23 @@ export function evaluateGps({ mode, point, gps }) {
 }
 
 /**
+ * The phone's clock as a Date, or null when there is none or it cannot be believed: not a time, or a year outside 2000 to
+ * 2100 (that also rejects absurd dates, year -271821 and the like, which the database cannot store). The one reading of
+ * `client_time`, for a scan (resolveClock) and for the record of a refused visit (server/scanRefusals.js).
+ */
+export function parseClientTime(clientTime) {
+  const client = clientTime ? new Date(clientTime) : null
+  return client && !Number.isNaN(client.getTime()) && client.getUTCFullYear() >= 2000 && client.getUTCFullYear() <= 2100 ? client : null
+}
+
+/**
  * Decides which time to store. `checked_in_at` is our best estimate of when the person really
  * scanned; `received_at` (server clock) is stored separately by the database default.
  */
 export function resolveClock({ source, clientTime, now }) {
   const flags = []
-  const client = clientTime ? new Date(clientTime) : null
-  // Also rejects absurd dates (year -271821…) that the database cannot store.
-  const clientOk = client && !Number.isNaN(client.getTime()) && client.getUTCFullYear() >= 2000 && client.getUTCFullYear() <= 2100
+  const client = parseClientTime(clientTime)
+  const clientOk = client !== null
 
   if (source === SOURCE_OFFLINE_SYNC) {
     flags.push(FLAG_OFFLINE_SYNC)
