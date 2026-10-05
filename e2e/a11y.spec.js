@@ -1,4 +1,4 @@
-// Accessibility of both apps, checked screen by screen with axe-core (the WCAG 2.1 A and AA rules).
+// Accessibility of both apps, checked screen by screen with axe-core (the WCAG 2.1 A and AA rules, and axe's best practices).
 //
 // The code takes care of accessibility one piece at a time (roles, live regions, focus traps, accessible names for the
 // icon buttons, contrast tests on the colour tokens), and nothing else renders the screens and checks them as a whole,

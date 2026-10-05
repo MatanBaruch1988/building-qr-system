@@ -131,12 +131,14 @@ export function Modal({ title, onClose, children, footer, size = 'md' }) {
   return createPortal(
     <div className="a-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={`a-modal a-modal--${size}`} role="dialog" aria-modal="true" aria-labelledby={titleId} ref={ref} tabIndex={-1}>
-        <header className="a-modal__head">
+        {/* Plain <div>s, not <header> and <footer>: inside a role="dialog" (which is not sectioning content) those two
+            become the page's banner and contentinfo landmarks, a second banner next to the top bar of the phone layout. */}
+        <div className="a-modal__head">
           <h2 id={titleId}>{title}</h2>
           <IconButton icon={IconX} label="סגירה" onClick={onClose} />
-        </header>
+        </div>
         <div className="a-modal__body">{children}</div>
-        {footer && <footer className="a-modal__foot">{footer}</footer>}
+        {footer && <div className="a-modal__foot">{footer}</div>}
       </div>
     </div>,
     appRoot(),
@@ -247,11 +249,13 @@ export function Switch({ checked, onChange, label, hint, disabled }) {
   )
 }
 
+/** An empty list, or a list that could not load. It stands where the cards of a screen would, directly under the page's
+ * <h1>, so its title is an <h2>, like the title of a card. */
 export function EmptyState({ icon: Icon, title, children, action }) {
   return (
     <div className="a-empty">
       {Icon && <span className="a-empty__icon"><Icon size={30} /></span>}
-      <h3>{title}</h3>
+      <h2 className="a-empty__title">{title}</h2>
       {children && <p className="w-lead">{children}</p>}
       {action}
     </div>
