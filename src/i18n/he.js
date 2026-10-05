@@ -2,6 +2,7 @@
 // (enforced by tests/i18n.test.js). Wording is gender-neutral (plural imperatives).
 export default {
   'app.name': 'נוכחות בבניין',
+  'app.version': 'גרסה',
   'lang.label': 'שפה',
   'footer.admin': 'כניסת ועד',
   'common.loading': 'טוען…',

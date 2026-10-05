@@ -147,3 +147,17 @@ export const PROVIDER_TOKEN_PREFIX = 'qrp_'
  * random bytes, base64url), 47 in all, and anything longer than this is not ours. (server/config.js re-exports it.)
  */
 export const MAX_TOKEN_LENGTH = 200
+
+// ---- 7. The build id of the app ----------------------------------------------------------------------------------
+// An installed app keeps running the JavaScript it has until the person next opens it, so the build id is how the committee
+// and the owner tell which version a phone runs. vite.config.js writes it into the bundle, src/ui/build.js reads it, and both
+// apps show it (the home screen of the provider app, the Committee tab of the committee app).
+
+/**
+ * What the build id of the app looks like: the first 7 characters of the commit that Vercel built (the same 7 characters
+ * that GET /api/health/db reports as `commit`), or `dev` for a build that has no commit (a local build, the E2E tests, the
+ * unit tests). Never narrow it: an installed phone keeps the id it was built with for as long as it is not updated, so a
+ * reader of this shape (src/ui/build.js now, the server when a phone reports its build) must accept every id that a build
+ * ever wrote.
+ */
+export const APP_BUILD_RE = /^(?:[0-9a-f]{7}|dev)$/
