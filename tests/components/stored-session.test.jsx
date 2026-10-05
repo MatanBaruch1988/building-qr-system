@@ -40,6 +40,7 @@ function answerLikeTheServer() {
     if (path === '/public/providers') return { providers: [ploni, almoni] }
     if (path === '/public/building') return { building: { address: 'Sample Street 1' } }
     if (path === '/my/scans') return { scans: [] }
+    if (path === '/my/device-status') return { ok: true, build: null } // the phone reports its status once it is signed in
     if (path === '/session' && options.method === 'POST') return server.signIn
     if (path === '/session' && !options.method) {
       if (server.check instanceof Error) throw server.check
