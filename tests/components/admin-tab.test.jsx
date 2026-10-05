@@ -74,7 +74,7 @@ describe('the tab that the address names when the app opens', () => {
     await heading(key)
     expect(shown()).toEqual([key])
     expect(current(key)).toEqual(['page', 'page'])
-    expect(document.title).toBe(`${byKey[key].label}${TITLE_SUFFIX}`)
+    await waitFor(() => expect(document.title).toBe(`${byKey[key].label}${TITLE_SUFFIX}`)) // the title is set by an effect after the heading is drawn
   })
 
   it.each([['no hash', ''], ['an empty hash', '#'], ['a name that is not a tab', '#nowhere'], ['a tab with something after it', '#history?x=1'], ['the wrong case', '#History']])(
@@ -111,7 +111,7 @@ describe('the address that changes between the first render and the listener', (
     await heading('history')
     expect(shown()).toEqual(['history'])
     expect(current('history')).toEqual(['page', 'page'])
-    expect(document.title).toBe(`${byKey.history.label}${TITLE_SUFFIX}`)
+    await waitFor(() => expect(document.title).toBe(`${byKey.history.label}${TITLE_SUFFIX}`)) // the title is set by an effect after the heading is drawn
   })
 })
 
@@ -124,7 +124,7 @@ describe('changing the tab while the app is open', () => {
     await openByAddress('#history')
     await heading('history')
     expect(shown()).toEqual(['history'])
-    expect(document.title).toBe(`${byKey.history.label}${TITLE_SUFFIX}`)
+    await waitFor(() => expect(document.title).toBe(`${byKey.history.label}${TITLE_SUFFIX}`)) // the title is set by an effect after the heading is drawn
 
     await openByAddress('#committee')
     await heading('committee')
@@ -167,7 +167,7 @@ describe('changing the tab while the app is open', () => {
       expect(shown()).toEqual([key])
       expect(current(key)).toEqual(['page', 'page'])
       for (const other of TABS.filter((t) => t.key !== key)) expect(current(other.key), `${other.key} is not the current page`).toEqual([null, null])
-      expect(document.title).toBe(`${byKey[key].label}${TITLE_SUFFIX}`)
+      await waitFor(() => expect(document.title).toBe(`${byKey[key].label}${TITLE_SUFFIX}`)) // the title is set by an effect after the heading is drawn
       cleanup()
     }
   })
