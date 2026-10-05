@@ -70,9 +70,10 @@ const randomIp = () => `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.
 /**
  * Calls the API handler directly (no network). Each call comes from a fresh address unless `ip` is given.
  * `onBodyRead` is called each time something reads `req.body` (the router does, once, when it builds the context of a
- * handler), so a test can tell whether a request got that far.
+ * handler), so a test can tell whether a request got that far. `now` is the clock that the router measures a slow request with
+ * (handle() in server/router.js); left out, it is the real one.
  */
-export async function call(method, path, { body, token, cookie, headers = {}, ip = randomIp(), badJsonBody = false, onBodyRead } = {}) {
+export async function call(method, path, { body, token, cookie, headers = {}, ip = randomIp(), badJsonBody = false, onBodyRead, now } = {}) {
   const { handle } = await import('../server/index.js')
   const req = {
     method,
@@ -98,7 +99,7 @@ export async function call(method, path, { body, token, cookie, headers = {}, ip
     })
   } else req.body = body
   const res = mockRes()
-  await handle(req, res)
+  await handle(req, res, now)
   await res.done
   let json = null
   try {

@@ -194,3 +194,67 @@ export const DEVICE_STATUS_MAX_TOTAL = 1000000
  * a visit only up to a week, server/config.js), so the committee is shown "unknown" rather than a date that is certainly off.
  */
 export const DEVICE_STATUS_MAX_AGE_DAYS = 60
+
+// ---- 9. What the two apps report about their errors --------------------------------------------------------------
+// A crash or an unhandled error in the provider app or the committee app is reported to the server, which keeps it in
+// `app_errors` for 90 days (ADR 0007, decision 3). It travels in a request of its own and only after sign-in, through the
+// endpoint of the role: POST /api/my/errors (the provider's phone) and POST /api/admin/client-errors (the committee app), both
+// read by parseClientErrorReport in server/routes/clientErrors.js. The body is a ClientErrorReport (shared/types.js) that is cut
+// to the whitelist below: a kind, a screen key, an error's name or code, a build and a count. Never a message, a stack, an
+// address, a body, a token, a name, a QR code or a position. The server answers 200 whatever it was sent and ignores what is not
+// valid or not known (an installed app of another version may send fewer fields or more), so none of these limits can make the
+// server refuse an app.
+
+/**
+ * What an app can report: `crash` (a screen broke while it rendered, what the crash screen shows), `unhandled` (an error or a
+ * rejected promise that nothing caught) and `signed_out` (the server ended the session). They are values of app_errors.kind (a
+ * check constraint, which has the server's own kinds too). The first two also tell the owner (the first error of a building day,
+ * server/alerts.js); `signed_out` is only counted.
+ */
+export const CLIENT_ERROR_KINDS = Object.freeze(['crash', 'unhandled', 'signed_out'])
+
+/**
+ * Where in an app it happened, a closed list of screen keys: `provider:<screen>` for the provider's app and `committee:<tab>` for
+ * the committee app, so that the number of rows in app_errors stays small whatever an app sends. The provider's screens are those of
+ * src/pages/WorkerApp.jsx (the sign-in, the home screen, the check-in in progress, and its result) and the committee's are the tabs
+ * of TABS in src/pages/AdminApp.jsx (tests/client-errors.test.js compares them). The sign-in screens are here although nobody is signed
+ * in when they break: the app keeps the event on the device and sends it after the next sign-in. `provider:app` and `committee:app`
+ * are for a crash outside any screen (the language provider, the boundary above everything). Each provider key starts with
+ * `provider:` and each committee key with `committee:`, and the endpoint of a role takes only its own.
+ */
+export const CLIENT_PLACES = Object.freeze([
+  'provider:login',
+  'provider:home',
+  'provider:working',
+  'provider:result',
+  'provider:app',
+  'committee:login',
+  'committee:points',
+  'committee:providers',
+  'committee:history',
+  'committee:agent',
+  'committee:committee',
+  'committee:app',
+])
+
+/**
+ * What the name of an error looks like: the class of the error (TypeError, RangeError, ...), a letter and up to 63 letters, digits,
+ * `_` or `$`. It is not a value that anybody typed. src/ui/crash.js reports a name that does not look like this as "UnknownError",
+ * and the server keeps a reported `name` only when it does.
+ */
+export const ERROR_NAME_RE = /^[A-Za-z][A-Za-z0-9_$]{0,63}$/
+
+/** What a reported `code` looks like: a short word of lower-case letters, digits and `_` (an API error code such as `invalid_session`). */
+export const CLIENT_ERROR_CODE_RE = /^[a-z0-9_]{1,40}$/
+
+/**
+ * The most events that the server takes from one report; the rest are ignored (never a refusal). An app that has more to say sends
+ * one event with a `count`.
+ */
+export const MAX_CLIENT_ERROR_EVENTS = 20
+
+/**
+ * The largest `count` of one event: a larger whole number is cut to it, and anything that is not a whole number is taken as 1. It
+ * is how many times the same error happened on the device since the last report.
+ */
+export const CLIENT_ERROR_MAX_COUNT = 1000

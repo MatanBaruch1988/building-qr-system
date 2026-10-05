@@ -9,6 +9,8 @@ export default defineConfig({
     //   // @vitest-environment jsdom
     environment: 'node',
     include: ['tests/**/*.test.{js,jsx}'],
+    // Before every file: no test sees a HEALTH_HEARTBEAT_URL, so none can ping the owner's check (see the file).
+    setupFiles: ['tests/setup-no-heartbeat.js'],
     testTimeout: 30000,
     hookTimeout: 60000,
     // Integration tests share one Postgres; each file uses its own throwaway schema.

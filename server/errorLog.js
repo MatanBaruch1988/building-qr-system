@@ -4,8 +4,9 @@
 //
 // What may go in (AGENTS.md, Safety): the route as it is written in the code (`/admin/points/:id`, or a fixed screen key),
 // the HTTP method, the status, the error's code or name (`failureLabel` in server/logSafe.js: a SQLSTATE, a socket errno, an
-// error class), the build of the app, and the Vercel request id when the request carried a well-formed one. Counts and times
-// are made by the table.
+// error class), the build of the app, and the Vercel request id when the request carried a well-formed one. Times are made by
+// the table, and so is the count: 1 for each event of the server, and for an event that an app reports (server/routes/
+// clientErrors.js) the number of times that it says the error happened, a whole number cut to EVENT_COUNT_MAX.
 // What never may go in: a message (a library or database error can quote an input or a row value in it), the path that was
 // asked for or its query string (a segment can hold a QR code, a name or an e-mail), a body, a token, a name, a QR code or
 // a position. Every field below is checked or cut to a length before the query, and the table has the same limits as
@@ -24,9 +25,10 @@
 //      after that is given back unused (the abort signal of the transaction).
 //   4. When the error being recorded is itself a failure to reach the database, the insert would fail as well and only hold
 //      the answer of the request, so it is not attempted.
-import { query, spareClients } from './db.js'
+import { query, spareClients, DB_CONNECT_TIMEOUT } from './db.js'
 import { ERROR_RECORD_TIMEOUT_MS, ERROR_RECORD_LOCK_TIMEOUT_MS, ERROR_RECORD_POOL_RESERVE } from './config.js'
 import { oneLine } from './logSafe.js'
+import { CLIENT_ERROR_MAX_COUNT } from '../shared/contract.js'
 
 /** The values of app_errors.source and app_errors.kind. tests/error-log.test.js compares them with the checks of the table. */
 export const EVENT_SOURCES = Object.freeze(['server', 'provider_app', 'committee_app'])
@@ -40,6 +42,11 @@ export const CODE_MAX_LENGTH = 60
 export const APP_BUILD_MAX_LENGTH = 40
 export const REQUEST_ID_MAX_LENGTH = 128
 export const STATUS_MAX = 599
+/**
+ * The most that one call adds to the count of a row. It is the largest count that an app may report for one event (shared/contract.js),
+ * and what the server itself adds is always 1.
+ */
+export const EVENT_COUNT_MAX = CLIENT_ERROR_MAX_COUNT
 
 // What `place` is when a caller passes none (the table needs a place of at least one character).
 const UNKNOWN_PLACE = '(unknown)'
@@ -79,15 +86,21 @@ const POOL_FAILURES = /^(?:timeout exceeded when trying to connect|Connection te
 /**
  * Whether `err` is a failure to reach the database: a SQLSTATE of class 08 (connection exception), 57P01, 57P02 or 57P03,
  * a socket code of Node (ECONNREFUSED, ECONNRESET, ENOTFOUND, EAI_AGAIN, ETIMEDOUT), or the error of the pool that waited
- * too long for a connection. An error that wraps one (`cause`, or the `errors` of an AggregateError) counts too. It reads
- * the error to decide and keeps nothing of it.
+ * too long for a connection (the `db_connect_timeout` that server/db.js throws for it, or its message as `pg` writes it). An
+ * error that wraps one (`cause`, or the `errors` of an AggregateError) counts too. It reads the error to decide and keeps
+ * nothing of it.
  * @param {unknown} err
  * @param {number} [depth]
  */
 export function isConnectionFailure(err, depth = 0) {
   if (err === null || typeof err !== 'object' || depth > 2) return false
   const { code, message, cause, errors } = /** @type {Record<string, unknown>} */ (err)
-  if (typeof code === 'string' && (code.startsWith('08') || SHUTDOWN_SQLSTATES.has(code) || SOCKET_CODES.has(code))) return true
+  if (
+    typeof code === 'string' &&
+    (code.startsWith('08') || SHUTDOWN_SQLSTATES.has(code) || SOCKET_CODES.has(code) || code === DB_CONNECT_TIMEOUT)
+  ) {
+    return true
+  }
   if (err instanceof Error && typeof message === 'string' && POOL_FAILURES.test(message)) return true
   if (cause !== undefined && isConnectionFailure(cause, depth + 1)) return true
   return Array.isArray(errors) && errors.some((inner) => isConnectionFailure(inner, depth + 1))
@@ -106,17 +119,19 @@ const text = (value, max) => (typeof value === 'string' ? oneLine(value.replace(
  * @property {string} [code]  failureLabel(err): a code or a name, never a message, cut to 60 characters
  * @property {string} [appBuild]  the commit of the build, cut to 40 characters
  * @property {string | null} [requestId]  the Vercel request id, stored only when it is well formed
+ * @property {number} [count]  how many events this call stands for (an app says how many times the same error happened since its last
+ *   report): a whole number from 1 to EVENT_COUNT_MAX, else 1. It is added to the count of the row of the hour
  * @property {unknown} [error]  the error that is being recorded. It is only asked whether it is a failure to reach the
  *   database (then nothing is attempted); nothing of it is stored
  */
 
 /**
  * What goes into the row, every field checked or cut so that the insert cannot fail on a value: a place of 1 to 120
- * characters, a code of at most 60, a build of at most 40, a method from the list, a whole status from 0 to 599. Null when
- * the source or the kind is not one of the lists (there is nothing sensible to write instead).
+ * characters, a code of at most 60, a build of at most 40, a method from the list, a whole status from 0 to 599, a whole count from 1
+ * to EVENT_COUNT_MAX. Null when the source or the kind is not one of the lists (there is nothing sensible to write instead).
  * @param {RecordedEvent} event
  */
-function normalise({ source, kind, place, method, status, code, appBuild, requestId }) {
+function normalise({ source, kind, place, method, status, code, appBuild, requestId, count }) {
   if (!EVENT_SOURCES.includes(source) || !EVENT_KINDS.includes(kind)) return null
   const number = Number(status)
   return {
@@ -128,16 +143,18 @@ function normalise({ source, kind, place, method, status, code, appBuild, reques
     code: text(code, CODE_MAX_LENGTH),
     appBuild: text(appBuild, APP_BUILD_MAX_LENGTH),
     requestId: safeRequestId(requestId),
+    count: Number.isInteger(count) ? Math.min(Math.max(count, 1), EVENT_COUNT_MAX) : 1,
   }
 }
 
-// The row of this hour for this key gets one more event; the first event of a key in an hour makes the row. A request id
-// that is missing never erases the one that is there.
+// The row of this hour for this key gets its events added to the count ($9: 1 for an event of the server, and for one of an app
+// the number of times that it says the error happened); the first event of a key in an hour makes the row. A request id that
+// is missing never erases the one that is there.
 const UPSERT = `
-  insert into app_errors (bucket, source, kind, place, method, status, code, app_build, last_request_id)
-  values (date_trunc('hour', now()), $1, $2, $3, $4, $5, $6, $7, $8)
+  insert into app_errors (bucket, source, kind, place, method, status, code, app_build, last_request_id, count)
+  values (date_trunc('hour', now()), $1, $2, $3, $4, $5, $6, $7, $8, $9)
   on conflict on constraint app_errors_key do update
-    set count = app_errors.count + 1,
+    set count = app_errors.count + excluded.count,
         last_at = now(),
         last_request_id = coalesce(excluded.last_request_id, app_errors.last_request_id)`
 
@@ -172,7 +189,7 @@ export async function recordEvent(event) {
     if (spareClients() <= ERROR_RECORD_POOL_RESERVE) return
     // A late failure of the insert (after the timeout won the race) is handled by the race itself: it listens to both.
     await Promise.race([
-      query(UPSERT, [row.source, row.kind, row.place, row.method, row.status, row.code, row.appBuild, row.requestId], {
+      query(UPSERT, [row.source, row.kind, row.place, row.method, row.status, row.code, row.appBuild, row.requestId, row.count], {
         limits: ERROR_RECORD_LIMITS,
         signal: stopped.signal,
       }),

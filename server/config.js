@@ -63,11 +63,13 @@ export const ADMIN_COOKIE = 'qr_admin'
 //  - a login attempt is deleted after this many days (guardLogin in server/auth.js prunes the same way when someone signs in),
 //  - the label of a phone (the browser string it sent at sign-in) is cleared this many days after the phone was revoked, together
 //    with what the phone reported about itself (migration 010: its build, how many visits waited and since when, the totals),
-//  - a recorded error (app_errors: safe fields only, no personal data) is deleted this many days after its last event.
+//  - a recorded error (app_errors: safe fields only, no personal data) is deleted this many days after its last event,
+//  - a day of the alert throttle (alert_pings: one date, no personal data) is deleted this many days after that day.
 export const RETENTION_SESSION_DAYS = 30
 export const RETENTION_LOGIN_ATTEMPT_DAYS = 1
 export const RETENTION_DEVICE_LABEL_DAYS = 90
 export const RETENTION_APP_ERROR_DAYS = 90
+export const RETENTION_ALERT_PING_DAYS = 30
 
 // Recording an unhandled server error in app_errors (server/errorLog.js) is one insert that the answer of the request waits
 // for, so it is bounded: when the database does not answer within this many milliseconds the answer goes out without the
@@ -82,6 +84,59 @@ export const ERROR_RECORD_LOCK_TIMEOUT_MS = 500
 // and still have this many left for the requests that are being served (the pool of the app has 3, poolConfig in server/db.js).
 // A burst of failures while the database is slow therefore cannot make error records compete with healthy work for the pool.
 export const ERROR_RECORD_POOL_RESERVE = 1
+
+// A request that its guard let in and that took longer than this many milliseconds, from the start of the router to the moment
+// its answer was ready, is recorded as a `slow` event in app_errors (server/router.js), with its route, method and status. It
+// leaves room for a cold Neon start (a compute that is waking from sleep takes a few seconds, see poolConfig in server/db.js),
+// so an ordinary first request after a quiet night is not slow, and a request that takes longer than that is.
+export const SLOW_REQUEST_MS = 5000
+
+// The first server error of a building day pings healthchecks.io (server/alerts.js, server/heartbeat.js, docs/adr/0007). The
+// host (Vercel Hobby) has no way to finish work after the answer, and the function may freeze once it has answered, so the
+// answer of the request waits for the ping, and every wait is bounded. It happens at most once a day, or once an hour (per
+// function instance) when the database itself is down.
+//  - ALERT_DB_TIMEOUT_MS: the one insert that decides whether the day was already announced. When it does not answer in time
+//    the database counts as unreachable, and the throttle in memory decides instead. Like the record of an error (above) the
+//    insert carries this time as its own statement limit, set by the database, so a statement that nobody waits for any more
+//    is cancelled there, and a connection that arrives after the wait is given back unused. Its lock limit is the same short one
+//    (ALERT_LOCK_TIMEOUT_MS): a row that another transaction holds is not worth a long wait.
+//  - ALERT_POOL_RESERVE: like the record of an error, the insert never queues and never takes the last free connection: unless
+//    the pool could give a client at once and keep this many for the requests that are being served, it is not attempted, and the
+//    throttle in memory decides instead.
+//  - HEARTBEAT_TIMEOUT_MS: the request to healthchecks.io. One try, no retry on the path of a request.
+//  - ALERT_TOTAL_TIMEOUT_MS: the whole of noteServerError, whatever happens inside it (the two above, one after the other).
+//  - ALERT_UNREACHABLE_INTERVAL_MS: with no database to ask, one ping an hour at most per function instance.
+//  - HEARTBEAT_BODY_MAX_BYTES: what is sent is a short line of text; a longer body is cut (healthchecks.io keeps 100 kB at most).
+export const ALERT_DB_TIMEOUT_MS = 1500
+export const HEARTBEAT_TIMEOUT_MS = 1000
+export const ALERT_TOTAL_TIMEOUT_MS = 2500
+export const ALERT_UNREACHABLE_INTERVAL_MS = 60 * 60 * 1000
+export const ALERT_POOL_RESERVE = ERROR_RECORD_POOL_RESERVE
+export const ALERT_LOCK_TIMEOUT_MS = ERROR_RECORD_LOCK_TIMEOUT_MS
+export const HEARTBEAT_BODY_MAX_BYTES = 8 * 1024
+
+// The daily summary of the last 24 hours (server/summary.js, GET /api/cron/daily-summary, docs/adr/0007 step 2). Vercel Cron
+// calls it once a day; it pings the owner's check on healthchecks.io with a short text, at the base address when the hours were
+// fine and at /fail when they held a technical problem. These numbers decide what is a problem. Changing one changes when the
+// owner is told, so it is the owner's decision, and tests/summary.test.js names each of them.
+//  - SUMMARY_PERIOD_HOURS: the hours that the summary covers, counted back from the moment it runs (one day: it runs once a day).
+//  - SUMMARY_TOP: how many kinds each list of the body names (the most frequent first); the line also says how many there are.
+//  - SUMMARY_RETENTION_MAX_AGE_HOURS: the retention job (server/retention.js) runs once a day, but Vercel Cron delivers it
+//    anywhere within its hour, and a day can shift by that hour: its newest audit row is fresh when it is younger than this.
+//    A job that has not run for longer than this counts as not having run, and fails the summary.
+//  - SUMMARY_STUCK_PHONE_HOURS: an active phone (not revoked) whose oldest waiting visit is older than this has visits that were
+//    never uploaded for that long (provider_devices.waiting_count, oldest_waiting_at, migration 009). It fails the summary.
+//  - SUMMARY_SIGNIN_BASELINE_DAYS, SUMMARY_SIGNIN_SPIKE_MIN, SUMMARY_SIGNIN_SPIKE_FACTOR: new provider phones, and committee
+//    sign-ins, are each compared with the median per day of the days before the period. A spike is a count of at least
+//    SUMMARY_SIGNIN_SPIKE_MIN that is more than SUMMARY_SIGNIN_SPIKE_FACTOR times that median (a median of 0 makes any count of
+//    5 or more a spike, and 4 never one). It fails the summary: a burst of sign-ins is what a guessing attack looks like.
+export const SUMMARY_PERIOD_HOURS = 24
+export const SUMMARY_TOP = 5
+export const SUMMARY_RETENTION_MAX_AGE_HOURS = 26
+export const SUMMARY_STUCK_PHONE_HOURS = 24
+export const SUMMARY_SIGNIN_BASELINE_DAYS = 14
+export const SUMMARY_SIGNIN_SPIKE_MIN = 5
+export const SUMMARY_SIGNIN_SPIKE_FACTOR = 3
 
 // The audit log keeps the name of the committee member as it was at the time of the action (audit_log.actor_name, a
 // snapshot, so the entry stays readable after the member is deleted). The column refuses more than this many characters

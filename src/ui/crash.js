@@ -6,15 +6,15 @@
 import { currentApp, APP_COMMITTEE } from '../appKind.js'
 import { isUpdateReady, applyUpdate } from '../worker/update.js'
 import { DEFAULT_LANG, dirOf, pickLang, readStoredLang, translate } from '../i18n/core.js'
+import { ERROR_NAME_RE } from '../../shared/contract.js'
 
 // An error's `name` is the class of the error (TypeError, RangeError, ...): not a value that anybody typed. Anything that
-// does not look like such a name (a thrown string, an object with a free-text `name`) is reported as "UnknownError".
-const NAME_SHAPE = /^[A-Za-z][A-Za-z0-9_$]{0,63}$/
-
+// does not look like such a name (a thrown string, an object with a free-text `name`) is reported as "UnknownError". The shape
+// is ERROR_NAME_RE of shared/contract.js, the same one that the server applies to a name that an app reports.
 export function errorName(error) {
   try {
     const name = error?.name
-    return typeof name === 'string' && NAME_SHAPE.test(name) ? name : 'UnknownError'
+    return typeof name === 'string' && ERROR_NAME_RE.test(name) ? name : 'UnknownError'
   } catch {
     return 'UnknownError' // a getter that throws
   }
