@@ -1,10 +1,13 @@
 // Shared pieces for the end-to-end specs: a `page` that fails its test on unexpected console errors, the sample data
 // of the scratch schema, and small helpers for signing in and for resetting what a test changed.
 import { test as base, expect } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
 import he from '../src/i18n/he.js'
 import en from '../src/i18n/en.js'
 import ru from '../src/i18n/ru.js'
 import { SAMPLE_POINT, SAMPLE_FAR_POINT, SAMPLE_PROVIDER_NAMES } from '../scripts/sample-data.mjs'
+import { A11Y_BASELINE } from './a11y-baseline.js'
+import { flattenViolations, compareWithBaseline, formatReport } from './a11y-report.js'
 
 export { expect, he, en, ru, SAMPLE_POINT }
 
@@ -86,4 +89,51 @@ export async function clearScans(request) {
     const del = await request.delete(`/api/admin/scans/${scan.id}`, { data: {} })
     expect(del.ok(), `delete scan ${scan.id}`).toBeTruthy()
   }
+}
+
+// ---- accessibility ---------------------------------------------------------------------------------------------
+
+/** The rules that the scan runs: WCAG 2.1 level A and AA (the level that tests/contrast.test.js holds the colour tokens to). */
+export const A11Y_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
+
+/**
+ * Scans the page as it is now with axe-core (the WCAG 2.1 A and AA rules) and fails the test, with a list that says what
+ * is wrong and where, when it finds a problem that e2e/a11y-baseline.js does not list. The test goes on after a failure
+ * (a soft expectation), so one run lists every screen that has a problem.
+ *
+ * - `context` names the screen and is how the report and the baseline find it, so it is unique per scan ("provider he:
+ *   sign-in list [dark]").
+ * - `exclude` is a list of CSS selectors that axe must not look into: only content that is not ours (a third party's
+ *   iframe), each one explained where it is written.
+ *
+ * The baseline is matched exactly: a baseline entry covers one rule on one element (the CSS target) of one screen. A new
+ * problem of the same rule on another element still fails, and so does a baseline entry whose problem is gone, so the
+ * list cannot go stale.
+ *
+ * What axe cannot decide ("incomplete" in its result) is not a failure. For colours that is the text of a `<select>`
+ * (the arrow is a background image) and some text inside a dialog (axe cannot tell what the fixed overlay covers); the
+ * colour tokens of those are held to AA by tests/contrast.test.js.
+ */
+export async function expectNoA11yViolations(page, { context, exclude = [] }) {
+  // Scan the page in its settled state. A colour that is still on its way (a fade, or a transition that a change of theme
+  // just started: WebKit keeps showing the text of the light theme on the dark page until a frame has been drawn) would be
+  // measured as it is at that moment. So every animation and transition is switched off first, which puts every element
+  // at its end state at once, the way Playwright does for a screenshot.
+  await page.evaluate(() => {
+    if (!document.getElementById('a11y-settled')) {
+      const style = document.createElement('style')
+      style.id = 'a11y-settled'
+      style.textContent = '*, *::before, *::after { animation: none !important; transition: none !important; }'
+      document.head.append(style)
+    }
+    void getComputedStyle(document.body).color // applies the style now
+  })
+  // Legacy mode runs axe in the page itself, without the extra page that axe-core/playwright opens to join the results of
+  // frames: about twice as fast, and the only thing it gives up is a look into cross-origin iframes, which are excluded.
+  const builder = new AxeBuilder({ page }).withTags(A11Y_TAGS).setLegacyMode()
+  for (const selector of exclude) builder.exclude(selector)
+  const { violations } = await builder.analyze()
+
+  const report = compareWithBaseline(flattenViolations(violations), A11Y_BASELINE, context)
+  expect.soft(report.fresh.length + report.gone.length, formatReport(context, report)).toBe(0)
 }
