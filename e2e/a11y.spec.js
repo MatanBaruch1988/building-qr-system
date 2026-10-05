@@ -368,6 +368,23 @@ test.describe('committee app', () => {
   })
 })
 
+/** Opens the audit log, the section at the foot of the Committee tab, and waits for its entries. */
+async function openAuditLog(page) {
+  await page.getByRole('button', { name: 'יומן פעולות', exact: true }).click()
+  const log = page.getByRole('region', { name: 'יומן פעולות' })
+  await expect(log.getByRole('listitem').first()).toBeVisible()
+  await expect(log.getByRole('status').filter({ hasText: 'טוען' })).toHaveCount(0)
+  await expect(log.getByRole('listitem').filter({ hasText: 'הוספת חבר ועד' }).first()).toBeVisible() // the members that the sample data added
+}
+
+/** Filters the open log to the agent keys, and waits until the list has changed. */
+async function filterAuditLog(page) {
+  const log = page.getByRole('region', { name: 'יומן פעולות' })
+  await log.getByLabel('סוג פעולה').selectOption({ label: "מפתחות אייג'נט" })
+  await expect(log.getByRole('listitem').filter({ hasText: 'הוספת חבר ועד' })).toHaveCount(0)
+  await expect(log.getByRole('listitem').filter({ hasText: "יצירת מפתח אייג'נט" }).first()).toBeVisible()
+}
+
 test.describe('committee app with the sample data filled in', () => {
   let committee
   test.beforeAll(async ({ playwright }, testInfo) => {
@@ -405,6 +422,12 @@ test.describe('committee app with the sample data filled in', () => {
     await scanBothThemes(page, 'committee phone: agent')
     await openTab(page, 'committee', 'חברי הוועד')
     await scanBothThemes(page, 'committee phone: committee')
+    // the audit log: a section at the foot of this tab that its button opens (the sample data above wrote its entries)
+    await openAuditLog(page)
+    await scanBothThemes(page, 'committee phone: audit log')
+    // with a filter on: only the entries of the agent keys (the members that were added leave the list)
+    await filterAuditLog(page)
+    await scanBothThemes(page, 'committee phone: audit log, filtered by group')
     // the history with every kind of row: refused, cancelled, flagged, and the demo account's
     await openTab(page, 'history', 'היסטוריית נוכחות')
     await page.getByLabel('סוג').selectOption('all')
@@ -431,6 +454,9 @@ test.describe('committee app with the sample data filled in', () => {
     await expect(page.getByText('נקודה כבויה').first()).toBeVisible()
     await expect(page.getByText('מהתור בטלפון').first()).toBeVisible()
     await scanBothThemes(page, 'committee computer: history, visits not counted')
+    await openTab(page, 'committee', 'חברי הוועד')
+    await openAuditLog(page)
+    await scanBothThemes(page, 'committee computer: audit log')
   })
 
   test('the dialogs of the points and the providers', async ({ page }) => {
