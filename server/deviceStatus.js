@@ -10,6 +10,13 @@
 //
 // A report never fails: a field that is not valid is ignored (never a 400), a field that is not known is ignored, and the answer
 // is always the same, so an installed phone of any version can send it. The limits are in section 8 of shared/contract.js.
+//
+// The two counts (`not_accepted_total`, `overflowed_total`) are CUMULATIVE and only grow: the phone counts them since it signed in
+// and never resets them after a report, and the server keeps the larger of what it holds and what a report says. So a report that
+// the phone sends again (the update committed but the answer was lost), a late duplicate and a report that arrives out of order
+// change nothing, where adding "since the last report" would count the same visits twice. The earlier fields `not_accepted` and
+// `overflowed` (counts since the last report) are ignored like any unknown field. That is safe for the installed apps because no
+// released phone ever sent them: the phone side of this report was not released when they were replaced.
 import { query } from './db.js'
 import { failureLabel } from './logSafe.js'
 import { CLOCK_MAX_FUTURE_MS } from './config.js'
@@ -17,16 +24,13 @@ import {
   APP_BUILD_RE,
   SYNC_QUEUE_MAX_ITEMS,
   DEVICE_STATUS_MIN_INTERVAL_S,
-  DEVICE_STATUS_MAX_COUNT,
+  DEVICE_STATUS_MAX_TOTAL,
   DEVICE_STATUS_MAX_AGE_DAYS,
 } from '../shared/contract.js'
 
 /** @import { DeviceStatusReport } from '../shared/types.js' */
 
 const DAY_MS = 24 * 60 * 60 * 1000
-
-// The largest value of a Postgres `integer`. A running total is cut to it instead of failing the report with an overflow.
-const INTEGER_MAX = 2147483647
 
 // An ISO 8601 date and time WITH a zone (`2026-10-05T08:30:00.000Z`, what Date.prototype.toISOString writes). Anything that
 // `new Date()` would still make a date of (`'1'`, `'2026'`, `'Oct 5'`, a time without a zone, which is read in the server's own
@@ -47,18 +51,23 @@ function believableTime(value, now) {
   return at
 }
 
-/** A count that the phone sends: a whole number is cut to 0..DEVICE_STATUS_MAX_COUNT, anything else counts as 0 (ignored). */
-const countOf = (value) => (Number.isInteger(value) ? Math.min(Math.max(value, 0), DEVICE_STATUS_MAX_COUNT) : 0)
+/**
+ * A cumulative count that the phone sends: a whole number from 0 is cut to DEVICE_STATUS_MAX_TOTAL, anything else (a negative
+ * number, a fraction, a text, null, a missing field) is null: ignored, so the stored value stays.
+ */
+const totalOf = (value) => (Number.isInteger(value) && value >= 0 ? Math.min(value, DEVICE_STATUS_MAX_TOTAL) : null)
 
 /**
  * What the server takes from a report. Pure: it reads only `body` and the clock, and it never throws, for any body.
  *  - `build`, `waiting`: the value, or null when it is not valid or not sent (the column then keeps what it had);
  *  - `oldest`: undefined when the field is not sent (the column keeps what it had), null when it is sent but not believable or
  *    when nothing waits (`waiting` is 0: nothing waits since any time), else the time as a Date;
- *  - `notAccepted`, `overflowed`: what to add to the running totals, 0 for a field that is not valid or not sent.
+ *  - `notAcceptedTotal`, `overflowedTotal`: the cumulative count (0..DEVICE_STATUS_MAX_TOTAL), or null when it is not valid or not
+ *    sent (the column then keeps what it had). The column keeps the larger of the two, so this is never a number to add.
+ * The fields `not_accepted` and `overflowed` of an earlier shape are not read.
  * @param {unknown} body  the parsed JSON of the request: nobody has checked it yet
  * @param {number} [now]  the server's clock, in ms
- * @returns {{ build: string | null, waiting: number | null, oldest: Date | null | undefined, notAccepted: number, overflowed: number }}
+ * @returns {{ build: string | null, waiting: number | null, oldest: Date | null | undefined, notAcceptedTotal: number | null, overflowedTotal: number | null }}
  */
 export function parseDeviceStatusReport(body, now = Date.now()) {
   // Nobody has checked the body: it is read as a DeviceStatusReport only so that the names of its fields are known to the type
@@ -71,7 +80,13 @@ export function parseDeviceStatusReport(body, now = Date.now()) {
   let oldest
   if (waiting === 0) oldest = null
   else if (Object.hasOwn(report, 'oldest_waiting_at')) oldest = believableTime(report.oldest_waiting_at, now)
-  return { build, waiting, oldest, notAccepted: countOf(report.not_accepted), overflowed: countOf(report.overflowed) }
+  return {
+    build,
+    waiting,
+    oldest,
+    notAcceptedTotal: totalOf(report.not_accepted_total),
+    overflowedTotal: totalOf(report.overflowed_total),
+  }
 }
 
 /**
@@ -79,7 +94,10 @@ export function parseDeviceStatusReport(body, now = Date.now()) {
  * statement does everything, so there is no read before the write to race with:
  *  - the throttle is its `where`: a phone that reported less than DEVICE_STATUS_MIN_INTERVAL_S seconds ago matches no row, and
  *    nothing changes;
- *  - the two totals are added in `bigint` and cut to INTEGER_MAX, so they can never overflow the column;
+ *  - each of the two totals becomes the larger of the stored value and the reported one (`greatest`, which skips a null, so a total
+ *    that was not sent or not valid leaves the column as it is). A total only grows, so a report that is sent again, a late
+ *    duplicate or one that arrives out of order changes nothing. A reported value is at most DEVICE_STATUS_MAX_TOTAL, far under
+ *    what an `integer` holds, so there is no sum that could overflow the column;
  *  - a revoked phone is not touched (the guard refused it already; this only closes the gap between the guard and the write).
  * Returns whether a report was stored. A failure of the database is thrown as it is (the router answers 500 and logs its code).
  * @param {string} deviceId
@@ -92,8 +110,8 @@ export async function reportDeviceStatus(deviceId, report) {
         set app_build = coalesce($2::text, app_build),
             waiting_count = coalesce($3::integer, waiting_count),
             oldest_waiting_at = case when $4::boolean then $5::timestamptz else oldest_waiting_at end,
-            not_accepted_total = least(not_accepted_total::bigint + $6::integer, ${INTEGER_MAX})::integer,
-            overflow_total = least(overflow_total::bigint + $7::integer, ${INTEGER_MAX})::integer,
+            not_accepted_total = greatest(not_accepted_total, $6::integer),
+            overflow_total = greatest(overflow_total, $7::integer),
             status_at = now()
       where id = $1
         and revoked_at is null
@@ -104,8 +122,8 @@ export async function reportDeviceStatus(deviceId, report) {
       report.waiting,
       report.oldest !== undefined,
       report.oldest ?? null,
-      report.notAccepted,
-      report.overflowed,
+      report.notAcceptedTotal,
+      report.overflowedTotal,
       DEVICE_STATUS_MIN_INTERVAL_S,
     ],
   )
