@@ -173,4 +173,31 @@
  * @typedef {{ entries: AuditEntry[], next_cursor: string | null }} AuditPage
  */
 
+/**
+ * One thing an app reports about an error on its device (limits in section 9 of shared/contract.js, read by parseClientErrorReport in
+ * server/routes/clientErrors.js). Only `kind` and `place` are needed; the server ignores an event without a valid pair, a field that is
+ * not valid and a field that it does not know, so an app of another version can send fewer fields or more. Never put a message, a
+ * stack, an address, a body, a token, a name, a QR code or a position in it: nothing of the sort is read, and a person reads this
+ * type as the list of what leaves the device.
+ * @typedef {object} ClientErrorEvent
+ * @property {string} kind  one of CLIENT_ERROR_KINDS
+ * @property {string} place  one of CLIENT_PLACES; `provider:...` to POST /api/my/errors and `committee:...` to POST /api/admin/client-errors
+ * @property {string} [name]  the class of the error (ERROR_NAME_RE), for example `TypeError`
+ * @property {string} [code]  a short code (CLIENT_ERROR_CODE_RE), for example an API error code. Kept in place of `name` when both are sent
+ * @property {string} [build]  the build id of the app (APP_BUILD_RE)
+ * @property {number} [count]  how many times it happened since the last report: a whole number, cut to CLIENT_ERROR_MAX_COUNT (1 when missing or not valid)
+ */
+
+/**
+ * The body of POST /api/my/errors and POST /api/admin/client-errors: at most MAX_CLIENT_ERROR_EVENTS events (shared/contract.js), the
+ * rest are ignored.
+ * @typedef {{ events: ClientErrorEvent[] }} ClientErrorReport
+ */
+
+/**
+ * The answer of both endpoints, always: `recorded` is how many events the server took from the report (valid ones, at most
+ * MAX_CLIENT_ERROR_EVENTS), not how many rows it wrote. It never answers 400 for an event it does not like.
+ * @typedef {{ ok: true, recorded: number }} ClientErrorAnswer
+ */
+
 export {}

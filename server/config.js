@@ -115,6 +115,29 @@ export const ALERT_POOL_RESERVE = ERROR_RECORD_POOL_RESERVE
 export const ALERT_LOCK_TIMEOUT_MS = ERROR_RECORD_LOCK_TIMEOUT_MS
 export const HEARTBEAT_BODY_MAX_BYTES = 8 * 1024
 
+// The daily summary of the last 24 hours (server/summary.js, GET /api/cron/daily-summary, docs/adr/0007 step 2). Vercel Cron
+// calls it once a day; it pings the owner's check on healthchecks.io with a short text, at the base address when the hours were
+// fine and at /fail when they held a technical problem. These numbers decide what is a problem. Changing one changes when the
+// owner is told, so it is the owner's decision, and tests/summary.test.js names each of them.
+//  - SUMMARY_PERIOD_HOURS: the hours that the summary covers, counted back from the moment it runs (one day: it runs once a day).
+//  - SUMMARY_TOP: how many kinds each list of the body names (the most frequent first); the line also says how many there are.
+//  - SUMMARY_RETENTION_MAX_AGE_HOURS: the retention job (server/retention.js) runs once a day, but Vercel Cron delivers it
+//    anywhere within its hour, and a day can shift by that hour: its newest audit row is fresh when it is younger than this.
+//    A job that has not run for longer than this counts as not having run, and fails the summary.
+//  - SUMMARY_STUCK_PHONE_HOURS: an active phone (not revoked) whose oldest waiting visit is older than this has visits that were
+//    never uploaded for that long (provider_devices.waiting_count, oldest_waiting_at, migration 009). It fails the summary.
+//  - SUMMARY_SIGNIN_BASELINE_DAYS, SUMMARY_SIGNIN_SPIKE_MIN, SUMMARY_SIGNIN_SPIKE_FACTOR: new provider phones, and committee
+//    sign-ins, are each compared with the median per day of the days before the period. A spike is a count of at least
+//    SUMMARY_SIGNIN_SPIKE_MIN that is more than SUMMARY_SIGNIN_SPIKE_FACTOR times that median (a median of 0 makes any count of
+//    5 or more a spike, and 4 never one). It fails the summary: a burst of sign-ins is what a guessing attack looks like.
+export const SUMMARY_PERIOD_HOURS = 24
+export const SUMMARY_TOP = 5
+export const SUMMARY_RETENTION_MAX_AGE_HOURS = 26
+export const SUMMARY_STUCK_PHONE_HOURS = 24
+export const SUMMARY_SIGNIN_BASELINE_DAYS = 14
+export const SUMMARY_SIGNIN_SPIKE_MIN = 5
+export const SUMMARY_SIGNIN_SPIKE_FACTOR = 3
+
 // The audit log keeps the name of the committee member as it was at the time of the action (audit_log.actor_name, a
 // snapshot, so the entry stays readable after the member is deleted). The column refuses more than this many characters
 // (db/migrations/007_audit_log_append_only.sql), so the code cuts a longer name instead of failing the action.
