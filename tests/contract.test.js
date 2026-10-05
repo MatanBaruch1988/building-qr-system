@@ -529,6 +529,8 @@ const PINNED = [
   ['PROVIDER_TOKEN_PREFIX', contract.PROVIDER_TOKEN_PREFIX, 'qrp_', `Every device token that the server minted starts with it, and the phone drops a stored session whose token does not (src/worker/session.js), so a different prefix signs out every installed phone the next time it starts. The server also refuses a token without it. ${OLD_PHONES}`],
   ['MAX_TOKEN_LENGTH', contract.MAX_TOKEN_LENGTH, 200, `The server refuses a token longer than this without a query, and the phone drops a stored session whose token is longer. A minted token is 47 characters: a value below that would refuse every token that exists, and every installed phone would be signed out. ${OLD_PHONES}`],
   ['QR_TOKEN_RE (its flags)', contract.QR_TOKEN_RE.flags, '', 'A global or sticky flag makes test() remember where it stopped, and the next scan of a valid code fails.'],
+  ['APP_BUILD_RE (its source)', contract.APP_BUILD_RE.source, '^(?:[0-9a-f]{7}|dev)$', `It is the shape of the build id that vite.config.js writes into the bundle (7 characters of the commit, or dev) and that src/ui/build.js accepts. It is never narrowed: a phone keeps the id it was built with until it is updated, and a reader of the shape (the server, once a phone reports its build) must accept every id that a build ever wrote. ${OLD_PHONES}`],
+  ['APP_BUILD_RE (its flags)', contract.APP_BUILD_RE.flags, '', 'A global or sticky flag makes test() remember where it stopped, and the next id that is checked fails.'],
 ]
 
 describe('the values of shared/contract.js are pinned: a change is a decision about the installed phones', () => {
