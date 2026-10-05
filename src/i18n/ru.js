@@ -1,5 +1,6 @@
 export default {
   'app.name': 'Посещаемость здания',
+  'app.version': 'Версия',
   'lang.label': 'Язык',
   'footer.admin': 'Вход для правления',
   'common.loading': 'Загрузка…',

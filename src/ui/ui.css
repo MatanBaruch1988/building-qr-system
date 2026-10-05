@@ -132,6 +132,10 @@
 .w-h1 { font-size: 1.75rem; line-height: 1.2; font-weight: var(--w-weight-bold); }
 .w-lead { color: var(--w-text-2); font-size: 1.0625rem; }
 .w-small { color: var(--w-text-3); font-size: 0.875rem; line-height: 1.5; }
+/* The build id line (src/ui/BuildLabel.jsx): as quiet as the small text, on the same colour that tests/contrast.test.js holds
+   to AA in both themes. The id itself is a left-to-right run inside the line (a <bdi dir="ltr">). */
+.w-build { color: var(--w-text-3); font-size: 0.8125rem; line-height: 1.5; }
+.w-build--center { align-self: center; text-align: center; }
 
 /* ----- buttons ----- */
 .w-btn {
