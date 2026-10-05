@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { test, expect, he, PEOPLE, POINTS, FAR, SAMPLE_POINT, adminSignIn, clearScans, allowConsoleErrors } from './fixtures.js'
 import { SCAN_ERROR_POINT_INACTIVE } from '../shared/contract.js'
+import { formatDateTime } from '../shared/datetime.js'
 
 const COMPUTER = { width: 1280, height: 800 }
 // Each tab and the heading of its page (every view renders its own h1 above its content)
@@ -228,9 +229,21 @@ test('every screen has its actions in the same order and places, with the red tr
     expect(editEdges.length).toBeGreaterThan(2)
     near(editEdges, 1, 'providers: the edit icon is in the same place on every tile')
     // the icon for signed-in phones is there for some providers and not for others, and nothing else moved because of it
-    const withPhones = await page.getByRole('button', { name: 'ניתוק מכשירים' }).count()
+    const phonesButton = page.getByRole('button', { name: 'מכשירים', exact: true })
+    const withPhones = await phonesButton.count()
     expect(withPhones, 'some providers have a phone signed in').toBeGreaterThan(0)
     expect(withPhones, 'and some do not').toBeLessThan(editEdges.length)
+    // "מכשירים" is a screen action, so on every tile that has it, it is the first icon: before the new password, edit, switch off
+    // and delete, in the markup and on the screen (the text runs right to left, so the first icon is the rightmost)
+    const phoneTiles = page.getByRole('article').filter({ has: phonesButton })
+    for (let i = 0; i < await phoneTiles.count(); i++) {
+      const buttons = phoneTiles.nth(i).getByRole('button')
+      const names = await Promise.all((await buttons.all()).map((b) => b.getAttribute('aria-label')))
+      expect(names, `providers #${i}: the actions in order`).toEqual(['מכשירים', 'סיסמה חדשה', 'עריכה', names[3], 'מחיקת נותן השירות'])
+      expect(['השבתה', 'הפעלה']).toContain(names[3])
+      const xs = (await Promise.all((await buttons.all()).map((b) => b.boundingBox()))).map((box) => box.x)
+      expect(xs, `providers #${i}: each icon is to the left of the one before it`).toEqual([...xs].sort((a, b) => b - a))
+    }
 
     await page.goto('/admin#committee')
     await loaded(page, 'חברי הוועד')
@@ -241,6 +254,110 @@ test('every screen has its actions in the same order and places, with the red tr
     await phone.dispose()
     await page.request.delete(`/api/admin/admins/${member.id}`)
     for (const key of [live, dead]) await page.request.delete(`/api/admin/api-keys/${key.id}`)
+  }
+})
+
+// ---- the phones of a provider --------------------------------------------------------------------------------------------
+
+test("a provider's phones: the card says what waits on them, and a dialog lists each phone, on a phone and on a computer", async ({ page, playwright }) => {
+  await adminSignIn(page)
+  const LABEL = 'Fake Browser Label' // what the app sends as the label of a phone: the committee never sees it
+  const HOUR = 3600 * 1000
+  const oldest = new Date(Date.now() - 30 * HOUR).toISOString() // a visit that has waited 30 hours on one phone
+  const phone = await playwright.request.newContext({ baseURL: page.url().split('/admin')[0] })
+  const providers = (await (await phone.get('/api/public/providers')).json()).providers
+  const john = providers.find((p) => p.contact_name === PEOPLE.john.name)
+  try {
+    // An earlier test may have signed John in on a phone: start from none, so that the two below are all he has.
+    expect((await page.request.post(`/api/admin/providers/${john.id}/revoke-devices`, { data: {} })).ok()).toBeTruthy()
+    // John signs in on two phones. The first reports what waits in its queue and uploads it; the second is an old version of the app: it reports nothing.
+    const signInPhone = async () =>
+      (await (await phone.post('/api/session', { data: { provider_id: john.id, password: PEOPLE.john.password, device_label: LABEL } })).json()).token
+    const reporting = { authorization: `Bearer ${await signInPhone()}` }
+    await signInPhone()
+    const report = await phone.post('/api/my/device-status', {
+      headers: reporting, data: { build: 'abcdef1', waiting: 3, oldest_waiting_at: oldest, not_accepted_total: 2, overflowed_total: 1 },
+    })
+    expect(report.ok(), 'the phone reports').toBeTruthy()
+    const upload = await phone.post('/api/scans/sync', {
+      headers: reporting, data: { scans: [{ id: randomUUID(), code: POINTS.lobby, client_time: new Date(Date.now() - HOUR).toISOString() }] },
+    })
+    expect(upload.ok(), 'the phone uploads its queue').toBeTruthy()
+
+    // the card: how many wait and since when (DD/MM/YYYY HH:MM), and the warning for a visit that has waited more than 24 hours
+    await page.goto('/admin#providers')
+    await loaded(page, 'נותני שירות')
+    const tile = page.getByRole('article').filter({ hasText: PEOPLE.john.name })
+    await expect(tile.locator('dt:has-text("ממתינות בטלפון") + dd')).toHaveText(`3, מאז ${formatDateTime(oldest)}`)
+    await expect(tile.locator('dt:has-text("ממתינות בטלפון") + dd')).toHaveText(/^3, מאז \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/)
+    await expect(tile.getByText('ממתינות מעל 24 שעות')).toBeVisible()
+    await expect(tile.locator('dt:has-text("מכשירים מחוברים") + dd')).toHaveText('2')
+    expect(await noHorizontalScroll(page), 'the card at phone width').toBe(true)
+
+    // the dialog: both phones, the one that reported with everything it said, the other as "not reporting"; never the label
+    await tile.getByRole('button', { name: 'מכשירים', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: `מכשירים: ${PEOPLE.john.name}` })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('heading', { level: 3 })).toHaveCount(2)
+    const DATE_TIME = /^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/
+    const fact = (row, label) => row.locator(`dt:has-text("${label}") + dd`)
+    const reported = dialog.getByRole('listitem').filter({ hasText: 'abcdef1' })
+    await expect(reported).toHaveCount(1)
+    await expect(fact(reported, 'ממתינות בטלפון')).toHaveText(`3, מאז ${formatDateTime(oldest)}`)
+    await expect(fact(reported, 'לא נקלטו')).toContainText('2')
+    await expect(fact(reported, 'נזרקו כי התור התמלא')).toContainText('1')
+    await expect(fact(reported, 'דיווח אחרון')).toHaveText(DATE_TIME)
+    await expect(fact(reported, 'העלאה אחרונה מהתור')).toHaveText(DATE_TIME)
+    await expect(fact(reported, 'קשר אחרון עם השרת')).toContainText('מדויק עד כ-5 דקות')
+    await expect(fact(reported, 'התחברות')).toHaveText(DATE_TIME)
+    const silent = dialog.getByRole('listitem').filter({ hasText: 'לא מדווח' })
+    await expect(silent).toHaveCount(1)
+    await expect(fact(silent, 'ממתינות בטלפון')).toHaveText('-')
+    await expect(fact(silent, 'גרסה')).toHaveText('לא ידועה')
+    await expect(dialog.locator('li')).toHaveCount(2)
+    await expect(page.locator('body')).not.toContainText(LABEL)
+
+    // it fits on a phone and on a computer, and the way to sign everyone out stays on the screen at the bottom
+    const fits = async (where) => {
+      const view = page.viewportSize()
+      const box = await dialog.boundingBox()
+      expect(box.x, `${where}: the dialog starts inside the screen`).toBeGreaterThanOrEqual(-0.5)
+      expect(box.x + box.width, `${where}: the dialog ends inside the screen`).toBeLessThanOrEqual(view.width + 0.5)
+      expect(await noHorizontalScroll(page), `${where}: no sideways scroll`).toBe(true)
+      const sticking = await dialog.evaluate((el) => {
+        const edge = el.getBoundingClientRect()
+        return [...el.querySelectorAll('*')].filter((c) => {
+          const r = c.getBoundingClientRect()
+          return r.width > 0 && (r.right > edge.right + 1 || r.left < edge.left - 1)
+        }).length
+      })
+      expect(sticking, `${where}: nothing sticks out of the dialog`).toBe(0)
+      await expect(dialog.getByRole('button', { name: 'ניתוק כל המכשירים' }), `${where}: the sign-out of all phones is in view`).toBeInViewport()
+    }
+    await fits('phone')
+    await page.setViewportSize(COMPUTER)
+    await fits('computer')
+    expect((await dialog.boundingBox()).width, 'on a computer the dialog is a window, not the width of the screen').toBeLessThan(COMPUTER.width / 2)
+
+    // signing everyone out from the dialog: the question first (saying no keeps everything), then it is done and the card shows it
+    await dialog.getByRole('button', { name: 'ניתוק כל המכשירים' }).click()
+    const question = page.getByRole('dialog', { name: 'לנתק את כל המכשירים?' })
+    await expect(question).toBeVisible()
+    await question.getByRole('button', { name: 'ביטול' }).click()
+    await expect(question).toHaveCount(0)
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole('button', { name: 'ניתוק כל המכשירים' }).click()
+    await question.getByRole('button', { name: 'ניתוק', exact: true }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'המכשירים נותקו' })).toBeVisible()
+    await expect(dialog).toHaveCount(0)
+    await expect(tile.getByRole('button', { name: 'מכשירים', exact: true })).toHaveCount(0)
+    await expect(tile.getByText('ממתינות בטלפון')).toHaveCount(0)
+    await expect(tile.getByText('ממתינות מעל 24 שעות')).toHaveCount(0)
+    // and the phone really is signed out: the server refuses its next report
+    expect((await phone.post('/api/my/device-status', { headers: reporting, data: {} })).status()).toBe(401)
+  } finally {
+    await page.request.post(`/api/admin/providers/${john.id}/revoke-devices`, { data: {} }) // in case the test stopped before that
+    await phone.dispose()
   }
 })
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { adminApi, errorText, copyText } from '../api.js'
+import { adminApi, errorText, copyText, providerDevices } from '../api.js'
 import { useLoad, SERVICE_TYPES, serviceLabel, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconEdit, IconKey, IconDevice, IconBan, IconCheck, IconCopy, IconRefresh, IconUsers, IconAlert, IconTrash } from '../icons.jsx'
@@ -131,6 +131,69 @@ function PasswordDialog({ provider, onClose, onSaved }) {
   )
 }
 
+/* ---------------------------------------------------------- phone health */
+
+// Phone health (ADR 0007, "Phone health"): what each phone reported about itself. A visit that has waited on a phone for more
+// than this long is one that the committee should look at, so the card says so.
+const STUCK_AFTER_MS = 24 * 60 * 60 * 1000
+const isStuck = (p) => p.waiting > 0 && Boolean(p.oldest_waiting_at) && Date.now() - Date.parse(p.oldest_waiting_at) > STUCK_AFTER_MS
+const outdatedNote = (n) => (n === 1 ? 'גרסה ישנה במכשיר' : `גרסה ישנה ב-${n} מכשירים`)
+
+/** A date and time inside a line of Hebrew: DD/MM/YYYY HH:MM, kept in one piece and left to right. */
+const Stamp = ({ at }) => <span className="a-stamp">{formatDateTime(at)}</span>
+
+/** How many visits wait on a phone, and since when. `count` is null for a phone that never reported. */
+function Waiting({ count, since }) {
+  if (count === null || count === undefined) return <>-</>
+  if (count === 0) return <>אין</>
+  return <>{count}{since ? <>, מאז <Stamp at={since} /></> : null}</>
+}
+
+/** One phone, read only. Never its label: the committee app does not show the browser string (docs/privacy.md). */
+function PhoneRow({ device: d, number }) {
+  return (
+    <li className="a-phone">
+      <h3 className="a-phone__title">מכשיר {number}</h3>
+      <dl className="a-facts">
+        <dt>ממתינות בטלפון</dt><dd><Waiting count={d.waiting_count} since={d.oldest_waiting_at} /></dd>
+        {d.not_accepted_total > 0 && <><dt>לא נקלטו</dt><dd>{d.not_accepted_total} <span className="w-small">מאז ההתחברות</span></dd></>}
+        {d.overflow_total > 0 && <><dt>נזרקו כי התור התמלא</dt><dd>{d.overflow_total} <span className="w-small">מאז ההתחברות</span></dd></>}
+        <dt>דיווח אחרון</dt>
+        <dd>
+          {d.status_at ? <Stamp at={d.status_at} /> : <><span>לא מדווח</span> <span className="w-small">אפליקציה ישנה, או שעוד לא דיווחה</span></>}
+        </dd>
+        <dt>העלאה אחרונה מהתור</dt><dd>{d.last_sync_at ? <Stamp at={d.last_sync_at} /> : 'עוד לא הייתה'}</dd>
+        <dt>קשר אחרון עם השרת</dt><dd><Stamp at={d.last_seen_at} /> <span className="w-small">מדויק עד כ-5 דקות</span></dd>
+        <dt>התחברות</dt><dd><Stamp at={d.created_at} /></dd>
+        <dt>גרסה</dt>
+        <dd>{d.app_build ? <span className="a-code">{d.app_build}</span> : 'לא ידועה'}{d.outdated && <> <Badge>ישנה</Badge></>}</dd>
+      </dl>
+    </li>
+  )
+}
+
+/** The phones of one provider that are signed in, and the way to sign them all out. */
+function PhonesDialog({ provider, busy, onClose, onRevokeAll }) {
+  const devices = useLoad(() => providerDevices(provider.id))
+  const list = devices.data?.devices ?? []
+  const none = devices.status === 'ready' && list.length === 0
+  return (
+    <Modal
+      title={`מכשירים: ${provider.contact_name || provider.company}`}
+      onClose={onClose}
+      // Signing everyone out must stay possible when the list could not be loaded: it is what the committee does for a lost phone.
+      footer={none ? null : <button type="button" className="w-btn w-btn--ghost w-btn--small" onClick={onRevokeAll} disabled={busy}>ניתוק כל המכשירים</button>}
+    >
+      {devices.status === 'loading' && <Spinner />}
+      {devices.status === 'error' && !devices.data && (
+        <EmptyState icon={IconAlert} title="לא הצלחנו לטעון" action={<button className="w-btn w-btn--small" onClick={devices.reload}>נסו שוב</button>} />
+      )}
+      {none && <EmptyState icon={IconDevice} title="אין מכשירים מחוברים">כשנותן השירות ייכנס בטלפון, המכשיר יופיע כאן.</EmptyState>}
+      {list.length > 0 && <ul className="a-phones" tabIndex={0} aria-label="המכשירים המחוברים">{list.map((d, i) => <PhoneRow key={d.id} device={d} number={i + 1} />)}</ul>}
+    </Modal>
+  )
+}
+
 /* ------------------------------------------------------------------ view */
 
 export default function ProvidersView() {
@@ -140,6 +203,7 @@ export default function ProvidersView() {
   const [editing, setEditing] = useState(null)
   const [resetting, setResetting] = useState(null)
   const [handover, setHandover] = useState(null)
+  const [phones, setPhones] = useState(null)
   const [busy, run] = useAction(toast, errorText)
   const list = providers.data?.providers ?? []
 
@@ -169,13 +233,16 @@ export default function ProvidersView() {
     if (ok && await run(() => adminApi(`/providers/${p.id}`, { method: 'DELETE' }), 'נותן השירות נמחק')) providers.reload()
   }
 
+  // Signing every phone out of one provider, after a confirmation. Returns whether it was done.
   const revokeDevices = async (p) => {
     const ok = await confirm({
       title: 'לנתק את כל המכשירים?',
       body: `${p.contact_name || p.company} יצטרך להיכנס שוב עם הסיסמה בכל טלפון. מתאים למכשיר שאבד.`,
       confirmLabel: 'ניתוק', danger: true,
     })
-    if (ok && await run(() => adminApi(`/providers/${p.id}/revoke-devices`, { method: 'POST' }), 'המכשירים נותקו')) providers.reload()
+    const done = ok && Boolean(await run(() => adminApi(`/providers/${p.id}/revoke-devices`, { method: 'POST' }), 'המכשירים נותקו'))
+    if (done) providers.reload()
+    return done
   }
 
   return (
@@ -208,7 +275,7 @@ export default function ProvidersView() {
                 {p.contact_name && <p className="a-card__sub">{p.company}</p>}
               </div>
               <div className="a-card__tools">
-                {p.active_devices > 0 && <IconButton icon={IconDevice} label="ניתוק מכשירים" onClick={() => revokeDevices(p)} disabled={busy} />}
+                {p.active_devices > 0 && <IconButton icon={IconDevice} label="מכשירים" onClick={() => setPhones(p)} />}
                 <IconButton icon={IconKey} label="סיסמה חדשה" onClick={() => setResetting(p)} />
                 <IconButton icon={IconEdit} label="עריכה" onClick={() => setEditing(p)} />
                 <IconButton icon={p.is_active ? IconBan : IconCheck} label={p.is_active ? 'השבתה' : 'הפעלה'} onClick={() => toggleActive(p)} disabled={busy} />
@@ -220,10 +287,13 @@ export default function ProvidersView() {
               {p.service_type && <Badge tone="info">{serviceLabel(p.service_type)}</Badge>}
               {p.is_demo && <Badge tone="warn">דמו</Badge>}
               {!p.has_password && <Badge tone="danger">אין סיסמה</Badge>}
+              {isStuck(p) && <Badge tone="warn">ממתינות מעל 24 שעות</Badge>}
+              {p.outdated_devices > 0 && <Badge>{outdatedNote(p.outdated_devices)}</Badge>}
             </div>
             <dl className="a-facts">
-              <dt>נוכחות אחרונה</dt><dd>{formatDateTime(p.last_scan_at)}</dd>
+              <dt>נוכחות אחרונה</dt><dd><Stamp at={p.last_scan_at} /></dd>
               <dt>מכשירים מחוברים</dt><dd>{p.active_devices}</dd>
+              {p.waiting > 0 && <><dt>ממתינות בטלפון</dt><dd><Waiting count={p.waiting} since={p.oldest_waiting_at} /></dd></>}
             </dl>
           </article>
         ))}
@@ -241,6 +311,14 @@ export default function ProvidersView() {
           provider={resetting}
           onClose={() => setResetting(null)}
           onSaved={(saved, password) => { setResetting(null); providers.reload(); setHandover({ provider: saved, password }) }}
+        />
+      )}
+      {phones && (
+        <PhonesDialog
+          provider={phones}
+          busy={busy}
+          onClose={() => setPhones(null)}
+          onRevokeAll={async () => { if (await revokeDevices(phones)) setPhones(null) }}
         />
       )}
       {handover && <PasswordHandover {...handover} onClose={() => setHandover(null)} />}
