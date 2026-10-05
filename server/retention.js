@@ -39,8 +39,8 @@ export async function runRetention() {
       [RETENTION_DEVICE_LABEL_DAYS],
     )
     const counts = { sessions: sessions.rowCount, loginAttempts: attempts.rowCount, deviceLabels: labels.rowCount }
-    // Counts only: no id, no name, no label. The audit log has no end date, and nothing in the app reads it today (no screen,
-    // no agent API, no export): only whoever holds the database or a backup can.
+    // Counts only: no id, no name, no label. The audit log has no end date. The committee reads it (GET /api/admin/audit);
+    // the agent API and the exports do not have it, and whoever holds the database or a backup can read it too.
     // actor_name stays null on purpose: it is the snapshot of a person's name, and the system actor is already named by
     // actor_type, so a screen can name it in the reader's own language (src/i18n), which a fixed English string in the
     // database could not do.

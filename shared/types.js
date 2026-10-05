@@ -116,4 +116,27 @@
  * @typedef {{ results: SyncItemResult[] }} SyncResponse
  */
 
+/**
+ * One entry of the audit log, as the committee reads it (GET /api/admin/audit, auditEntry in server/routes/audit.js). It is
+ * the row of `audit_log` and the name of the member, nothing else: no session, no token. The agent API never has it.
+ * @typedef {object} AuditEntry
+ * @property {string} id  the row's number (a bigint, so it is text and never rounded); the order of two entries with the same `at`
+ * @property {string} at  ISO 8601, UTC
+ * @property {string} action  `<group>.<what>`, for example `point.update` or `api_key.revoke`
+ * @property {string | null} entity  what the action was about (`point`, `provider`, `scan`, ...); null for `retention.run`
+ * @property {string | null} entity_id  null when the entity is one thing (`building`) or there is none
+ * @property {string} actor_type  `admin` (a committee member) or `system` (the daily job)
+ * @property {string | null} actor_id  the member's id; null for `system`
+ * @property {string | null} actor_name  the name as it was at the time of the action (their e-mail when they had no name), else the
+ *   member's current name or e-mail for an older row; null for `system` and when nothing is known
+ * @property {boolean} actor_deleted  an `admin` actor that is no longer on the committee list (the name on the row is still shown)
+ * @property {Record<string, unknown> | null} detail  as it was stored: counts, ids, and for some actions a name, an e-mail, the building's address or the
+ *   reason typed for a voided scan (docs/privacy.md)
+ */
+
+/**
+ * The answer of GET /api/admin/audit: newest first, and `next_cursor` (null on the last page) is passed back as `cursor`.
+ * @typedef {{ entries: AuditEntry[], next_cursor: string | null }} AuditPage
+ */
+
 export {}
