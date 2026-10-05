@@ -217,8 +217,9 @@ export async function handle(req, res) {
     const requestId = requestIdOf(req.headers)
     // The same event goes into app_errors (docs/adr/0007), with safe fields only, and only for a route that matched: the
     // route as it is written in the code, never the path that was asked for. A refusal (an ApiError, a 4xx) and an Answer
-    // are answered above and are not recorded. recordEvent never throws and never logs, and it waits for the database at most
-    // ERROR_RECORD_TIMEOUT_MS, so the answer below is sent in any case.
+    // are answered above and are not recorded. recordEvent never throws and never logs, it never queues for a connection (it
+    // does nothing while the pool is busy), and it waits for the database at most ERROR_RECORD_TIMEOUT_MS, so the answer
+    // below is sent in any case.
     if (matched) {
       await recordEvent({
         source: 'server',

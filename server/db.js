@@ -52,22 +52,51 @@ export function poolConfig(connectionString, schema, limits = QUERY_LIMITS) {
  * The statement that opens a transaction with the limits on it, in one round trip (a simple query that holds several
  * statements; the transaction stays open after it). `limits` undefined (a test double) opens a plain transaction. A limit
  * is written into the SQL, so it must be a whole number of milliseconds of 1 or more: 0 would switch the limit off.
+ * `lockMs` is optional and the limits of the pool have none (a statement that waits for a lock is ended by `statementMs`
+ * like any other): when it is there, a statement that waits for a lock longer than that is ended with SQLSTATE 55P03.
  */
 export function beginSql(limits) {
   if (!limits) return 'begin'
-  const { statementMs, idleInTransactionMs } = limits
-  for (const ms of [statementMs, idleInTransactionMs]) {
+  const { statementMs, idleInTransactionMs, lockMs } = limits
+  for (const ms of lockMs === undefined ? [statementMs, idleInTransactionMs] : [statementMs, idleInTransactionMs, lockMs]) {
     if (!Number.isInteger(ms) || ms < 1) throw new Error('A query limit must be a whole number of milliseconds, 1 or more')
   }
-  return `begin; set local statement_timeout = ${statementMs}; set local idle_in_transaction_session_timeout = ${idleInTransactionMs}`
+  const lock = lockMs === undefined ? '' : `; set local lock_timeout = ${lockMs}`
+  return `begin; set local statement_timeout = ${statementMs}; set local idle_in_transaction_session_timeout = ${idleInTransactionMs}${lock}`
 }
 
-/** Runs `fn(client)` in one transaction that carries the pool's limits: commit when it returns, roll back when it throws. */
-async function inTransaction(p, fn) {
+/**
+ * What a caller may add to one statement of `LimitedPool.query` (the third argument), for work that must not hold a
+ * connection for as long as the app's own limits allow:
+ *  - `limits`: replaces fields of the pool's limits for this statement only (a transaction that is not this statement's
+ *    keeps the pool's, so nothing else changes), for example `{ statementMs: 1500, lockMs: 500 }`;
+ *  - `signal`: when it is aborted before the statement has started (the caller stopped waiting while the pool was handing
+ *    out a connection), the connection is given back at once and the statement is not run.
+ * @typedef {object} StatementOptions
+ * @property {{ statementMs?: number, idleInTransactionMs?: number, lockMs?: number }} [limits]
+ * @property {AbortSignal} [signal]
+ */
+
+/**
+ * Runs `fn(client)` in one transaction that carries the pool's limits (or those of `options.limits` over them): commit when
+ * it returns, roll back when it throws. The client always goes back to the pool: after a commit, after a failure and when
+ * `options.signal` was aborted while the connection was being made.
+ * @param {*} p
+ * @param {(client: import('pg').PoolClient) => Promise<any>} fn
+ * @param {StatementOptions} [options]
+ */
+async function inTransaction(p, fn, { limits, signal } = {}) {
+  // Built first, so that a bad limit is refused before a connection is taken. A pool without limits (a test double) opens a
+  // plain transaction whatever is asked.
+  const begin = beginSql(p.limits ? { ...p.limits, ...limits } : undefined)
   const client = await p.connect()
+  if (signal?.aborted) {
+    client.release()
+    signal.throwIfAborted()
+  }
   let broken = false
   try {
-    await client.query(beginSql(p.limits))
+    await client.query(begin)
     const result = await fn(client)
     await client.query('commit')
     return result
@@ -85,8 +114,9 @@ async function inTransaction(p, fn) {
 /**
  * A pool whose `query` runs the statement in a transaction of its own that carries the limits (begin, the statement,
  * commit: three round trips instead of one, which is milliseconds between a Vercel function and Neon in the same region).
- * Only the promise form `query(text, params)` is supported, the only one the app uses. Behind a transaction pooler a
- * single statement is a transaction of its own anyway, so this changes nothing but the limits.
+ * Only the promise form `query(text, params)` is supported, the only one the app uses, with an optional third argument
+ * (StatementOptions) that only work which needs its own, shorter, limits passes. Behind a transaction pooler a single
+ * statement is a transaction of its own anyway, so this changes nothing but the limits.
  */
 class LimitedPool extends pg.Pool {
   constructor(config, limits) {
@@ -95,8 +125,10 @@ class LimitedPool extends pg.Pool {
     this.limits = limits
   }
 
-  query(text, params) {
-    return inTransaction(this, (client) => client.query(text, params))
+  // `options` is a StatementOptions. The parameters are not typed on purpose: a type here would have to be as wide as the
+  // overloads of pg.Pool#query, which this method narrows to the one form the app uses.
+  query(text, params, options) {
+    return inTransaction(this, (client) => client.query(text, params), options)
   }
 }
 
@@ -141,6 +173,29 @@ export function setPool(custom) {
   pool = custom
 }
 
-export const query = (text, params) => getPool().query(text, params)
+/**
+ * How many statements could start on the pool this instant without anyone waiting for a client: the clients that sit idle
+ * plus the connections it may still open (its maximum less the ones it has), and 0 while anything is already waiting for a
+ * client, because a statement that is asked for now would join that queue. Read-only: it takes nothing and changes nothing.
+ * It is for work that may be skipped when the pool is busy (server/errorLog.js), never for deciding whether a request is
+ * served. A pool that does not report these counts (a test double) is taken as free, so that the double decides what a test sees.
+ * @param {{ totalCount?: number, idleCount?: number, waitingCount?: number, options?: { max?: number } }} [p]
+ */
+export function spareClients(p = getPool()) {
+  const { totalCount, idleCount, waitingCount } = p
+  const max = p.options?.max
+  if (!Number.isInteger(totalCount) || !Number.isInteger(idleCount) || !Number.isInteger(waitingCount) || !Number.isInteger(max)) {
+    return Infinity
+  }
+  if (waitingCount > 0) return 0
+  return idleCount + Math.max(0, max - totalCount)
+}
+
+/**
+ * @param {string} text
+ * @param {unknown[]} [params]
+ * @param {StatementOptions} [options]  only for work that needs shorter limits than the app's own (server/errorLog.js)
+ */
+export const query = (text, params, options) => getPool().query(text, params, options)
 
 export const tx = (fn) => inTransaction(getPool(), fn)

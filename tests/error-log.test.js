@@ -7,6 +7,10 @@
 //     is exactly what it always was when there is none;
 //   - when the database is the failure the answer is not held up: a connection failure attempts no insert, a hanging insert
 //     is cut at ERROR_RECORD_TIMEOUT_MS, a failing insert changes nothing in the answer, and there is one log line in every case;
+//   - recording never turns into the outage it reports on: it makes no query while the pool is busy (nothing is held, nothing
+//     waits, the last free connection is never taken), the database itself cancels an insert that is slow or blocked within
+//     about the limit of the insert and the connection goes back to the pool, a connection that arrives after the request gave
+//     up is returned unused, and no other statement of the app gets the limits of the insert;
 //   - every field is checked or cut before the query, so a bad value cannot make the insert fail;
 //   - the lists of source and kind in the code are the check constraints of the table;
 //   - a refusal (a 4xx), an Answer and a request that matched no route write nothing.
@@ -16,7 +20,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import { setupDb, call } from './helpers.js'
 import { route } from '../server/router.js'
-import { getPool, setPool } from '../server/db.js'
+import { getPool, setPool, createPool, poolConfig, QUERY_LIMITS } from '../server/db.js'
+import { assertNotProduction } from '../server/dbGuard.js'
 import {
   recordEvent,
   isConnectionFailure,
@@ -24,13 +29,14 @@ import {
   EVENT_SOURCES,
   EVENT_KINDS,
   EVENT_METHODS,
+  ERROR_RECORD_LIMITS,
   PLACE_MAX_LENGTH,
   CODE_MAX_LENGTH,
   APP_BUILD_MAX_LENGTH,
   REQUEST_ID_MAX_LENGTH,
   STATUS_MAX,
 } from '../server/errorLog.js'
-import { ERROR_RECORD_TIMEOUT_MS } from '../server/config.js'
+import { ERROR_RECORD_TIMEOUT_MS, ERROR_RECORD_LOCK_TIMEOUT_MS, ERROR_RECORD_POOL_RESERVE } from '../server/config.js'
 import { ApiError, Answer, bad, forbidden } from '../server/http.js'
 
 vi.mock('../server/access.js', async (importOriginal) => {
@@ -119,7 +125,7 @@ async function withStatements(fn) {
   const real = getPool()
   const seen = []
   setPool({
-    query: (text, params) => (seen.push(String(text).replace(/\s+/g, ' ').trim()), real.query(text, params)),
+    query: (text, params, options) => (seen.push(String(text).replace(/\s+/g, ' ').trim()), real.query(text, params, options)),
     connect: (...args) => (seen.push('(a connection for a transaction)'), real.connect(...args)),
   })
   try {
@@ -135,6 +141,15 @@ async function notNearTheTurnOfTheHour() {
     "select (3600 - extract(epoch from now() - date_trunc('hour', now())))::float as seconds",
   )
   if (left[0].seconds < 20) await new Promise((resolve) => setTimeout(resolve, (left[0].seconds + 1) * 1000))
+}
+
+/** Waits until `condition()` is true, and fails if it is not within `ms`. */
+async function until(condition, ms = 4000) {
+  const deadline = Date.now() + ms
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`the condition did not come true within ${ms} ms`)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
 }
 
 const PLAIN_500 = { error: { code: 'server_error', message: 'Something went wrong' } }
@@ -359,6 +374,249 @@ describe('when the database is the failure', () => {
       expect(calls).toHaveLength(1)
     } finally {
       await db.pool.query('alter table app_errors_away rename to app_errors')
+    }
+  })
+})
+
+// A pool of the size of the app's (3) on the schema of this file, so that "busy" and "back in the pool" can be counted. The
+// statements below are the real ones, on a real database; only the pool is the test's, and the file's afterEach puts the
+// pool of setupDb back.
+describe('recording never queues behind other work, and the database bounds the insert', () => {
+  const event = { source: 'server', kind: 'error', place: '/test/boom', method: 'GET', status: 500, code: 'XX000', appBuild: 'abcdef1' }
+  const SETTINGS =
+    "select current_setting('statement_timeout') as statement_timeout, current_setting('lock_timeout') as lock_timeout, current_setting('idle_in_transaction_session_timeout') as idle"
+  let own
+
+  // A new pool for every test, with one idle client, so that every test starts from the same state (1 open, 1 idle, nobody
+  // waiting) whatever the test before it did, and a client that the idle timeout of the pool would have closed cannot change a count.
+  beforeEach(async () => {
+    const raw = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL
+    own = createPool({ ...poolConfig(raw, db.schema), max: 3 })
+    await assertNotProduction(own)
+    setPool(own)
+    await own.query('select 1')
+  })
+  afterEach(async () => {
+    vi.restoreAllMocks() // the spies of the test are on this pool, and it is about to end
+    await own.end()
+  })
+
+  const checkedOut = () => own.totalCount - own.idleCount
+  const shape = () => ({ total: own.totalCount, idle: own.idleCount })
+
+  /** Calls through to the pool and writes down how every query ends (a SQLSTATE, a name, or 'ok'), also after the caller gave up. */
+  function watch() {
+    const ends = []
+    const real = own.query.bind(own)
+    const spy = vi.spyOn(own, 'query').mockImplementation((...args) => {
+      const promise = real(...args)
+      promise.then(
+        () => ends.push('ok'),
+        (err) => ends.push(typeof err.code === 'string' ? err.code : err.name), // an AbortError has a number for a code
+      )
+      return promise
+    })
+    return { ends, spy }
+  }
+
+  /** Runs `fn` while `count` clients of the pool are held by the test, and gives them back after it. */
+  async function whileHolding(count, fn) {
+    const held = []
+    try {
+      while (held.length < count) held.push(await own.connect())
+      return await fn()
+    } finally {
+      for (const client of held) client.release()
+    }
+  }
+
+  it('records when the pool has room: a client at once, and still one left for the requests that are being served', async () => {
+    const seen = watch()
+    await whileHolding(own.options.max - ERROR_RECORD_POOL_RESERVE - 1, () => recordEvent(event))
+    expect(seen.spy).toHaveBeenCalledTimes(1)
+    expect(seen.ends).toEqual(['ok'])
+    expect((await rows()).map((r) => r.count)).toEqual([1])
+  })
+
+  it('makes no query, and returns at once, when every client of the pool is held', async () => {
+    const seen = watch()
+    const took = await whileHolding(own.options.max, async () => {
+      const started = Date.now()
+      await recordEvent(event)
+      return Date.now() - started
+    })
+    expect(took).toBeLessThan(100)
+    expect(seen.spy).not.toHaveBeenCalled()
+    expect(await rows()).toEqual([])
+  })
+
+  it('does not take the last free connection: one that is left is kept for a request that is being served', async () => {
+    const seen = watch()
+    await whileHolding(own.options.max - ERROR_RECORD_POOL_RESERVE, () => recordEvent(event))
+    expect(seen.spy).not.toHaveBeenCalled()
+    expect(await rows()).toEqual([])
+    // The pool kept that client: a request that came next is served at once.
+    const next = await own.connect()
+    next.release()
+  })
+
+  it('does not join a queue: with a request waiting for a client, a burst of failures asks for nothing and adds no waiter', async () => {
+    const seen = watch()
+    let waiter
+    await whileHolding(own.options.max, async () => {
+      waiter = own.connect() // a request that waits for a client
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(own.waitingCount).toBe(1)
+      await Promise.all(Array.from({ length: 25 }, () => recordEvent(event)))
+      expect(own.waitingCount).toBe(1) // still only the request
+    })
+    ;(await waiter).release() // the request got the client that was given back
+    expect(seen.spy).not.toHaveBeenCalled()
+    expect(await rows()).toEqual([])
+  })
+
+  it('does not record while anything waits for a client, also when a client is idle (a pool that says so)', async () => {
+    const attempted = []
+    const query = (...args) => (attempted.push(args), Promise.resolve({ rows: [], rowCount: 0 }))
+    setPool({ totalCount: 1, idleCount: 1, waitingCount: 1, options: { max: 3 }, query })
+    await recordEvent(event)
+    expect(attempted).toEqual([])
+    setPool({ totalCount: 1, idleCount: 1, waitingCount: 0, options: { max: 3 }, query })
+    await recordEvent(event)
+    expect(attempted).toHaveLength(1) // the same pool with nobody waiting is used
+  })
+
+  it('has the database cancel an insert that is slow, at the limit of the insert: the client goes back to the pool, nothing is half written', async () => {
+    await recordEvent(event) // the row exists, with a count of 1
+    const before = shape()
+    expect(before).toEqual({ total: 1, idle: 1 }) // the one client of the pool, idle
+    await db.pool.query(
+      `create function slow_app_errors() returns trigger language plpgsql as $$ begin perform pg_sleep(8); return new; end $$`,
+    )
+    await db.pool.query('create trigger slow_app_errors before insert or update on app_errors for each row execute function slow_app_errors()')
+    try {
+      const seen = watch()
+      const started = Date.now()
+      await recordEvent(event) // would be the second event of the hour: the count would be 2
+      const took = Date.now() - started
+      expect(took).toBeGreaterThanOrEqual(ERROR_RECORD_TIMEOUT_MS - 50) // the request waited for the bounded insert
+      expect(took).toBeLessThan(ERROR_RECORD_TIMEOUT_MS + 1000) // and not for the 8 s of the sleep
+      // It is the database that ended the statement (query_canceled), about as soon as the request gave up, not the 8 s of the
+      // sleep and not the 15 s that every other statement may take.
+      await until(() => seen.ends.length === 1, 3000)
+      expect(seen.ends).toEqual(['57014'])
+      await until(() => checkedOut() === 0, 3000)
+      expect(shape()).toEqual(before) // the connection is back, and it is the same one
+    } finally {
+      await db.pool.query('drop trigger slow_app_errors on app_errors')
+      await db.pool.query('drop function slow_app_errors()')
+    }
+    const found = await rows()
+    expect(found).toHaveLength(1)
+    expect(found[0].count).toBe(1) // the update was rolled back with the cut statement
+    // The pool serves the next request.
+    expect((await own.query('select 41 + 1 as answer')).rows).toEqual([{ answer: 42 }])
+  })
+
+  it('gives up on a row that another transaction holds at the lock limit, well before the time limit, and releases the client', async () => {
+    await recordEvent(event)
+    const before = shape()
+    const holder = await db.pool.connect()
+    try {
+      await holder.query('begin')
+      await holder.query('select 1 from app_errors for update')
+      const seen = watch()
+      const started = Date.now()
+      await recordEvent(event)
+      const took = Date.now() - started
+      expect(took).toBeGreaterThanOrEqual(ERROR_RECORD_LOCK_TIMEOUT_MS - 50)
+      expect(took).toBeLessThan(ERROR_RECORD_TIMEOUT_MS) // it did not wait for the time limit of the insert either
+      await until(() => seen.ends.length === 1, 3000)
+      expect(seen.ends).toEqual(['55P03']) // lock_not_available: the lock limit, not query_canceled
+    } finally {
+      await holder.query('rollback')
+      holder.release()
+    }
+    await until(() => checkedOut() === 0, 3000)
+    expect(shape()).toEqual(before)
+    expect((await rows())[0].count).toBe(1)
+  })
+
+  it('returns a connection that arrives after the request gave up, unused', async () => {
+    const connect = own.connect.bind(own)
+    // A connection that takes longer than the request waits (a database that is slow to answer).
+    vi.spyOn(own, 'connect').mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ERROR_RECORD_TIMEOUT_MS + 300))
+      return connect()
+    })
+    const seen = watch()
+    const started = Date.now()
+    await recordEvent(event)
+    const took = Date.now() - started
+    expect(took).toBeGreaterThanOrEqual(ERROR_RECORD_TIMEOUT_MS - 50)
+    expect(took).toBeLessThan(ERROR_RECORD_TIMEOUT_MS + 200) // the request was answered at the limit, not when the connection came
+    expect(seen.ends).toEqual([]) // nothing has come of it yet
+    await until(() => seen.ends.length === 1, 3000)
+    expect(seen.ends).toEqual(['AbortError']) // it started nothing
+    await until(() => checkedOut() === 0, 3000)
+    expect(await rows()).toEqual([]) // and wrote nothing
+  })
+
+  it('gives the client back when the insert fails', async () => {
+    await db.pool.query('alter table app_errors rename to app_errors_away')
+    try {
+      const before = shape()
+      const seen = watch()
+      await recordEvent(event)
+      expect(seen.ends).toEqual(['42P01']) // undefined_table
+      expect(checkedOut()).toBe(0)
+      expect(shape()).toEqual(before)
+    } finally {
+      await db.pool.query('alter table app_errors_away rename to app_errors')
+    }
+  })
+
+  it('puts the limits on the insert only: the insert runs with its own, and every other statement keeps the limits of the pool', async () => {
+    expect(ERROR_RECORD_LIMITS).toEqual({
+      statementMs: ERROR_RECORD_TIMEOUT_MS,
+      idleInTransactionMs: ERROR_RECORD_TIMEOUT_MS,
+      lockMs: ERROR_RECORD_LOCK_TIMEOUT_MS,
+    })
+    expect(Object.isFrozen(ERROR_RECORD_LIMITS)).toBe(true)
+    expect(ERROR_RECORD_LOCK_TIMEOUT_MS).toBeLessThan(ERROR_RECORD_TIMEOUT_MS)
+    // The limits of the app are what they were: 15 s and 20 s, and no lock limit.
+    expect(QUERY_LIMITS).toEqual({ statementMs: 15_000, idleInTransactionMs: 20_000 })
+    expect(own.limits).toEqual(QUERY_LIMITS)
+
+    // A trigger writes down the limits that the insert ran with.
+    await db.pool.query('create table seen_limits (statement_timeout text, lock_timeout text, idle text)')
+    await db.pool.query(
+      `create function note_limits() returns trigger language plpgsql as $$
+         begin
+           insert into seen_limits values (current_setting('statement_timeout'), current_setting('lock_timeout'), current_setting('idle_in_transaction_session_timeout'));
+           return new;
+         end $$`,
+    )
+    await db.pool.query('create trigger note_limits before insert on app_errors for each row execute function note_limits()')
+    try {
+      await recordEvent(event)
+      const { rows: seen } = await db.pool.query('select * from seen_limits')
+      expect(seen).toEqual([{ statement_timeout: '1500ms', lock_timeout: '500ms', idle: '1500ms' }])
+      // Straight after it, on the same pool and the same connection, nothing has changed for anybody else.
+      const others = { statement_timeout: '15s', lock_timeout: '0', idle: '20s' }
+      expect((await own.query(SETTINGS)).rows).toEqual([others])
+      expect((await db.pool.query(SETTINGS)).rows).toEqual([others])
+      const client = await own.connect()
+      try {
+        expect((await client.query(SETTINGS)).rows[0].lock_timeout).toBe('0')
+        expect((await client.query(SETTINGS)).rows[0].statement_timeout).not.toBe('1500ms')
+      } finally {
+        client.release()
+      }
+    } finally {
+      await db.pool.query('drop trigger note_limits on app_errors')
+      await db.pool.query('drop function note_limits()')
+      await db.pool.query('drop table seen_limits')
     }
   })
 })
