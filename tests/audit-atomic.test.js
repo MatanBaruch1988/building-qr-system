@@ -105,6 +105,29 @@ async function expectOnlyTheRecordOfTheFailure(before, route, ...skipped) {
   expect(errorsAfter.filter((r) => r.id !== changed[0].id)).toEqual(errorsBefore.filter((r) => r.id !== changed[0].id))
 }
 
+/**
+ * What a refused call (a 4xx that the handler answered after the guard let the request in) leaves behind: nothing, except the
+ * record of the refusal itself (server/router.js writes one `refusal` event of app_errors for it: the route as written in the
+ * code, the method, the status and the code of the refusal, and nothing else). So the whole schema is as it was in `before`,
+ * apart from app_errors, where exactly one event was added for each refused call.
+ * @param {object} before  the snapshot taken before the calls
+ * @param {{ method: string, place: string, status: number, code: string }[]} refusals  one entry for each refused call
+ */
+async function expectOnlyTheRecordOfTheRefusals(before, refusals) {
+  const after = await snapshot()
+  const { app_errors: errorsBefore, ...restBefore } = before
+  const { app_errors: errorsAfter, ...restAfter } = after
+  expect(restAfter, 'a refused call changed the database').toEqual(restBefore)
+  const events = (rows) => rows.reduce((sum, r) => sum + r.count, 0)
+  expect(events(errorsAfter), 'one event recorded for each refused call').toBe(events(errorsBefore) + refusals.length)
+  for (const refusal of new Set(refusals.map((r) => JSON.stringify(r)))) {
+    const { method, place, status, code } = JSON.parse(refusal)
+    const mine = (rows) =>
+      events(rows.filter((r) => r.source === 'server' && r.kind === 'refusal' && r.method === method && r.place === place && r.status === status && r.code === code))
+    expect(mine(errorsAfter) - mine(errorsBefore), refusal).toBe(refusals.filter((r) => JSON.stringify(r) === refusal).length)
+  }
+}
+
 const auditCount = async (where = 'true', params = []) => (await one(`select count(*)::int as n from audit_log where ${where}`, params)).n
 const lastAuditId = async () => (await one('select coalesce(max(id), 0)::int as n from audit_log')).n
 
@@ -565,7 +588,10 @@ describe('PATCH /api/admin/admins/:id: the switch and the sign-out of the sessio
     const before = await snapshot()
     expect((await patch(randomUUID(), false)).json.error.code).toBe('admin_not_found')
     expect((await patch(admin.id, false)).json.error.code).toBe('cannot_deactivate_self')
-    expect(await snapshot()).toEqual(before)
+    await expectOnlyTheRecordOfTheRefusals(before, [
+      { method: 'PATCH', place: '/admin/admins/:id', status: 404, code: 'admin_not_found' },
+      { method: 'PATCH', place: '/admin/admins/:id', status: 409, code: 'cannot_deactivate_self' },
+    ])
   })
 })
 
@@ -905,7 +931,7 @@ describe('the providers of a point are recorded as real ids, never the demo acco
     const answer = await patch(`/api/admin/points/${id}`, { name: 'Refused rename', provider_ids: [randomUUID()] })
     expect([answer.status, answer.json.error.code]).toEqual([400, 'unknown_provider'])
     expect(await lastAuditId()).toBe(after)
-    expect(await snapshot()).toEqual(before)
+    await expectOnlyTheRecordOfTheRefusals(before, [{ method: 'PATCH', place: '/admin/points/:id', status: 400, code: 'unknown_provider' }])
   })
 })
 
@@ -938,7 +964,11 @@ describe('scan.void and scan.unvoid', () => {
     ]
     expect(answers.map((a) => [a.status, a.json.error.code])).toEqual([[409, 'not_voided'], [409, 'already_voided'], [404, 'scan_not_found']])
     expect(await lastAuditId()).toBe(after)
-    expect(await snapshot()).toEqual(before)
+    await expectOnlyTheRecordOfTheRefusals(before, [
+      { method: 'POST', place: '/admin/scans/:id/unvoid', status: 409, code: 'not_voided' },
+      { method: 'POST', place: '/admin/scans/:id/void', status: 409, code: 'already_voided' },
+      { method: 'POST', place: '/admin/scans/:id/unvoid', status: 404, code: 'scan_not_found' },
+    ])
   })
 })
 
