@@ -2,9 +2,10 @@ import { useId, useState } from 'react'
 import { adminApi, errorText } from '../api.js'
 import { useLoad, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
-import { IconPlus, IconBan, IconCheck, IconShield, IconAlert, IconTrash } from '../icons.jsx'
+import { IconPlus, IconBan, IconCheck, IconShield, IconAlert, IconTrash, IconClock, IconChevron } from '../icons.jsx'
 import { ADDRESS_MAX_LENGTH, NAME_MAX_LENGTH } from '../../../shared/contract.js'
 import BuildLabel from '../../ui/BuildLabel.jsx'
+import AuditView from './AuditView.jsx'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -69,6 +70,28 @@ function BuildingCard() {
           </div>
         </form>
       )}
+    </section>
+  )
+}
+
+/**
+ * The audit log (who did what, and when), a section that a button opens: read only, so it has no row actions. It is here and not
+ * a tab of its own because six tabs do not fit the phone's bar at 360 px. The button is the heading of the section (the usual
+ * way to build one that opens), and the log is loaded only when it is opened.
+ */
+function AuditSection() {
+  const id = useId()
+  const [open, setOpen] = useState(false)
+  return (
+    <section className="a-audit-section" aria-labelledby={`${id}-title`}>
+      <h2 className="a-disclosure" id={`${id}-title`}>
+        <button type="button" className="a-disclosure__btn" aria-expanded={open} aria-controls={`${id}-panel`} onClick={() => setOpen((o) => !o)}>
+          <IconClock size={24} />
+          <span className="a-disclosure__text">יומן פעולות</span>
+          <IconChevron size={22} className="a-disclosure__chevron" />
+        </button>
+      </h2>
+      <div id={`${id}-panel`} hidden={!open}>{open && <AuditView />}</div>
     </section>
   )
 }
@@ -181,6 +204,8 @@ export default function CommitteeView({ admin }) {
 
       {/* Which build this computer or phone runs. The one place that both layouts reach (the tab bar and the side rail). */}
       <BuildLabel label="גרסה" className="a-build" />
+
+      <AuditSection />
 
       {adding && <AddDialog onClose={() => setAdding(false)} onAdded={() => { setAdding(false); admins.reload() }} />}
     </>

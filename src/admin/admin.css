@@ -167,6 +167,40 @@ select.a-input {
   .a-scan--readonly { grid-template-columns: 76px minmax(0, 1.2fr) minmax(0, 1fr); }
 }
 
+/* ----- the audit log: the section of the Committee tab that a button opens, and its read only rows (no icons) ----- */
+.a-audit-section { margin-block-start: 24px; }
+.a-disclosure { margin: 0; } /* the button inside sets the size and the weight */
+.a-disclosure__btn {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 12px 18px; background: var(--w-surface);
+  border: 1px solid var(--w-border); border-radius: 20px; color: var(--w-text); font-size: 1.1875rem; font-weight: var(--w-weight-semibold);
+  text-align: start; cursor: pointer;
+}
+@media (hover: hover) { .a-disclosure__btn:hover { background: var(--w-surface-2); } }
+.a-disclosure__btn > svg:first-child { color: var(--w-info); flex: none; }
+.a-disclosure__text { flex: 1; min-width: 0; }
+.a-disclosure__chevron { flex: none; color: var(--w-text-3); transform: rotate(90deg); } /* closed: points down */
+.a-disclosure__btn[aria-expanded='true'] .a-disclosure__chevron { transform: rotate(-90deg); } /* open: points up */
+.a-audit-section > div:not([hidden]) { margin-block-start: 16px; }
+/* Phone: the time and the action on the first line, then who, then the detail, all in the column of the action. */
+.a-audit {
+  display: grid; gap: 0 14px; grid-template-columns: auto minmax(0, 1fr); align-items: start; padding: 12px 16px;
+  grid-template-areas: 'time what' '. who' '. detail'; border-block-end: 1px solid var(--w-border);
+}
+.a-audit:last-child { border-block-end: 0; }
+.a-audit__time { grid-area: time; }
+.a-audit__what { grid-area: what; min-width: 0; overflow-wrap: anywhere; }
+.a-audit__action { font-weight: var(--w-weight-semibold); }
+.a-audit__action--raw { color: var(--w-text-2); font-weight: var(--w-weight-regular); unicode-bidi: isolate; display: inline-block; } /* a name the screen has no words for */
+.a-audit__subject { font-weight: var(--w-weight-semibold); }
+.a-audit__who { grid-area: who; margin-block-start: 2px; color: var(--w-text-2); font-size: 0.9375rem; overflow-wrap: anywhere; }
+.a-audit__detail { grid-area: detail; margin-block-start: 4px; color: var(--w-text-2); font-size: 0.9375rem; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 2px; }
+.a-audit__arrow { display: inline-block; }
+/* Computer: the time, the action and who on one line, and the detail under them. */
+@media (min-width: 768px) {
+  .a-audit { grid-template-columns: 76px minmax(0, 1.4fr) minmax(0, 1fr); grid-template-areas: 'time what who' '. detail detail'; }
+  .a-audit__who { margin-block-start: 0; }
+}
+
 /* The build id line at the foot of the Committee tab (src/ui/BuildLabel.jsx), under the building card and lined up with it. */
 .a-build { margin-block-start: 16px; }
 
