@@ -7,18 +7,25 @@
 //   - clears the label of a phone (provider_devices.label, the browser string it sent at sign-in) when the phone was revoked
 //     more than RETENTION_DEVICE_LABEL_DAYS ago. The row stays (a scan keeps the id of the phone that made it, and the
 //     owner's decision is to clear the text, not the row): only the string that can identify a person's device goes.
-//   - writes one audit_log row (`retention.run`, actor `system`) that holds the three counts and nothing else.
+//   - deletes the recorded errors (app_errors, safe fields only: server/errorLog.js) whose last event is older than
+//     RETENTION_APP_ERROR_DAYS,
+//   - writes one audit_log row (`retention.run`, actor `system`) that holds the four counts and nothing else.
 // What it never touches: a scan, the audit log, a session that is active or expired less than the period ago, a phone that
 // is not revoked or was revoked less than the period ago. Their retention waits for a legal decision (docs/privacy.md).
 //
 // It is safe to run twice, or late, or not at all for a day (Vercel Cron delivery is best effort): every statement is a
 // condition on age, so a run deletes what is due at that moment and the next one finds nothing more.
 import { tx } from './db.js'
-import { RETENTION_SESSION_DAYS, RETENTION_LOGIN_ATTEMPT_DAYS, RETENTION_DEVICE_LABEL_DAYS } from './config.js'
+import {
+  RETENTION_SESSION_DAYS,
+  RETENTION_LOGIN_ATTEMPT_DAYS,
+  RETENTION_DEVICE_LABEL_DAYS,
+  RETENTION_APP_ERROR_DAYS,
+} from './config.js'
 
 /**
- * Runs the job once and returns what it removed: `{ sessions, loginAttempts, deviceLabels }` (numbers of rows). The three
- * statements and the audit row are one transaction, so the audit row says what really happened: all of it or none of it.
+ * Runs the job once and returns what it removed: `{ sessions, loginAttempts, deviceLabels, appErrors }` (numbers of rows).
+ * The four statements and the audit row are one transaction, so the audit row says what really happened: all of it or none of it.
  * Each statement still has the 15 second limit of the app (server/db.js). A failure is thrown as it is and the router
  * answers 500 and logs only its code (server/router.js); nothing here logs an error or a row.
  */
@@ -38,7 +45,16 @@ export async function runRetention() {
         where revoked_at < now() - make_interval(days => $1::int) and label <> ''`,
       [RETENTION_DEVICE_LABEL_DAYS],
     )
-    const counts = { sessions: sessions.rowCount, loginAttempts: attempts.rowCount, deviceLabels: labels.rowCount }
+    // By the time of the last event, not the first: a row that still gets events is not old.
+    const errors = await c.query('delete from app_errors where last_at < now() - make_interval(days => $1::int)', [
+      RETENTION_APP_ERROR_DAYS,
+    ])
+    const counts = {
+      sessions: sessions.rowCount,
+      loginAttempts: attempts.rowCount,
+      deviceLabels: labels.rowCount,
+      appErrors: errors.rowCount,
+    }
     // Counts only: no id, no name, no label. The audit log has no end date, and nothing in the app reads it today (no screen,
     // no agent API, no export): only whoever holds the database or a backup can.
     // actor_name stays null on purpose: it is the snapshot of a person's name, and the system actor is already named by
@@ -47,7 +63,14 @@ export async function runRetention() {
     await c.query(
       `insert into audit_log (actor_type, actor_id, action, entity, entity_id, detail)
        values ('system', null, 'retention.run', null, null, $1)`,
-      [JSON.stringify({ sessions: counts.sessions, login_attempts: counts.loginAttempts, device_labels: counts.deviceLabels })],
+      [
+        JSON.stringify({
+          sessions: counts.sessions,
+          login_attempts: counts.loginAttempts,
+          device_labels: counts.deviceLabels,
+          app_errors: counts.appErrors,
+        }),
+      ],
     )
     return counts
   })

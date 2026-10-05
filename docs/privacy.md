@@ -5,8 +5,8 @@ the basis for a notice to the service providers (the cleaning company, the garde
 rules for the code are in `AGENTS.md` (Safety); the periods below are constants in `server/config.js`, and a daily job
 applies them (`server/retention.js`).
 
-Retention periods were decided by the owner on 04/10/2026. Two things have no period yet: the scans and the audit log wait
-for a legal decision, and until then they are kept (see the table).
+Retention periods were decided by the owner on 04/10/2026, and the period of the recorded errors on 05/10/2026. Two things
+have no period yet: the scans and the audit log wait for a legal decision, and until then they are kept (see the table).
 
 ## What is kept, and for how long
 
@@ -19,20 +19,22 @@ for a legal decision, and until then they are kept (see the table).
 | Scans (`scans`) | The provider's name as it was at the time, the point, the time (the server's and the phone's clock), the distance in metres between the phone and the point and the accuracy of the reading, flags, which phone sent it. **The position itself (latitude and longitude) is never stored** | Until the committee deletes it. A legal decision on how long scans may be kept is pending. Nothing deletes a scan by itself |
 | Audit log (`audit_log`) | Which committee member did what and when, with the member's name as it was at the time of the action (their e-mail when they have no name), so that the entry stays readable after the member is removed. The details of some entries hold a name or an e-mail (for example a provider that was created or a member that was removed). The daily job writes one entry a day with counts only. The table is append-only: the database refuses to change or delete a row, and to empty the table | Until a legal decision on how long it may be kept is made. Nothing deletes it by itself |
 | Login attempts (`auth_attempts`) | When someone tried to sign in, with the network (IP) address of the request. A committee attempt holds the IP address only (no e-mail, because the e-mail is not known before Google has been asked). A provider attempt holds the provider's id and the IP address (no name and no password). They are only used to slow down guessing | Deleted after 1 day |
+| Recorded errors (`app_errors`) | Nothing about a person, by construction. When the server fails with an error that it did not expect, one row per kind of failure per hour: the route as it is written in the code (for example `/admin/points/:id`, never the address that was asked for), the method, the status, the error's code or name (never its message), the version of the app, how many times it happened, the first and the last time, and the request id that the host (Vercel) gave to the latest request, so that the failure can be found in the host's own log within the hour. No message, no name, no e-mail, no IP address, no QR code, no position, nothing from the body of a request | Deleted 90 days after the last time it happened |
 | Agent keys (`api_keys`) | The name the committee gave the key, a fingerprint of the key, when it was last used. No personal data unless the committee puts a name in the key's name | Until the committee deletes the key |
 
-The daily job never deletes or changes a scan, the audit log, an active session or an active phone. A session or a phone
-that is not yet past its period is left as it is.
+The daily job never deletes or changes a scan, the audit log, an active session or an active phone. A session, a phone
+or a recorded error that is not yet past its period is left as it is. The job's own log line and its audit entry hold counts
+only (a number for each kind of row, nothing else).
 
 ## Who can see it
 
 - **The committee**, in the committee app (`/admin`), after signing in with Google and only if the e-mail is on the committee
   list: the providers, the scans and their history (also as a CSV file), the points and the agent keys. The committee app
-  does not show the label of a phone, the sessions, the login attempts or the audit log.
+  does not show the label of a phone, the sessions, the login attempts, the recorded errors or the audit log.
 - **The committee's own AI agent**, through the read-only agent API (`docs/agent-api.md`), with a key that the committee
   made: the points, the providers (company, contact name, kind of service, whether active, the time of the last scan) and the
   scans (provider name, point, times, distance, accuracy, flags). It cannot write anything, and it does not see the labels of
-  the phones, the sessions, the login attempts, the audit log, the password hashes or any token.
+  the phones, the sessions, the login attempts, the recorded errors, the audit log, the password hashes or any token.
 - **Whoever runs the services under the app**: the owner of the project and the services that host it (the database is a
   Neon project, the app runs on Vercel). The committee's sign-in goes through Google, which handles it under its own terms.
 

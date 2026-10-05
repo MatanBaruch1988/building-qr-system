@@ -60,10 +60,18 @@ export const ADMIN_COOKIE = 'qr_admin'
 // log, an active session or an active phone. Changing a number is the owner's decision, and docs/privacy.md changes with it.
 //  - a committee session is deleted this many days after it expired or was revoked,
 //  - a login attempt is deleted after this many days (guardLogin in server/auth.js prunes the same way when someone signs in),
-//  - the label of a phone (the browser string it sent at sign-in) is cleared this many days after the phone was revoked.
+//  - the label of a phone (the browser string it sent at sign-in) is cleared this many days after the phone was revoked,
+//  - a recorded error (app_errors: safe fields only, no personal data) is deleted this many days after its last event.
 export const RETENTION_SESSION_DAYS = 30
 export const RETENTION_LOGIN_ATTEMPT_DAYS = 1
 export const RETENTION_DEVICE_LABEL_DAYS = 90
+export const RETENTION_APP_ERROR_DAYS = 90
+
+// Recording an unhandled server error in app_errors (server/errorLog.js) is one insert that the answer of the request waits
+// for, so it is bounded: when the database does not answer within this many milliseconds the answer goes out without the
+// record, and the record is lost (the error has already been logged once). The ADR of the topic (docs/adr/0007) names the
+// cost: a 500 can take this much longer, never more.
+export const ERROR_RECORD_TIMEOUT_MS = 1500
 
 // The audit log keeps the name of the committee member as it was at the time of the action (audit_log.actor_name, a
 // snapshot, so the entry stays readable after the member is deleted). The column refuses more than this many characters

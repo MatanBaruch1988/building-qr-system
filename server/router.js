@@ -1,6 +1,8 @@
 import { Answer, ApiError, assertSafeWrite, bad } from './http.js'
 import { accessFor } from './access.js'
-import { oneLine } from './logSafe.js'
+import { oneLine, failureLabel } from './logSafe.js'
+import { recordEvent, requestIdOf } from './errorLog.js'
+import { commit } from './health.js'
 
 /** @import { ApiRequest, SendResult } from './http.js' */
 /** @import { ErrorEnvelope } from '../shared/types.js' */
@@ -209,9 +211,32 @@ export async function handle(req, res) {
       })
     }
     console.error(describeUnhandled(matched, raw))
+    // The request id is Vercel's (the x-vercel-id header) when it is well formed: the answer carries it so that a person can
+    // give it to whoever reads the host's log (kept for about an hour), and the record keeps it. Without one (the local dev
+    // server, the tests) the answer is exactly what it always was.
+    const requestId = requestIdOf(req.headers)
+    // The same event goes into app_errors (docs/adr/0007), with safe fields only, and only for a route that matched: the
+    // route as it is written in the code, never the path that was asked for. A refusal (an ApiError, a 4xx) and an Answer
+    // are answered above and are not recorded. recordEvent never throws and never logs, and it waits for the database at most
+    // ERROR_RECORD_TIMEOUT_MS, so the answer below is sent in any case.
+    if (matched) {
+      await recordEvent({
+        source: 'server',
+        kind: 'error',
+        place: matched.pattern,
+        method: matched.method,
+        status: 500,
+        code: failureLabel(raw),
+        appBuild: commit() ?? '',
+        requestId,
+        error: raw,
+      })
+    }
     return send(res, {
       status: 500,
-      json: /** @type {ErrorEnvelope} */ ({ error: { code: 'server_error', message: 'Something went wrong' } }),
+      json: /** @type {ErrorEnvelope} */ ({
+        error: { code: 'server_error', message: 'Something went wrong', ...(requestId ? { request_id: requestId } : {}) },
+      }),
     })
   }
 }

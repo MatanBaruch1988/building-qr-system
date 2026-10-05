@@ -18,7 +18,10 @@
  * The `error` member of every refusal: `{ error: { code, message, ...extra } }` (an ApiError of server/http.js on the server,
  * the `extra` of the ApiError of src/api/client.js on the phone). `code` is the machine's word, and what a client decides
  * from; `message` is an English sentence for a developer or a log. Some refusals add fields, for example `field`.
- * @typedef {{ code: string, message: string, [extra: string]: unknown }} ErrorBody
+ * `request_id` is added to the 500 `server_error` only, when the host gave the request an id (the x-vercel-id header, a
+ * well-formed one): it lets a person match the failure to the host's log, which is kept for about an hour. An optional,
+ * additive field: a client that does not know it ignores it (src/api/client.js keeps the whole `error` in `extra`).
+ * @typedef {{ code: string, message: string, request_id?: string, [extra: string]: unknown }} ErrorBody
  */
 
 /** @typedef {{ error: ErrorBody }} ErrorEnvelope */
