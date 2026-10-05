@@ -63,18 +63,23 @@ function password(value, required = false) {
 const devLoginAllowed = () => !process.env.VERCEL && process.env.DEV_ADMIN_LOGIN === '1'
 
 /**
- * Opens a session for a committee member with the client `c` of the transaction that looked the member up: the session row and
- * the time of the last sign-in are written in that transaction. Returns the token that goes into the cookie (only its hash is
- * stored).
+ * Opens a session for a committee member with the client `c` of the transaction that looked the member up: the session row, the
+ * time of the last sign-in and the audit row (`session.sign_in`) are written in that transaction, so a session never exists
+ * without its entry, and an entry never says that someone signed in when nothing was opened. `member` is who signs in as the
+ * committee will know them (`{ id, email, name }`, the name being the Google name on a first sign-in), and `method` is how
+ * (`google`, or `dev` for the local shortcut). The entry holds the member and the method and nothing else: not the address
+ * of the request, not the browser, not the Google account and never the token. Returns the token that goes into the cookie
+ * (only its hash is stored).
  */
-async function createAdminSession(c, adminId) {
+async function createAdminSession(c, member, method) {
   const token = randomToken(ADMIN_TOKEN_PREFIX)
   await c.query(
     `insert into admin_sessions (admin_id, token_hash, expires_at)
      values ($1, $2, now() + ($3 || ' days')::interval)`,
-    [adminId, sha256(token), String(ADMIN_SESSION_DAYS)],
+    [member.id, sha256(token), String(ADMIN_SESSION_DAYS)],
   )
-  await c.query('update admins set last_login_at = now() where id = $1', [adminId])
+  await c.query('update admins set last_login_at = now() where id = $1', [member.id])
+  await audit(c, adminActor(member), 'session.sign_in', { entity: 'admin', entityId: member.id, detail: { method } })
   return token
 }
 
@@ -102,9 +107,10 @@ route('POST', '/admin/google', async ({ req, res, body }) => {
   const google = await verifyGoogleCredential(credential)
   // One transaction, and the order matters: the member's row is locked first (so that disabling or deleting them at the same
   // moment is seen or waited for), the Google account is compared with the one that is linked BEFORE anything is written (a
-  // refused sign-in writes nothing to `admins`, not even the name), and only then the link, the name, the session and the
-  // time of the sign-in are written, all or none. The throttle (guardLogin above) has a transaction of its own on purpose: a
-  // refused attempt must stay counted.
+  // refused sign-in writes nothing to `admins`, not even the name), and only then are the link, the name, the session, the time
+  // of the sign-in and the audit row (`session.sign_in`) written, all or none. A refused sign-in (not on the list, switched
+  // off, another Google account) throws before any of that, so it writes no entry: `auth_attempts` already counts it. The
+  // throttle (guardLogin above) has a transaction of its own on purpose: a refused attempt must stay counted.
   const { row, token } = await tx(async (c) => {
     const found = await c.query('select * from admins where email = $1 and is_active for update', [google.email])
     if (!found.rows.length) throw forbidden('not_an_admin', 'This Google account is not on the committee list')
@@ -116,12 +122,13 @@ route('POST', '/admin/google', async ({ req, res, body }) => {
       `update admins set google_sub = coalesce(google_sub, $2), name = case when name = '' then $3 else name end where id = $1`,
       [member.id, google.sub, google.name],
     )
-    return { row: member, token: await createAdminSession(c, member.id) }
+    const who = { id: member.id, email: member.email, name: member.name || google.name }
+    return { row: who, token: await createAdminSession(c, who, 'google') }
   })
   // The counters of this account are given back only after the sign-in is complete. (It runs on the pool: it must not run inside
   // the transaction above, where it would take a second connection from a pool of three.)
   await attempt.success()
-  return adminSessionAnswer(req, res, token, { ...row, name: row.name || google.name })
+  return adminSessionAnswer(req, res, token, row)
 })
 
 route('POST', '/admin/dev-login', async ({ req, res, body }) => {
@@ -130,16 +137,35 @@ route('POST', '/admin/dev-login', async ({ req, res, body }) => {
   const { row, token } = await tx(async (c) => {
     const found = await c.query('select * from admins where email = $1 and is_active for update', [email])
     if (!found.rows.length) throw forbidden('not_an_admin', 'Not an admin')
-    return { row: found.rows[0], token: await createAdminSession(c, found.rows[0].id) }
+    return { row: found.rows[0], token: await createAdminSession(c, found.rows[0], 'dev') }
   })
   return adminSessionAnswer(req, res, token, row)
 })
 
+// This route is public (server/access.js): it has no guard, so no member is known when it starts, and the cookie is the only thing
+// it looks at. Whoever the session belongs to is read by the very statement that ends it (a join to `admins`), so the entry
+// names the member who owned the session and nothing a caller sent. The answer is the same in every case, and so is the cookie
+// that is cleared.
+//  - No cookie, or a value that is not shaped like one of our session tokens: no statement at all, no entry.
+//  - A token that matches no session, or a session that was ended already: the statement changes nothing and returns nothing,
+//    so there is no entry, and the time at which the session was first ended is not moved.
+//  - A session that is not ended: it is ended and `session.sign_out` is written, in one transaction (a failure of the entry
+//    leaves the session as it was, and the caller gets the 500 and may try again).
 route('POST', '/admin/logout', async ({ req, res }) => {
   const token = getCookie(req, ADMIN_COOKIE)
   // Only a cookie shaped like one of our session tokens can match a session: any other value costs no query.
   if (token && isAdminToken(token)) {
-    await query('update admin_sessions set revoked_at = now() where token_hash = $1', [sha256(token)])
+    await tx(async (c) => {
+      const ended = await c.query(
+        `update admin_sessions s set revoked_at = now()
+           from admins a
+          where s.token_hash = $1 and s.revoked_at is null and a.id = s.admin_id
+      returning a.id, a.email, a.name`,
+        [sha256(token)],
+      )
+      if (!ended.rows.length) return
+      await audit(c, adminActor(ended.rows[0]), 'session.sign_out', { entity: 'admin', entityId: ended.rows[0].id })
+    })
   }
   res.setHeader('Set-Cookie', cookieHeader(ADMIN_COOKIE, '', { maxAgeSeconds: 0, secure: isSecure(req) }))
   return { ok: true }

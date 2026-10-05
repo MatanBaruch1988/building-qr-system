@@ -335,10 +335,13 @@ describe('the filters', () => {
     // `_` is not a wildcard: the row 'apiXkey.create' is not in api_key.
     expect(await only('api_key')).toEqual(['api_key.create', 'api_key.revoke', 'api_key.delete'])
     expect(await only('retention')).toEqual(['retention.run'])
-    // Reserved for the sign-in rows that a later change writes: accepted, and nothing today.
+    // The committee's sign-ins and sign-outs: here only the sign-in that made this file's cookie, by the seeded member.
     const session = await get('group=session')
     expect(session.status).toBe(200)
-    expect(session.json).toEqual({ entries: [], next_cursor: null })
+    expect(session.json.entries.length).toBeGreaterThan(0)
+    for (const e of session.json.entries) {
+      expect(e, 'a session row').toMatchObject({ action: 'session.sign_in', actor_type: 'admin', actor_id: adminId, entity: 'admin', entity_id: adminId })
+    }
   })
 
   it('has a group for every action that the code writes today', () => {
@@ -346,6 +349,7 @@ describe('the filters', () => {
       'admin.add', 'admin.enable', 'admin.disable', 'admin.delete', 'building.update', 'point.create', 'point.update',
       'point.delete', 'point.regenerate_qr', 'provider.create', 'provider.update', 'provider.delete', 'provider.revoke_devices',
       'scan.void', 'scan.unvoid', 'scan.delete', 'api_key.create', 'api_key.revoke', 'api_key.delete', 'retention.run',
+      'session.sign_in', 'session.sign_out',
     ]
     for (const action of written) expect(AUDIT_GROUPS, action).toContain(action.split('.')[0])
   })
@@ -362,7 +366,11 @@ describe('the filters', () => {
 
   it('filters by the committee member (actor_id), in any letter case', async () => {
     const mine = await get(`actor_id=${adminId}`)
-    expect(labels(mine.json.entries)).toEqual(['actor-system-with-id', 'actor-old-row', 'actor-snapshot'])
+    // The member's own sign-in (the one that made this file's cookie) is theirs too; everything else is the seeded rows.
+    const signIns = mine.json.entries.filter((e) => e.action === 'session.sign_in')
+    expect(signIns.length).toBeGreaterThan(0)
+    for (const e of signIns) expect(e).toMatchObject({ actor_id: adminId, entity_id: adminId })
+    expect(labels(mine.json.entries.filter((e) => e.action !== 'session.sign_in'))).toEqual(['actor-system-with-id', 'actor-old-row', 'actor-snapshot'])
     const upper = await get(`actor_id=${adminId.toUpperCase()}`)
     expect(labels(upper.json.entries)).toEqual(labels(mine.json.entries))
     const nobody = await get(`actor_id=${randomUUID()}`)
@@ -584,7 +592,13 @@ describe('the name of what an entry is about (entity_name)', () => {
     expect(r[0]).toMatchObject({ action: 'retention.run', entity: null, entity_id: null, entity_name: null })
     const rows = (await walk('', 100)).entries
     // The other datasets are about things that were never in the tables: no name is made up for them.
-    for (const e of rows.filter((x) => x.action !== 'test.name')) expect(e.entity_name, e.action + ' ' + e.entity).toBeNull()
+    for (const e of rows.filter((x) => x.action !== 'test.name' && !x.action.startsWith('session.'))) {
+      expect(e.entity_name, e.action + ' ' + e.entity).toBeNull()
+    }
+    // A sign-in is about the member who signed in, who is live: it carries that member's current name.
+    const signIns = rows.filter((x) => x.action === 'session.sign_in')
+    expect(signIns.length).toBeGreaterThan(0)
+    for (const e of signIns) expect(e).toMatchObject({ entity: 'admin', entity_id: adminId, entity_name: 'Test Admin' })
   })
 
   it('follows a rename of the live thing at once (it is the current name, not a copy)', async () => {

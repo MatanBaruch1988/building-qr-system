@@ -32,6 +32,8 @@
 //                                                   { changes: { is_active } }                   PATCH is_active: true
 //   admin.disable             admin     member      { changes: { is_active } }                   is_active goes from true to false
 //   admin.delete              admin     member      { email, name }                              what the member was
+//   session.sign_in           admin     member      { method }                                   `google`, or `dev` (the local shortcut); the member is the actor
+//   session.sign_out          admin     member      null                                         ended by the member who owned the session (the actor)
 //   building.update           building  (null)      { changes: { address } }
 //   point.create              point     point       { name, description?, service_type?, gps_mode?, lat?, lng?, radius_m?, is_active?,
 //                                                     provider_ids }   the fields that were sent, and the providers who may scan
@@ -55,6 +57,16 @@
 //   api_key.revoke            api_key   key         null
 //   api_key.delete            api_key   key         { name, key_prefix, was_revoked }
 //   retention.run             (null)    (null)      { sessions, login_attempts, device_labels }  counts only (the system actor)
+//
+// A sign-in and a sign-out of a committee member are recorded, a provider's are not (`provider_devices` has them). A sign-in is
+// written in the transaction that opens the session; a refused one (not on the list, switched off, another Google account, too
+// many attempts) writes nothing, `auth_attempts` already counts those. A sign-out is written only when a session that was not
+// ended yet is ended (no cookie, an unknown token and a session that was ended already write nothing). Neither entry holds the
+// address of the request, the browser, the Google account or a token.
+//
+// A member that the owner's command adds (`npm run db:create-admin`, scripts/create-admin.mjs) is written as `admin.add` or
+// `admin.enable`, with the same detail as the committee's own routes above and the `script` actor (no id, no name: the
+// command runs on the owner's machine and knows no signed-in member). A member who is on the list already writes no entry.
 import pg from 'pg'
 import { AUDIT_ACTOR_NAME_MAX_LENGTH } from './config.js'
 
