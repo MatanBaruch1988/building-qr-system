@@ -129,6 +129,8 @@ export const DEFAULT_PAGE_SIZE = 100
 export const MAX_PAGE_SIZE = 500
 // The most refused visits that one page of the committee's list holds (GET /api/admin/scan-refusals).
 export const MAX_REFUSAL_PAGE_SIZE = 200
+// The most audit entries that one page of the committee's list holds (GET /api/admin/audit).
+export const MAX_AUDIT_PAGE_SIZE = 200
 
 // The text filters of the scan listing (service_type, flag) are cut to this many characters before they are compared.
 export const FILTER_TEXT_MAX_LENGTH = 60

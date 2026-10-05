@@ -227,6 +227,14 @@ function decodeCursor(cursor) {
 
 // A real calendar day (2026-02-30 is not one) / a full ISO time that says which time zone it means.
 const ISO_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/
+/**
+ * One `from` or `to` of a listing: `{ date }` for a real calendar day (the building's day) or `{ time }` for an ISO time
+ * with a zone, or a 400 `invalid_filter` that names the field. Shared by the scans list, the refused visits and the audit
+ * log (server/routes/audit.js).
+ * @param {string} name  the query parameter, for the error
+ * @param {string} value
+ * @returns {{ date: string, time?: undefined } | { time: string, date?: undefined }}
+ */
 export function parseBound(name, value) {
   if (DATE_RE.test(value)) {
     const d = new Date(`${value}T00:00:00Z`)
@@ -236,6 +244,21 @@ export function parseBound(name, value) {
     if (!Number.isNaN(d.getTime()) && d.getUTCFullYear() >= 2000 && d.getUTCFullYear() <= 2100) return { time: d.toISOString() }
   }
   throw bad('invalid_filter', `${name} must be a real date YYYY-MM-DD, or an ISO date-time with Z or an offset`, { field: name })
+}
+
+/**
+ * The page size that a listing was asked for: the default when there is none, a 400 `invalid_filter` (field `limit`) for
+ * anything but a positive whole number, and the largest page (`max`, MAX_PAGE_SIZE for the scans list) when it asks for more
+ * (cut, not refused). Shared by the scans list and the audit log, so that the two lists have one rule and differ only in how
+ * large a page may be.
+ * @param {unknown} value  the `limit` of the query
+ * @param {number} [max]  the largest page of this listing
+ * @returns {number}
+ */
+export function pageLimit(value, max = MAX_PAGE_SIZE) {
+  const limit = value === undefined || value === '' ? DEFAULT_PAGE_SIZE : Number(value)
+  if (!Number.isInteger(limit) || limit < 1) throw bad('invalid_filter', 'limit must be a positive integer', { field: 'limit' })
+  return Math.min(limit, max)
 }
 
 /**
@@ -302,9 +325,7 @@ export async function listScans(q = {}) {
     where.push(`(checked_in_at, id) ${order === 'asc' ? '>' : '<'} ($${params.length - 1}::timestamptz, $${params.length}::uuid)`)
   }
 
-  let limit = q.limit === undefined || q.limit === '' ? DEFAULT_PAGE_SIZE : Number(q.limit)
-  if (!Number.isInteger(limit) || limit < 1) throw bad('invalid_filter', 'limit must be a positive integer', { field: 'limit' })
-  limit = Math.min(limit, MAX_PAGE_SIZE)
+  const limit = pageLimit(q.limit)
 
   const sql = `select * from scans ${where.length ? 'where ' + where.join(' and ') : ''}
                 order by checked_in_at ${order}, id ${order} limit ${limit + 1}`

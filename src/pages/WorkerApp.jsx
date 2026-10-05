@@ -7,7 +7,7 @@ import { getFix } from '../worker/geo.js'
 import { performCheckIn, withScanContext } from '../worker/checkIn.js'
 import { uuid } from '../worker/uuid.js'
 import { SCAN_ERROR_POINT_INACTIVE } from '../../shared/contract.js'
-import { useProviders, useBuildingAddress, usePoint, useTodayVisits, useQueueSync } from '../worker/hooks.js'
+import { useProviders, useBuildingAddress, usePoint, useTodayVisits, useQueueSync, useDeviceStatus } from '../worker/hooks.js'
 import { TopBar, LoginView, HomeView, WorkingView, ResultView } from '../worker/components.jsx'
 import '../ui/ui.css'
 
@@ -68,10 +68,17 @@ function WorkerShell({ session, setSession }) {
     setLoginNotice(t('error.invalid_session'))
   }, [setSession, t])
 
+  // The phone tells the server how it is doing (what waits in its queue and since when, its build). The token that the server
+  // has confirmed (the session check below at app start, or a sign-in just now) is what starts the first report. There is
+  // nothing to see on the screen.
+  const [confirmedToken, setConfirmedToken] = useState(null)
+  const reportStatus = useDeviceStatus({ session, queue, confirmedToken, onSignedOut: handleSignedOut })
+
   const sync = useQueueSync({
     session,
     queue,
     onSignedOut: handleSignedOut,
+    onFlushed: reportStatus,
     onDone: (res) => {
       setRefreshKey((k) => k + 1)
       const unaccepted = res.rejected + res.dropped
@@ -96,6 +103,7 @@ function WorkerShell({ session, setSession }) {
     const token = session.token
     api('/session', { token, timeoutMs: 8000 })
       .then((res) => {
+        setConfirmedToken(token) // the server accepted the token, with usable details or not
         if (!isProvider(res?.provider)) return
         setSession((s) => (s && s.token === token ? { ...s, provider: res.provider } : s))
       })
@@ -159,6 +167,7 @@ function WorkerShell({ session, setSession }) {
   const onSignedIn = (data, remember) => {
     saveSession(data, remember)
     setLoginNotice(null)
+    setConfirmedToken(data.token) // the server has just issued it
     setSession({ ...data, remember })
   }
 
