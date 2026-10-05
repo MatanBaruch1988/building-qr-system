@@ -266,7 +266,14 @@ async function markPloniOutdated(page) {
   await page.route('**/api/admin/providers/*/devices', async (route) => {
     const response = await route.fetch()
     const json = await response.json()
-    json.devices = json.devices.map((d) => (d.app_build ? { ...d, app_build: '1234567', outdated: true } : d))
+    // Only the first phone that reported a build is made outdated, so that the page has exactly one such badge however many
+    // phones earlier tests left signed in (each of them reports its build, `dev`), and matches outdated_devices = 1 above.
+    let marked = false
+    json.devices = json.devices.map((d) => {
+      if (marked || !d.app_build) return d
+      marked = true
+      return { ...d, app_build: '1234567', outdated: true }
+    })
     return route.fulfill({ response, json })
   })
 }
