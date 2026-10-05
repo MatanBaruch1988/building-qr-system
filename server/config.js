@@ -62,10 +62,26 @@ export const ADMIN_COOKIE = 'qr_admin'
 //  - a committee session is deleted this many days after it expired or was revoked,
 //  - a login attempt is deleted after this many days (guardLogin in server/auth.js prunes the same way when someone signs in),
 //  - the label of a phone (the browser string it sent at sign-in) is cleared this many days after the phone was revoked, together
-//    with what the phone reported about itself (migration 010: its build, how many visits waited and since when, the totals).
+//    with what the phone reported about itself (migration 010: its build, how many visits waited and since when, the totals),
+//  - a recorded error (app_errors: safe fields only, no personal data) is deleted this many days after its last event.
 export const RETENTION_SESSION_DAYS = 30
 export const RETENTION_LOGIN_ATTEMPT_DAYS = 1
 export const RETENTION_DEVICE_LABEL_DAYS = 90
+export const RETENTION_APP_ERROR_DAYS = 90
+
+// Recording an unhandled server error in app_errors (server/errorLog.js) is one insert that the answer of the request waits
+// for, so it is bounded: when the database does not answer within this many milliseconds the answer goes out without the
+// record, and the record is lost (the error has already been logged once). The ADR of the topic (docs/adr/0007) names the
+// cost: a 500 can take this much longer, never more. The wait is not the only bound, because giving up on a statement does
+// not stop it: the insert carries the same time as its own statement limit (and as its idle-in-transaction limit), set by
+// the database itself (`set local`, server/db.js), so the connection comes back to the pool in about that time too. Its lock
+// limit is shorter: a row that another transaction holds (the daily retention job deleting old rows) is not worth waiting for.
+export const ERROR_RECORD_TIMEOUT_MS = 1500
+export const ERROR_RECORD_LOCK_TIMEOUT_MS = 500
+// Recording never queues and never takes the last free connection: it is skipped unless the pool could give a client at once
+// and still have this many left for the requests that are being served (the pool of the app has 3, poolConfig in server/db.js).
+// A burst of failures while the database is slow therefore cannot make error records compete with healthy work for the pool.
+export const ERROR_RECORD_POOL_RESERVE = 1
 
 // The audit log keeps the name of the committee member as it was at the time of the action (audit_log.actor_name, a
 // snapshot, so the entry stays readable after the member is deleted). The column refuses more than this many characters
