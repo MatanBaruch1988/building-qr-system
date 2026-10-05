@@ -11,6 +11,7 @@
 // scan is of the settled screen: expectNoA11yViolations switches the animations off first.
 import { randomUUID } from 'node:crypto'
 import ar from '../src/i18n/ar.js'
+import { PROVIDER_TOKEN_PREFIX } from '../shared/contract.js'
 import {
   test, expect, he, en, ru, POINTS, PEOPLE, FAR, ADMIN_EMAIL, adminSignIn, clearScans, allowConsoleErrors, expectNoA11yViolations,
 } from './fixtures.js'
@@ -199,10 +200,12 @@ test.describe('provider app', () => {
     await page.route('**/api/scan', (route) => route.fulfill({ status: 503, json: { error: { code: 'unavailable' } } }))
     await page.route('**/api/my/scans', (route) => route.fulfill({ json: { scans: [] } }))
     await page.route('**/api/session', (route) => (route.request().method() === 'GET' ? sessionAnswer(route) : route.continue()))
+    // The token has the shape of a device token (the app keeps only a session whose token could be ours), but no server
+    // issued it.
     await page.evaluate(([session, visit]) => {
       localStorage.setItem('qr.session', JSON.stringify(session))
       localStorage.setItem('qr.queue.v1', JSON.stringify([visit]))
-    }, [{ token: 'a-token-that-no-server-knows', provider }, saved()])
+    }, [{ token: `${PROVIDER_TOKEN_PREFIX}a-token-that-no-server-knows`, provider }, saved()])
     await page.goto(scanLink(POINTS.lobby))
     await expect(page.getByRole('heading', { name: he['checkin.queued.title'] })).toBeVisible()
     await scanBothThemes(page, 'provider he: check-in saved on the phone')
