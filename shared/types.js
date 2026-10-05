@@ -117,6 +117,33 @@
  */
 
 /**
+ * What a phone reports about itself: the body of POST /api/my/device-status (limits in section 8 of shared/contract.js, read by
+ * parseDeviceStatusReport in server/deviceStatus.js). It is a request of its own, never a field of the sync request. EVERY field
+ * is optional, and the server ignores a field that is not valid (it never answers 400 for one) and a field that it does not know,
+ * so a phone of another version can send fewer or more. The earlier fields `not_accepted` and `overflowed` (counts since the last
+ * report, added up on the server) are not part of it any more: no released phone ever sent them, and the server now ignores them
+ * like any field that it does not know.
+ * @typedef {object} DeviceStatusReport
+ * @property {string} [build]  the build id of the app (APP_BUILD_RE); anything else is ignored
+ * @property {number} [waiting]  how many visits wait in the phone's queue, a whole number from 0 to SYNC_QUEUE_MAX_ITEMS
+ * @property {string | null} [oldest_waiting_at]  ISO 8601 with a zone, the phone's clock for the oldest of them; stored only when
+ *   it is not older than DEVICE_STATUS_MAX_AGE_DAYS and not more than 5 minutes ahead of the server, otherwise stored as nothing.
+ *   Send it as null (or `waiting: 0`) when nothing waits
+ * @property {number} [not_accepted_total]  how many visits the server refused for good since the phone signed in (since its device
+ *   token), counted on the phone and NEVER reset after a report: a whole number from 0, cut to DEVICE_STATUS_MAX_TOTAL. The server
+ *   keeps the larger of this and what it holds, so a retried, duplicate or out-of-order report changes nothing. Anything that is not
+ *   a whole number from 0 is ignored (the stored value stays)
+ * @property {number} [overflowed_total]  how many visits left a full queue since the phone signed in; counted and read the same way
+ */
+
+/**
+ * The answer of POST /api/my/device-status, always, also when the server stored nothing (a report within
+ * DEVICE_STATUS_MIN_INTERVAL_S of the last one). `build` is the first 7 characters of the commit that the server runs, or null when
+ * it has none (a local server), so that a phone can tell that it is outdated.
+ * @typedef {{ ok: true, build: string | null }} DeviceStatusAnswer
+ */
+
+/**
  * One entry of the audit log, as the committee reads it (GET /api/admin/audit, auditEntry in server/routes/audit.js). It is
  * the row of `audit_log`, the name of the member and the current name of what the entry is about, nothing else: no session, no
  * token. The agent API never has it.
