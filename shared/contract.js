@@ -164,7 +164,7 @@ export const APP_BUILD_RE = /^(?:[0-9a-f]{7}|dev)$/
 
 // ---- 8. What a phone reports about itself ------------------------------------------------------------------------
 // The phone tells the server how many visits wait in its offline queue and since when, which build it runs, and how many visits
-// it was told were not accepted or had to drop from a full queue (ADR 0007, "Phone health"). It travels in a request of its own,
+// it was told were not accepted or had to drop from a full queue, as two cumulative counts (ADR 0007, "Phone health"). It travels in a request of its own,
 // POST /api/my/device-status (server/routes/devices.js, server/deviceStatus.js), and never in the sync request, so the offline
 // sync contract of section 1 does not change at all. The body is a DeviceStatusReport (shared/types.js): every field is optional,
 // and the server ignores a field that is not valid and a field that it does not know (an installed app of another version may
@@ -179,10 +179,14 @@ export const APP_BUILD_RE = /^(?:[0-9a-f]{7}|dev)$/
 export const DEVICE_STATUS_MIN_INTERVAL_S = 10
 
 /**
- * The most that one report adds to a running total (`not_accepted`, `overflowed`): a larger count is cut to it. The phone counts
- * what happened since its last report, so a count of this size is a phone that was away for a long time, not a typical report.
+ * The largest value that the server takes for `not_accepted_total` and `overflowed_total`: a larger whole number is cut to it, and
+ * anything that is not a whole number from 0 up is ignored. These are CUMULATIVE counts that the phone keeps since it signed in
+ * (since its device token) and never resets after a report, and the server keeps the larger of the stored value and the reported
+ * one, so a report that is sent again, a late duplicate or one that arrives out of order changes nothing. The value is far above
+ * what a real phone counts (a queue holds SYNC_QUEUE_MAX_ITEMS visits), so it only stops a wrong or hostile number from filling the
+ * column: the committee would read it as a real count, and a total that has reached it cannot grow any more.
  */
-export const DEVICE_STATUS_MAX_COUNT = 1000
+export const DEVICE_STATUS_MAX_TOTAL = 1000000
 
 /**
  * How old `oldest_waiting_at` may be, in days: an older time is not believed and is stored as nothing. The phone's clock can be
