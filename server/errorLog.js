@@ -1,4 +1,4 @@
-// The only writer of app_errors (db/migrations/009_app_errors.sql): the server's own record of what went wrong, kept for 90
+// The only writer of app_errors (db/migrations/010_app_errors.sql): the server's own record of what went wrong, kept for 90
 // days where the runtime log of the host is kept for about one hour (docs/adr/0007-observability-in-our-own-postgres.md).
 // One row is one kind of event in one hour with a count, so a loop of failures is one row and cannot fill the database.
 //
@@ -25,7 +25,7 @@ export const EVENT_KINDS = Object.freeze(['error', 'refusal', 'slow', 'crash', '
 /** The values of app_errors.method besides the empty string (an event that is not a request). */
 export const EVENT_METHODS = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 
-// The length limits of the columns (the checks of the table say the same: db/migrations/009_app_errors.sql).
+// The length limits of the columns (the checks of the table say the same: db/migrations/010_app_errors.sql).
 export const PLACE_MAX_LENGTH = 120
 export const CODE_MAX_LENGTH = 60
 export const APP_BUILD_MAX_LENGTH = 40

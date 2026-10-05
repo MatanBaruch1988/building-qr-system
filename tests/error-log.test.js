@@ -1,4 +1,4 @@
-// Server errors recorded in our own database (server/errorLog.js, db/migrations/009_app_errors.sql, docs/adr/0007). The
+// Server errors recorded in our own database (server/errorLog.js, db/migrations/010_app_errors.sql, docs/adr/0007). The
 // runtime log of the host is kept for about an hour, so an unhandled error (a 500) is also written to app_errors, one row per
 // kind of event per hour with a count, with safe fields only. This file proves:
 //   - a 500 on a matched route writes one row with the right fields, and a second one in the same hour adds 1 to its count;
