@@ -141,6 +141,12 @@ afterAll(async () => {
 // sign-in itself has its own tests below.
 const SESSION_ROUTES = ['POST /admin/google', 'POST /admin/dev-login', 'POST /admin/logout']
 
+// The committee routes that write but change nothing that the committee manages, so they have no audit row on purpose: the committee
+// app's report of its own errors (server/routes/clientErrors.js) writes app_errors, the record of what went wrong in an app, with a
+// screen key, a kind, an error name or code, a build and a count, and nothing about who sent it (tests/client-errors.test.js). Each entry
+// here is a decision that a reviewer reads: a route that changes data of the committee belongs in ROUTES.
+const NOT_A_COMMITTEE_CHANGE_ROUTES = ['POST /admin/client-errors']
+
 // One entry for every route (and every action of a route that has two): `route` is the method and the path as the route is
 // registered; `prepare()` creates what the call needs and returns the url, the body and the id of the entity (or
 // `entityId(answer)` says how to read it from the answer of a route that creates it); `detail` is what the entry says (null:
@@ -355,15 +361,15 @@ describe('the table covers every committee route that writes', () => {
   const writing = routeTable().filter((r) => r.method !== 'GET' && r.path.startsWith('/admin/')).map(key)
 
   it('fails for a committee route that is neither in the table above nor a session route: a new route needs its atomic test', () => {
-    const covered = new Set([...ROUTES.map((e) => e.route), ...SESSION_ROUTES])
+    const covered = new Set([...ROUTES.map((e) => e.route), ...SESSION_ROUTES, ...NOT_A_COMMITTEE_CHANGE_ROUTES])
     expect(
       writing.filter((k) => !covered.has(k)),
-      'add the route to ROUTES in tests/audit-atomic.test.js (its change and its audit row in one transaction), or to SESSION_ROUTES if it only signs a member in or out',
+      'add the route to ROUTES in tests/audit-atomic.test.js (its change and its audit row in one transaction), or to SESSION_ROUTES if it only signs a member in or out, or to NOT_A_COMMITTEE_CHANGE_ROUTES (with the reason) if it changes nothing that the committee manages',
     ).toEqual([])
   })
 
   it('has no entry for a route that does not exist', () => {
-    const stale = [...ROUTES.map((e) => e.route), ...SESSION_ROUTES].filter((k) => !writing.includes(k))
+    const stale = [...ROUTES.map((e) => e.route), ...SESSION_ROUTES, ...NOT_A_COMMITTEE_CHANGE_ROUTES].filter((k) => !writing.includes(k))
     expect(stale, 'a route was renamed or removed: fix or remove its entry').toEqual([])
   })
 
