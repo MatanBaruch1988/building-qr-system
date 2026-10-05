@@ -25,7 +25,7 @@
 //      after that is given back unused (the abort signal of the transaction).
 //   4. When the error being recorded is itself a failure to reach the database, the insert would fail as well and only hold
 //      the answer of the request, so it is not attempted.
-import { query, spareClients } from './db.js'
+import { query, spareClients, DB_CONNECT_TIMEOUT } from './db.js'
 import { ERROR_RECORD_TIMEOUT_MS, ERROR_RECORD_LOCK_TIMEOUT_MS, ERROR_RECORD_POOL_RESERVE } from './config.js'
 import { oneLine } from './logSafe.js'
 import { CLIENT_ERROR_MAX_COUNT } from '../shared/contract.js'
@@ -86,15 +86,21 @@ const POOL_FAILURES = /^(?:timeout exceeded when trying to connect|Connection te
 /**
  * Whether `err` is a failure to reach the database: a SQLSTATE of class 08 (connection exception), 57P01, 57P02 or 57P03,
  * a socket code of Node (ECONNREFUSED, ECONNRESET, ENOTFOUND, EAI_AGAIN, ETIMEDOUT), or the error of the pool that waited
- * too long for a connection. An error that wraps one (`cause`, or the `errors` of an AggregateError) counts too. It reads
- * the error to decide and keeps nothing of it.
+ * too long for a connection (the `db_connect_timeout` that server/db.js throws for it, or its message as `pg` writes it). An
+ * error that wraps one (`cause`, or the `errors` of an AggregateError) counts too. It reads the error to decide and keeps
+ * nothing of it.
  * @param {unknown} err
  * @param {number} [depth]
  */
 export function isConnectionFailure(err, depth = 0) {
   if (err === null || typeof err !== 'object' || depth > 2) return false
   const { code, message, cause, errors } = /** @type {Record<string, unknown>} */ (err)
-  if (typeof code === 'string' && (code.startsWith('08') || SHUTDOWN_SQLSTATES.has(code) || SOCKET_CODES.has(code))) return true
+  if (
+    typeof code === 'string' &&
+    (code.startsWith('08') || SHUTDOWN_SQLSTATES.has(code) || SOCKET_CODES.has(code) || code === DB_CONNECT_TIMEOUT)
+  ) {
+    return true
+  }
   if (err instanceof Error && typeof message === 'string' && POOL_FAILURES.test(message)) return true
   if (cause !== undefined && isConnectionFailure(cause, depth + 1)) return true
   return Array.isArray(errors) && errors.some((inner) => isConnectionFailure(inner, depth + 1))
