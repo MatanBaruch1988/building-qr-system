@@ -20,11 +20,13 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { setupDb, call } from './helpers.js'
 import { route } from '../server/router.js'
 import { getPool, setPool } from '../server/db.js'
-import { noteServerError, resetAlertThrottle } from '../server/alerts.js'
+import { noteServerError, resetAlertThrottle, ALERT_LIMITS } from '../server/alerts.js'
 import {
   ALERT_DB_TIMEOUT_MS,
+  ALERT_LOCK_TIMEOUT_MS,
   ALERT_TOTAL_TIMEOUT_MS,
   ALERT_UNREACHABLE_INTERVAL_MS,
+  ERROR_RECORD_LOCK_TIMEOUT_MS,
   ERROR_RECORD_TIMEOUT_MS,
   HEARTBEAT_TIMEOUT_MS,
 } from '../server/config.js'
@@ -126,7 +128,7 @@ async function withStatements(fn) {
   const real = getPool()
   const seen = []
   setPool({
-    query: (text, params) => (seen.push(String(text).replace(/\s+/g, ' ').trim()), real.query(text, params)),
+    query: (text, params, options) => (seen.push(String(text).replace(/\s+/g, ' ').trim()), real.query(text, params, options)),
     connect: (...args) => (seen.push('(a connection for a transaction)'), real.connect(...args)),
   })
   try {
@@ -199,8 +201,15 @@ describe('the first server error of a building day', () => {
     // Warm connections first: a new one costs a second on a slow link to the database, and the insert is bounded.
     await Promise.all([1, 2, 3].map(() => db.pool.query('select 1')))
     at(NOON)
-    await Promise.all(Array.from({ length: 3 }, (_, i) => noteServerError({ ...EVENT, place: `/route-${i}` })))
-    expect(pings).toHaveLength(1)
+    // Each call starts a few milliseconds after the one before (not in the same tick: pg's pool counts a client that was just asked
+    // for as waiting until the next tick, which spareClients reads as busy), and all of them are in the database at the same time.
+    const calls = []
+    for (let i = 0; i < 3; i++) {
+      calls.push(noteServerError(EVENT))
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    await Promise.all(calls)
+    expect(bodies()).toEqual([FIRST_LINE])
     expect(await days()).toHaveLength(1)
   })
 
@@ -424,19 +433,33 @@ describe('when the database is the failure', () => {
     expect(loggedAnything()).toEqual([])
   })
 
-  it('reads the busy state from the pool: busy only when no connection is idle and the pool is at its size', async () => {
+  it('reads the busy state from spareClients: not asked unless the pool has a client to give at once and one more to keep', async () => {
     at(NOON)
     const asked = []
     const pool = (state) => ({ options: { max: 3 }, ...state, query: (text) => (asked.push(text), Promise.resolve({ rowCount: 1, rows: [{}] })) })
-    for (const busy of [{ idleCount: 0, totalCount: 3 }, { idleCount: 0, totalCount: 3, waitingCount: 2 }]) {
+    // spare = idle clients + connections that may still be opened, and 0 while something waits: the same rule, and the same
+    // reserve of one, as the record of an error (ERROR_RECORD_POOL_RESERVE).
+    const busyStates = [
+      { idleCount: 0, totalCount: 3, waitingCount: 0 }, // spare 0
+      { idleCount: 1, totalCount: 3, waitingCount: 0 }, // spare 1: the last free one is kept for the requests being served
+      { idleCount: 2, totalCount: 3, waitingCount: 1 }, // something already waits: a statement would join the queue
+      { idleCount: 0, totalCount: 2, waitingCount: 0 }, // spare 1 as well
+    ]
+    for (const busy of busyStates) {
       resetAlertThrottle()
       setPool(pool(busy))
       await noteServerError(EVENT)
     }
     expect(asked).toEqual([]) // not asked
     const busyLine = 'Server error, database busy, 05/10/2026 14:03: POST /scans/sync 57014'
-    expect(bodies()).toEqual([busyLine, busyLine]) // one for each state (the throttle was reset between them)
-    for (const free of [{ idleCount: 1, totalCount: 3 }, { idleCount: 0, totalCount: 2 }, {}]) {
+    expect(bodies()).toEqual(busyStates.map(() => busyLine)) // one for each state (the throttle was reset between them)
+    const freeStates = [
+      { idleCount: 2, totalCount: 3, waitingCount: 0 }, // spare 2
+      { idleCount: 0, totalCount: 1, waitingCount: 0 }, // spare 2
+      { idleCount: 0, totalCount: 0, waitingCount: 0 }, // spare 3, a new instance
+      {}, // a pool that does not report its counts (a test double) is taken as free
+    ]
+    for (const free of freeStates) {
       resetAlertThrottle()
       pings.length = 0
       asked.length = 0
@@ -445,6 +468,26 @@ describe('when the database is the failure', () => {
       expect(asked, JSON.stringify(free)).toHaveLength(1) // asked
       expect(bodies(), JSON.stringify(free)).toEqual([FIRST_LINE])
     }
+  })
+
+  it('asks with the short limits of the database and a signal, and stops waiting for the statement when it is done', async () => {
+    at(NOON)
+    const seen = []
+    setPool({
+      query: (text, params, options) => (seen.push({ text, params, options }), Promise.resolve({ rowCount: 1, rows: [{ day: '2026-10-05' }] })),
+    })
+    await noteServerError(EVENT)
+    expect(seen).toHaveLength(1)
+    expect(seen[0].text).toBe('insert into alert_pings (day) values ($1) on conflict do nothing returning day')
+    expect(seen[0].params).toEqual(['2026-10-05'])
+    expect(seen[0].options.limits).toEqual({ statementMs: ALERT_DB_TIMEOUT_MS, idleInTransactionMs: ALERT_DB_TIMEOUT_MS, lockMs: ALERT_LOCK_TIMEOUT_MS })
+    expect(seen[0].options.limits).toBe(ALERT_LIMITS)
+    expect(Object.isFrozen(ALERT_LIMITS)).toBe(true)
+    // The same short limits as the record of an error: its statement time is the time that the call waits, and its lock limit is the short one.
+    expect([ALERT_DB_TIMEOUT_MS, ALERT_LOCK_TIMEOUT_MS]).toEqual([ERROR_RECORD_TIMEOUT_MS, ERROR_RECORD_LOCK_TIMEOUT_MS])
+    expect(seen[0].options.signal).toBeInstanceOf(AbortSignal)
+    // Nobody waits for the insert any more: a connection that is still being made is given back unused.
+    expect(seen[0].options.signal.aborted).toBe(true)
   })
 
   it('treats an insert that does not answer in time as a database that is down, and stays inside the bound', async () => {
@@ -595,7 +638,7 @@ describe('through the router', () => {
 
   it('still answers the same 500, with one log line, when the pool is busy, and says so in the ping', async () => {
     at(NOON)
-    setPool({ options: { max: 3 }, idleCount: 0, totalCount: 3, query: () => Promise.reject(new Error('the pool is busy')) })
+    setPool({ options: { max: 3 }, idleCount: 0, totalCount: 3, waitingCount: 0, query: () => Promise.reject(new Error('the pool is busy')) })
     const { r, errors } = await viaRouter('/api/test/alert/boom')
     expect(r.status).toBe(500)
     expect(r.json).toEqual(PLAIN_500)

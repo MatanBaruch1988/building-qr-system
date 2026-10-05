@@ -90,7 +90,13 @@ export const ERROR_RECORD_POOL_RESERVE = 1
 // answer of the request waits for the ping, and every wait is bounded. It happens at most once a day, or once an hour (per
 // function instance) when the database itself is down.
 //  - ALERT_DB_TIMEOUT_MS: the one insert that decides whether the day was already announced. When it does not answer in time
-//    the database counts as unreachable, and the throttle in memory decides instead.
+//    the database counts as unreachable, and the throttle in memory decides instead. Like the record of an error (above) the
+//    insert carries this time as its own statement limit, set by the database, so a statement that nobody waits for any more
+//    is cancelled there, and a connection that arrives after the wait is given back unused. Its lock limit is the same short one
+//    (ALERT_LOCK_TIMEOUT_MS): a row that another transaction holds is not worth a long wait.
+//  - ALERT_POOL_RESERVE: like the record of an error, the insert never queues and never takes the last free connection: unless
+//    the pool could give a client at once and keep this many for the requests that are being served, it is not attempted, and the
+//    throttle in memory decides instead.
 //  - HEARTBEAT_TIMEOUT_MS: the request to healthchecks.io. One try, no retry on the path of a request.
 //  - ALERT_TOTAL_TIMEOUT_MS: the whole of noteServerError, whatever happens inside it (the two above, one after the other).
 //  - ALERT_UNREACHABLE_INTERVAL_MS: with no database to ask, one ping an hour at most per function instance.
@@ -99,6 +105,8 @@ export const ALERT_DB_TIMEOUT_MS = 1500
 export const HEARTBEAT_TIMEOUT_MS = 1000
 export const ALERT_TOTAL_TIMEOUT_MS = 2500
 export const ALERT_UNREACHABLE_INTERVAL_MS = 60 * 60 * 1000
+export const ALERT_POOL_RESERVE = ERROR_RECORD_POOL_RESERVE
+export const ALERT_LOCK_TIMEOUT_MS = ERROR_RECORD_LOCK_TIMEOUT_MS
 export const HEARTBEAT_BODY_MAX_BYTES = 8 * 1024
 
 // The audit log keeps the name of the committee member as it was at the time of the action (audit_log.actor_name, a

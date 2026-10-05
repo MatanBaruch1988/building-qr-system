@@ -23,8 +23,14 @@
 // an hour when the database is down. noteServerError never throws and never logs: the caller has already logged the error.
 // Without HEALTH_HEARTBEAT_URL (every Preview deployment, every local run and every test) it does nothing at all, not even a
 // query, so that a day is not marked as announced when no ping could be sent.
-import { getPool, query } from './db.js'
-import { ALERT_DB_TIMEOUT_MS, ALERT_TOTAL_TIMEOUT_MS, ALERT_UNREACHABLE_INTERVAL_MS } from './config.js'
+import { query, spareClients } from './db.js'
+import {
+  ALERT_DB_TIMEOUT_MS,
+  ALERT_LOCK_TIMEOUT_MS,
+  ALERT_POOL_RESERVE,
+  ALERT_TOTAL_TIMEOUT_MS,
+  ALERT_UNREACHABLE_INTERVAL_MS,
+} from './config.js'
 import { EVENT_METHODS, isConnectionFailure } from './errorLog.js'
 import { isHeartbeatConfigured, sendHeartbeat } from './heartbeat.js'
 import { oneLine } from './logSafe.js'
@@ -34,6 +40,18 @@ import { formatDateTime, isoDay } from '../shared/datetime.js'
 const CLAIM_DAY = 'insert into alert_pings (day) values ($1) on conflict do nothing returning day'
 
 const TIMED_OUT = Symbol('timed out')
+
+/**
+ * The limits that the database puts on the insert (server/db.js sets them with `set local` in the transaction of this one
+ * statement; every other statement of the app keeps the limits of the pool), the same way as for the record of an error
+ * (ERROR_RECORD_LIMITS in server/errorLog.js): the time that the call waits for it, so that a statement that nobody waits for
+ * any more is cancelled by the database in about that time and its connection goes back to the pool, and a short lock limit.
+ */
+export const ALERT_LIMITS = Object.freeze({
+  statementMs: ALERT_DB_TIMEOUT_MS,
+  idleInTransactionMs: ALERT_DB_TIMEOUT_MS,
+  lockMs: ALERT_LOCK_TIMEOUT_MS,
+})
 
 // The text of each kind of line, in front of the time. The first is the daily alert; the others are the way out when the database
 // cannot be asked: it did not answer, or every connection of the pool was busy so that the insert would have had to wait in a
@@ -82,29 +100,22 @@ function takeThePlaceOfThisHour() {
 }
 
 /**
- * Whether a statement asked now would have to wait for a connection: every one is in use and the pool is at its size. A pool
- * that does not say (a test double) is not busy.
- */
-function poolIsBusy() {
-  const pool = getPool()
-  const max = pool?.options?.max
-  return Number.isInteger(max) && pool.idleCount === 0 && pool.totalCount >= max
-}
-
-/**
  * Asks the database whether this error is the first of the building day, and takes the day if it is. Never throws. It never
- * queues behind other work: when the pool is busy it does not ask at all (the error may be the sign of that very overload, and
- * a wait would only hold up the answer of the request).
+ * queues behind other work and never takes the last free connection (spareClients of server/db.js, ALERT_POOL_RESERVE): when
+ * the pool is busy it does not ask at all (the error may be the sign of that very overload, and a wait would only hold up the
+ * answer of the request). The database bounds the statement itself (ALERT_LIMITS), and a connection that arrives after the wait
+ * is over is given back unused (the abort signal of the transaction).
  * @returns {Promise<'first' | 'already' | 'busy' | 'unreachable' | 'failed'>} `busy`: not asked, the pool had no free
  *   connection; `unreachable`: it did not answer in time, or the insert failed because it could not be reached; `failed`: the
  *   insert failed for another reason (the table is not there, say)
  */
 async function claimTheDay() {
   let timer
+  const stopped = new AbortController()
   try {
-    if (poolIsBusy()) return 'busy'
+    if (spareClients() <= ALERT_POOL_RESERVE) return 'busy'
     const answer = await Promise.race([
-      query(CLAIM_DAY, [isoDay()]),
+      query(CLAIM_DAY, [isoDay()], { limits: ALERT_LIMITS, signal: stopped.signal }),
       new Promise((resolve) => {
         timer = setTimeout(() => resolve(TIMED_OUT), ALERT_DB_TIMEOUT_MS)
       }),
@@ -116,6 +127,8 @@ async function claimTheDay() {
     return isConnectionFailure(failure) ? 'unreachable' : 'failed'
   } finally {
     clearTimeout(timer)
+    // Nobody waits for the insert any more. If it has not started (its connection is still being made), it will not.
+    stopped.abort()
   }
 }
 
