@@ -12,7 +12,7 @@ import { route } from '../router.js'
 import { query } from '../db.js'
 import { bad, isUuid } from '../http.js'
 import { pageLimit, parseBound } from '../scans.js'
-import { TIMEZONE, FILTER_TEXT_MAX_LENGTH } from '../config.js'
+import { TIMEZONE, FILTER_TEXT_MAX_LENGTH, MAX_AUDIT_PAGE_SIZE } from '../config.js'
 
 /** @import { AuditEntry, AuditPage } from '../../shared/types.js' */
 
@@ -99,7 +99,7 @@ export function auditQuery(q = {}) {
     where.push(`(at, id) < ($${at}::timestamptz, $${push(id)}::bigint)`)
   }
 
-  const limit = pageLimit(q.limit)
+  const limit = pageLimit(q.limit, MAX_AUDIT_PAGE_SIZE)
 
   // The `admins` row is only for the name of a member who was on the committee when the row was written. The snapshot of
   // the name on the row wins (it is what the member was called then, and it outlives the member); the current name or
@@ -127,7 +127,7 @@ export function auditQuery(q = {}) {
  */
 function auditEntry(r) {
   return {
-    id: String(r.id),
+    id: Number(r.id), // a bigint column, as the id of a refused visit is (the cursor keeps the exact text)
     at: new Date(r.at).toISOString(),
     action: r.action,
     entity: r.entity,

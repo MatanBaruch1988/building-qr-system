@@ -16,7 +16,7 @@ import { routeTable } from '../server/router.js'
 import { tx } from '../server/db.js'
 import { auditQuery, AUDIT_GROUPS, AUDIT_FILTERS } from '../server/routes/audit.js'
 import { schemaDoc } from '../server/schemaDoc.js'
-import { API_KEY_PREFIX, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../server/config.js'
+import { API_KEY_PREFIX, DEFAULT_PAGE_SIZE, MAX_AUDIT_PAGE_SIZE } from '../server/config.js'
 
 let db, cookie, adminId, secondId, noNameId, goneId
 const ids = {} // the ids of the things that the real actions are about (a point, a provider)
@@ -25,6 +25,7 @@ const labelOf = {} // the other way round
 
 const get = (qs = '', asCookie = cookie) => call('GET', `/api/admin/audit${qs ? `?${qs}` : ''}`, { cookie: asCookie })
 const labels = (entries) => entries.map((e) => labelOf[e.id])
+const ids_ = (entries) => entries.map((e) => String(e.id)) // the ids as text, to compare with what the database says
 
 /** Walks every page of a listing with the cursor, and says how many pages it took. */
 async function walk(qs, limit) {
@@ -160,6 +161,8 @@ beforeAll(async () => {
     actor('actor-gone-old', { actor_id: goneId, actor_name: null }),
     actor('actor-not-an-id', { actor_id: 'fake-actor', actor_name: 'Fake Name' }),
     actor('actor-system', { actor_type: 'system', actor_id: null, actor_name: null }),
+    // The third actor type that server/audit.js allows: a command run on the owner's machine. It is not looked up in `admins`.
+    actor('actor-script', { actor_type: 'script', actor_id: 'a-script', actor_name: null }),
     // A system row never takes the name of an admin, even when its actor_id happens to be an admin's.
     actor('actor-system-with-id', { actor_type: 'system', actor_id: adminId, actor_name: null }),
   ]
@@ -208,7 +211,7 @@ describe('order and paging', () => {
     expect(expected.length).toBeGreaterThan(50)
     for (const limit of [8, 25, expected.length - 1, expected.length, expected.length + 1]) {
       const { entries } = await walk('', limit)
-      expect(entries.map((e) => e.id), `limit ${limit}`).toEqual(expected)
+      expect(ids_(entries), `limit ${limit}`).toEqual(expected)
     }
   }, SLOW)
 
@@ -222,17 +225,19 @@ describe('order and paging', () => {
   }, SLOW)
 
   it('uses the default page size and cuts a larger one to the maximum, the way the scans list does', async () => {
+    expect(DEFAULT_PAGE_SIZE).toBe(100)
+    expect(MAX_AUDIT_PAGE_SIZE).toBe(200) // the same page as the list of refused visits
     expect(auditQuery({}).limit).toBe(DEFAULT_PAGE_SIZE)
     expect(auditQuery({ limit: '' }).limit).toBe(DEFAULT_PAGE_SIZE)
     expect(auditQuery({ limit: '3' }).limit).toBe(3)
-    expect(auditQuery({ limit: String(MAX_PAGE_SIZE) }).limit).toBe(MAX_PAGE_SIZE)
-    expect(auditQuery({ limit: String(MAX_PAGE_SIZE + 1) }).limit).toBe(MAX_PAGE_SIZE) // cut, not refused
-    expect(auditQuery({ limit: '1000000' }).limit).toBe(MAX_PAGE_SIZE)
+    expect(auditQuery({ limit: String(MAX_AUDIT_PAGE_SIZE) }).limit).toBe(MAX_AUDIT_PAGE_SIZE)
+    expect(auditQuery({ limit: String(MAX_AUDIT_PAGE_SIZE + 1) }).limit).toBe(MAX_AUDIT_PAGE_SIZE) // cut, not refused
+    expect(auditQuery({ limit: '1000000' }).limit).toBe(MAX_AUDIT_PAGE_SIZE)
     expect(auditQuery({ limit: '2' }).sql).toMatch(/limit 3\b/) // one more than the page, to know there is a next one
-    for (const limit of [MAX_PAGE_SIZE + 1, 1_000_000]) {
+    for (const limit of [MAX_AUDIT_PAGE_SIZE + 1, 1_000_000]) {
       const r = await get(`limit=${limit}`)
       expect(r.status).toBe(200)
-      expect(r.json.entries.length).toBeLessThanOrEqual(MAX_PAGE_SIZE)
+      expect(r.json.entries.length).toBeLessThanOrEqual(MAX_AUDIT_PAGE_SIZE)
     }
   })
 })
@@ -420,7 +425,7 @@ describe('bad parameters are 400, with the codes of the scans list', () => {
       expect(audit.json.error.field, what).toBe(scans.json.error.field)
     }
     // And what the scans list accepts, the audit log accepts: a day, an ISO time with a zone, a limit over the maximum.
-    for (const qs of ['from=2026-01-01', 'to=2100-01-01', 'from=2026-01-01T00:00:00%2B02:00', `limit=${MAX_PAGE_SIZE + 1}`, 'limit=1']) {
+    for (const qs of ['from=2026-01-01', 'to=2100-01-01', 'from=2026-01-01T00:00:00%2B02:00', `limit=${MAX_AUDIT_PAGE_SIZE + 1}`, 'limit=1']) {
       expect((await call('GET', `/api/admin/scans?${qs}`, { cookie })).status, qs).toBe(200)
       expect((await get(qs)).status, qs).toBe(200)
     }
@@ -470,6 +475,10 @@ describe('the name of the actor', () => {
     expect(await byLabel('actor-system')).toMatchObject({ actor_type: 'system', actor_name: null, actor_deleted: false })
   })
 
+  it('has no name for a script (a command run on a computer of the owner), which is not a deleted member', async () => {
+    expect(await byLabel('actor-script')).toMatchObject({ actor_type: 'script', actor_id: 'a-script', actor_name: null, actor_deleted: false })
+  })
+
   it('never gives a system row the name of an admin, even when its actor_id is an admin\'s', async () => {
     expect(await byLabel('actor-system-with-id')).toMatchObject({ actor_type: 'system', actor_id: adminId, actor_name: null, actor_deleted: false })
   })
@@ -501,21 +510,21 @@ describe('privacy: what an entry holds', () => {
 
   it('has the types of the shared shape (AuditEntry)', async () => {
     for (const e of (await get('limit=100')).json.entries) {
-      expect(typeof e.id).toBe('string')
-      expect(e.id).toMatch(/^[1-9]\d*$/)
+      expect(Number.isSafeInteger(e.id)).toBe(true)
+      expect(e.id).toBeGreaterThan(0)
       expect(typeof e.at).toBe('string')
       expect(typeof e.action).toBe('string')
       expect(['string', 'object']).toContain(typeof e.entity) // text or null
       expect(typeof e.actor_deleted).toBe('boolean')
-      expect(['admin', 'system']).toContain(e.actor_type)
+      expect(['admin', 'system', 'script']).toContain(e.actor_type)
     }
   })
 
   it('returns the detail as it was stored, nested values and nulls included', async () => {
     const stored = new Map((await db.pool.query('select id::text, detail from audit_log')).rows.map((r) => [r.id, r.detail]))
     const all = await walk('', 100)
-    for (const e of all.entries) expect(e.detail, e.action).toEqual(stored.get(e.id))
-    const find = (label) => all.entries.find((e) => e.id === idOf[label])
+    for (const e of all.entries) expect(e.detail, e.action).toEqual(stored.get(String(e.id)))
+    const find = (label) => all.entries.find((e) => String(e.id) === idOf[label])
     expect(find('point.update P1').detail).toEqual({ name: 'Fake lobby 2', provider_ids: [ids.V1] })
     expect(find('scan.void').detail).toEqual({ reason: 'a fake reason' })
     expect(find('building.update').detail).toEqual({ address: 'Fake street 1' })
@@ -610,7 +619,7 @@ describe('the SQL can use the indexes of migration 007', () => {
       "select id::text as id_text from audit_log where entity = 'point' and entity_id = 'bulk-9' order by at desc, id desc",
     )
     const { entries } = await walk('entity=point&entity_id=bulk-9', 3)
-    expect(entries.map((e) => e.id)).toEqual(rows.map((r) => r.id_text))
+    expect(ids_(entries)).toEqual(rows.map((r) => r.id_text))
     expect(rows.length).toBeGreaterThan(5)
   }, SLOW)
 })
