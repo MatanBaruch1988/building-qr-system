@@ -28,6 +28,7 @@ export const POINTS = {
   lobby: 'BQR-dev00000000000000000001', // GPS checked if available, open to everyone
   basement: 'BQR-dev00000000000000000002', // no GPS check
   gym: 'BQR-dev00000000000000000003', // GPS required, only for Ploni
+  switchedOff: 'BQR-dev00000000000000000004', // the old point, switched off: a scan of it is refused (point_inactive)
 }
 export const PEOPLE = {
   ploni: { name: SAMPLE_PROVIDER_NAMES.cleaner, password: 'dev-pass-1' },
