@@ -736,7 +736,7 @@ describe('POST /api/admin/admins on a member who was switched off', () => {
     const before = await snapshot()
     const { result } = await quietly(() => refusingAudit('admin.enable', () => post('/api/admin/admins', { email: member.email })))
     expect(result.status).toBe(500)
-    expect(await snapshot()).toEqual(before)
+    await expectOnlyTheRecordOfTheFailure(before, 'POST /admin/admins')
     expect((await post('/api/admin/admins', { email: member.email })).status).toBe(201)
     expect((await one('select is_active from admins where id = $1', [member.id])).is_active).toBe(true)
   })
