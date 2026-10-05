@@ -230,6 +230,7 @@ describe('runRetention', () => {
     expect(added[0]).toMatchObject({
       actor_type: 'system',
       actor_id: null,
+      actor_name: null, // the system actor is named by actor_type; the name column is the snapshot of a person's name
       action: 'retention.run',
       entity: null,
       entity_id: null,

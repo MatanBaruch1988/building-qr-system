@@ -41,6 +41,9 @@ export async function runRetention() {
     const counts = { sessions: sessions.rowCount, loginAttempts: attempts.rowCount, deviceLabels: labels.rowCount }
     // Counts only: no id, no name, no label. The audit log has no end date, and nothing in the app reads it today (no screen,
     // no agent API, no export): only whoever holds the database or a backup can.
+    // actor_name stays null on purpose: it is the snapshot of a person's name, and the system actor is already named by
+    // actor_type, so a screen can name it in the reader's own language (src/i18n), which a fixed English string in the
+    // database could not do.
     await c.query(
       `insert into audit_log (actor_type, actor_id, action, entity, entity_id, detail)
        values ('system', null, 'retention.run', null, null, $1)`,
