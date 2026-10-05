@@ -47,6 +47,22 @@ export function scanRefusals(params = {}) {
   return adminApi(`/scan-refusals${text ? `?${text}` : ''}`)
 }
 
+/**
+ * One page of the audit log (GET /api/admin/audit), newest first: `{ entries, next_cursor }` (AuditPage in shared/types.js).
+ * `params` are the endpoint's own (`from`, `to` as building days, `group`, `actor_id`, `entity`, `entity_id`, `limit`, `cursor`);
+ * an empty one is left out. The log is read only: there is no call that writes to it.
+ * @param {Record<string, string | number | null | undefined>} [params]
+ * @returns {Promise<import('../../shared/types.js').AuditPage>}
+ */
+export function auditLog(params = {}) {
+  const q = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== '' && value != null) q.set(key, String(value))
+  }
+  const text = q.toString()
+  return adminApi(`/audit${text ? `?${text}` : ''}`)
+}
+
 const MESSAGES = {
   not_an_admin: 'החשבון הזה אינו ברשימת הוועד. בקשו מחבר ועד להוסיף את כתובת ה-Gmail שלכם.',
   google_account_mismatch: 'כתובת המייל הזאת קשורה לחשבון Google אחר.',
