@@ -40,8 +40,9 @@ entry hold counts only (a number for each kind of row, nothing else).
   A member can also read the audit log, every entry with its details (who did what and when, and the names, e-mail
   addresses and reasons that the details hold, and the current name of the point, provider, member or agent key that an
   entry is about, taken from the committee's own lists), through the committee's own endpoint (`GET /api/admin/audit`,
-  the same sign-in), and a read-only screen in the committee app will show the same entries. The committee app does not
-  show the label of a phone, the sessions, the login attempts or the recorded errors.
+  the same sign-in), and on a read-only screen in the committee app, a section at the foot of the Committee tab
+  ("יומן פעולות"). It shows the same entries by the fields it knows and leaves out any value that looks like a key, a hash or
+  a token. The committee app does not show the label of a phone, the sessions, the login attempts or the recorded errors.
 - **The committee's own AI agent**, through the read-only agent API (`docs/agent-api.md`), with a key that the committee
   made: the points, the providers (company, contact name, kind of service, whether active, the time of the last scan) and the
   scans (provider name, point, times, distance, accuracy, flags). It cannot write anything, and it does not see the phones or
