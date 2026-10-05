@@ -10,6 +10,7 @@ import { verifyGoogleCredential } from '../google.js'
 import { readAddress, saveAddress, parseAddress } from '../building.js'
 import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvRow } from '../scans.js'
 import { audit, adminActor, changesOf, idsChanged } from '../audit.js'
+import { commit } from '../health.js'
 import { ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, API_KEY_PREFIX } from '../config.js'
 import {
   GPS_MODES, GPS_MODE_REQUIRED, DEFAULT_GPS_MODE,
@@ -62,18 +63,23 @@ function password(value, required = false) {
 const devLoginAllowed = () => !process.env.VERCEL && process.env.DEV_ADMIN_LOGIN === '1'
 
 /**
- * Opens a session for a committee member with the client `c` of the transaction that looked the member up: the session row and
- * the time of the last sign-in are written in that transaction. Returns the token that goes into the cookie (only its hash is
- * stored).
+ * Opens a session for a committee member with the client `c` of the transaction that looked the member up: the session row, the
+ * time of the last sign-in and the audit row (`session.sign_in`) are written in that transaction, so a session never exists
+ * without its entry, and an entry never says that someone signed in when nothing was opened. `member` is who signs in as the
+ * committee will know them (`{ id, email, name }`, the name being the Google name on a first sign-in), and `method` is how
+ * (`google`, or `dev` for the local shortcut). The entry holds the member and the method and nothing else: not the address
+ * of the request, not the browser, not the Google account and never the token. Returns the token that goes into the cookie
+ * (only its hash is stored).
  */
-async function createAdminSession(c, adminId) {
+async function createAdminSession(c, member, method) {
   const token = randomToken(ADMIN_TOKEN_PREFIX)
   await c.query(
     `insert into admin_sessions (admin_id, token_hash, expires_at)
      values ($1, $2, now() + ($3 || ' days')::interval)`,
-    [adminId, sha256(token), String(ADMIN_SESSION_DAYS)],
+    [member.id, sha256(token), String(ADMIN_SESSION_DAYS)],
   )
-  await c.query('update admins set last_login_at = now() where id = $1', [adminId])
+  await c.query('update admins set last_login_at = now() where id = $1', [member.id])
+  await audit(c, adminActor(member), 'session.sign_in', { entity: 'admin', entityId: member.id, detail: { method } })
   return token
 }
 
@@ -101,9 +107,10 @@ route('POST', '/admin/google', async ({ req, res, body }) => {
   const google = await verifyGoogleCredential(credential)
   // One transaction, and the order matters: the member's row is locked first (so that disabling or deleting them at the same
   // moment is seen or waited for), the Google account is compared with the one that is linked BEFORE anything is written (a
-  // refused sign-in writes nothing to `admins`, not even the name), and only then the link, the name, the session and the
-  // time of the sign-in are written, all or none. The throttle (guardLogin above) has a transaction of its own on purpose: a
-  // refused attempt must stay counted.
+  // refused sign-in writes nothing to `admins`, not even the name), and only then are the link, the name, the session, the time
+  // of the sign-in and the audit row (`session.sign_in`) written, all or none. A refused sign-in (not on the list, switched
+  // off, another Google account) throws before any of that, so it writes no entry: `auth_attempts` already counts it. The
+  // throttle (guardLogin above) has a transaction of its own on purpose: a refused attempt must stay counted.
   const { row, token } = await tx(async (c) => {
     const found = await c.query('select * from admins where email = $1 and is_active for update', [google.email])
     if (!found.rows.length) throw forbidden('not_an_admin', 'This Google account is not on the committee list')
@@ -115,12 +122,13 @@ route('POST', '/admin/google', async ({ req, res, body }) => {
       `update admins set google_sub = coalesce(google_sub, $2), name = case when name = '' then $3 else name end where id = $1`,
       [member.id, google.sub, google.name],
     )
-    return { row: member, token: await createAdminSession(c, member.id) }
+    const who = { id: member.id, email: member.email, name: member.name || google.name }
+    return { row: who, token: await createAdminSession(c, who, 'google') }
   })
   // The counters of this account are given back only after the sign-in is complete. (It runs on the pool: it must not run inside
   // the transaction above, where it would take a second connection from a pool of three.)
   await attempt.success()
-  return adminSessionAnswer(req, res, token, { ...row, name: row.name || google.name })
+  return adminSessionAnswer(req, res, token, row)
 })
 
 route('POST', '/admin/dev-login', async ({ req, res, body }) => {
@@ -129,16 +137,35 @@ route('POST', '/admin/dev-login', async ({ req, res, body }) => {
   const { row, token } = await tx(async (c) => {
     const found = await c.query('select * from admins where email = $1 and is_active for update', [email])
     if (!found.rows.length) throw forbidden('not_an_admin', 'Not an admin')
-    return { row: found.rows[0], token: await createAdminSession(c, found.rows[0].id) }
+    return { row: found.rows[0], token: await createAdminSession(c, found.rows[0], 'dev') }
   })
   return adminSessionAnswer(req, res, token, row)
 })
 
+// This route is public (server/access.js): it has no guard, so no member is known when it starts, and the cookie is the only thing
+// it looks at. Whoever the session belongs to is read by the very statement that ends it (a join to `admins`), so the entry
+// names the member who owned the session and nothing a caller sent. The answer is the same in every case, and so is the cookie
+// that is cleared.
+//  - No cookie, or a value that is not shaped like one of our session tokens: no statement at all, no entry.
+//  - A token that matches no session, or a session that was ended already: the statement changes nothing and returns nothing,
+//    so there is no entry, and the time at which the session was first ended is not moved.
+//  - A session that is not ended: it is ended and `session.sign_out` is written, in one transaction (a failure of the entry
+//    leaves the session as it was, and the caller gets the 500 and may try again).
 route('POST', '/admin/logout', async ({ req, res }) => {
   const token = getCookie(req, ADMIN_COOKIE)
   // Only a cookie shaped like one of our session tokens can match a session: any other value costs no query.
   if (token && isAdminToken(token)) {
-    await query('update admin_sessions set revoked_at = now() where token_hash = $1', [sha256(token)])
+    await tx(async (c) => {
+      const ended = await c.query(
+        `update admin_sessions s set revoked_at = now()
+           from admins a
+          where s.token_hash = $1 and s.revoked_at is null and a.id = s.admin_id
+      returning a.id, a.email, a.name`,
+        [sha256(token)],
+      )
+      if (!ended.rows.length) return
+      await audit(c, adminActor(ended.rows[0]), 'session.sign_out', { entity: 'admin', entityId: ended.rows[0].id })
+    })
   }
   res.setHeader('Set-Cookie', cookieHeader(ADMIN_COOKIE, '', { maxAgeSeconds: 0, secure: isSecure(req) }))
   return { ok: true }
@@ -442,13 +469,29 @@ route('POST', '/admin/points/:id/regenerate-qr', async ({ req, params }) => {
 
 // ---------- providers ----------
 
+// The last three columns are the health of the provider's ACTIVE phones (ADR 0007, "Phone health"; what a phone reports is stored by
+// server/deviceStatus.js): `waiting` is the sum of what the phones say waits in their queues (0 when none reported),
+// `oldest_waiting_at` the oldest of the phones that have something waiting (null when none), and `outdated_devices` how many phones
+// reported a build that is not the server's own (0 when the server does not know its build). They are new fields of the answer, added
+// after the others, which are as they were. $1 is the server's build (providerRows binds it), so the values of a caller start at $2.
 const PROVIDER_SELECT = `
   select p.id, p.company, p.contact_name, p.service_type, p.is_active, p.is_demo, p.created_at,
          (p.password_hash is not null) as has_password,
          (select count(*)::int from provider_devices d where d.provider_id = p.id and d.revoked_at is null) as active_devices,
          (select max(s.checked_in_at) from scans s where s.provider_id = p.id and s.outcome = 'accepted' and s.voided_at is null) as last_scan_at,
-         (select count(*)::int from scans s where s.provider_id = p.id) as scan_count -- scans recorded for them (they survive deleting them)
-    from providers p`
+         (select count(*)::int from scans s where s.provider_id = p.id) as scan_count, -- scans recorded for them (they survive deleting them)
+         phones.waiting, phones.oldest_waiting_at, phones.outdated_devices
+    from providers p
+    cross join lateral (
+      select coalesce(sum(d.waiting_count), 0)::int as waiting,
+             min(d.oldest_waiting_at) filter (where d.waiting_count > 0) as oldest_waiting_at,
+             (count(*) filter (where d.app_build is not null and d.app_build <> $1::text))::int as outdated_devices
+        from provider_devices d
+       where d.provider_id = p.id and d.revoked_at is null
+    ) phones`
+
+/** The rows of PROVIDER_SELECT followed by `tail` (a where, an order); `values` are the parameters of `tail`, numbered from $2. */
+const providerRows = async (tail, values = []) => (await query(`${PROVIDER_SELECT} ${tail}`, [commit(), ...values])).rows
 
 function providerFields(body, { create }) {
   const f = {}
@@ -467,8 +510,7 @@ function providerFields(body, { create }) {
 
 route('GET', '/admin/providers', async ({ req }) => {
   await requireAdmin(req)
-  const { rows } = await query(`${PROVIDER_SELECT} order by p.is_active desc, p.company, p.contact_name`)
-  return { providers: rows }
+  return { providers: await providerRows('order by p.is_active desc, p.company, p.contact_name') }
 })
 
 route('POST', '/admin/providers', async ({ req, body }) => {
@@ -485,8 +527,8 @@ route('POST', '/admin/providers', async ({ req, body }) => {
     await audit(c, adminActor(admin), 'provider.create', { entity: 'provider', entityId: rows[0].id, detail: { company: fields.company } })
     return rows[0].id
   })
-  const out = await query(`${PROVIDER_SELECT} where p.id = $1`, [created])
-  return { status: 201, json: { provider: out.rows[0] } }
+  const out = await providerRows('where p.id = $2', [created])
+  return { status: 201, json: { provider: out[0] } }
 })
 
 route('PATCH', '/admin/providers/:id', async ({ req, params, body }) => {
@@ -520,8 +562,8 @@ route('PATCH', '/admin/providers/:id', async ({ req, params, body }) => {
     if (passwordHash) detail.password_changed = true
     await audit(c, adminActor(admin), 'provider.update', { entity: 'provider', entityId: id, detail })
   })
-  const out = await query(`${PROVIDER_SELECT} where p.id = $1`, [id])
-  return { provider: out.rows[0] }
+  const out = await providerRows('where p.id = $2', [id])
+  return { provider: out[0] }
 })
 
 // Deleting a provider is allowed. The scans recorded for them are NOT touched: they keep the provider's name (the

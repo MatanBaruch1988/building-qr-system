@@ -8,7 +8,11 @@
 //     the change had been kept (a retry used to get a 404 or a 409 for a change that did happen).
 // A walk over the route table fails when a committee route that writes is not in the table below, so a new route cannot be added
 // without its atomic test. The two non-atomic spots that this change fixed (switching a member off, and the Google sign-in) have
-// tests of their own, and so have the pieces of server/audit.js. The data is fake.
+// tests of their own, and so have the pieces of server/audit.js. The three routes that sign a member in or out (`session.sign_in`
+// by Google and by the local shortcut, `session.sign_out`) are not in the table, because their actor is the member who signs in
+// or out and not the member of the shared cookie: they have the same four checks (one row with the right actor and detail, atomic
+// when the row is refused, nothing written when refused or when there is nothing to end, no secret in the row) in the last
+// sections of this file. The data is fake.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -19,7 +23,8 @@ import '../server/index.js' // registers every route, so that routeTable() has t
 import { routeTable } from '../server/router.js'
 import { audit, adminActor, changesOf, idsChanged } from '../server/audit.js'
 import { getPool, query, tx } from '../server/db.js'
-import { AUDIT_ACTOR_NAME_MAX_LENGTH } from '../server/config.js'
+import { randomToken } from '../server/crypto.js'
+import { ADMIN_COOKIE, ADMIN_TOKEN_PREFIX, AUDIT_ACTOR_NAME_MAX_LENGTH, LOGIN_MAX_FAILURES } from '../server/config.js'
 
 let db, cookie, admin, helper
 
@@ -83,11 +88,13 @@ async function snapshot() {
  * and nothing else. The rows of app_errors that the call did not touch are the very same rows.
  * @param {object} before  the snapshot taken before the call
  * @param {string} route  `METHOD /path` as the route is registered (an entry of ROUTES)
+ * @param {...string} skipped  tables that change whatever happens and are left out of the comparison (the sign-in throttle)
  */
-async function expectOnlyTheRecordOfTheFailure(before, route) {
+async function expectOnlyTheRecordOfTheFailure(before, route, ...skipped) {
   const [method, place] = route.split(' ')
-  const after = await snapshot()
-  const { app_errors: errorsBefore, ...restBefore } = before
+  const without = (state) => Object.fromEntries(Object.entries(state).filter(([name]) => !skipped.includes(name)))
+  const after = without(await snapshot())
+  const { app_errors: errorsBefore, ...restBefore } = without(before)
   const { app_errors: errorsAfter, ...restAfter } = after
   expect(restAfter, 'a failed call changed the database').toEqual(restBefore)
   const events = (rows) => rows.reduce((sum, r) => sum + r.count, 0)
@@ -137,9 +144,12 @@ afterAll(async () => {
 
 // ---------- the table: every committee route that writes ----------
 
-// The committee routes that sign a member in or out. They write no audit row today (a later change records sign-ins), and the
-// sign-in itself has its own tests below.
+// The committee routes that sign a member in or out. Each writes an audit row (`session.sign_in`, `session.sign_out`), but the
+// actor is the member who signs in or out, not the member of the shared cookie that the table below sends, so they are tested in
+// the sections 'committee sign-in is recorded' and 'committee sign-out is recorded' at the end of this file. The walk over the
+// route table below still demands that every route is either in the table or here.
 const SESSION_ROUTES = ['POST /admin/google', 'POST /admin/dev-login', 'POST /admin/logout']
+const SESSION_ACTIONS = ['session.sign_in', 'session.sign_out']
 
 // One entry for every route (and every action of a route that has two): `route` is the method and the path as the route is
 // registered; `prepare()` creates what the call needs and returns the url, the body and the id of the entity (or
@@ -371,7 +381,14 @@ describe('the table covers every committee route that writes', () => {
     const actions = ROUTES.map((e) => e.action)
     expect(new Set(actions).size).toBe(actions.length)
     const source = readFileSync(new URL('../server/routes/admin.js', import.meta.url), 'utf8')
-    for (const action of actions) expect(source, action).toContain(`'${action}'`)
+    for (const action of [...actions, ...SESSION_ACTIONS]) expect(source, action).toContain(`'${action}'`)
+  })
+
+  it('has every action described at the top of server/audit.js, where a screen will read what its detail holds', () => {
+    const header = readFileSync(new URL('../server/audit.js', import.meta.url), 'utf8').split("import pg from 'pg'")[0]
+    for (const action of [...ROUTES.map((e) => e.action), ...SESSION_ACTIONS, 'retention.run']) {
+      expect(header, `${action} is not described at the top of server/audit.js`).toMatch(new RegExp(`^//   ${action.replace('.', '\\.')}\\s`, 'm'))
+    }
   })
 
   it('has every action described at the top of server/audit.js, where a screen will read what its detail holds', () => {
@@ -609,11 +626,15 @@ describe('POST /api/admin/google: the sign-in is one step, and a refused one wri
     expect(await snapshotWithout('auth_attempts')).toEqual(before)
   })
 
-  it('writes no audit row (sign-ins are not recorded by this change)', async () => {
-    const { email } = await newMember()
+  // Flipped on purpose by the change that records sign-ins: until then this test said that a sign-in writes NO audit row. A sign-in
+  // now writes exactly one `session.sign_in` row, in the transaction that opens the session (the details are tested in 'committee
+  // sign-in is recorded' below).
+  it('writes one audit row, session.sign_in (sign-ins are recorded by this change)', async () => {
+    const { id, email } = await newMember()
     const after = await lastAuditId()
     expect((await signIn(email)).status).toBe(200)
-    expect(await lastAuditId()).toBe(after)
+    const rows = await rowsAfter(after)
+    expect(rows.map((r) => [r.action, r.entity, r.entity_id])).toEqual([['session.sign_in', 'admin', id]])
   })
 })
 
@@ -992,5 +1013,287 @@ describe('changesOf() and idsChanged()', () => {
     expect(idsChanged(['b', 'a', 'x'], ['c', 'a', 'd', 'x'])).toEqual({ added: ['c', 'd'], removed: ['b'] })
     expect(idsChanged([], [])).toEqual({ added: [], removed: [] })
     expect(idsChanged(['a'], ['a'])).toEqual({ added: [], removed: [] })
+  })
+})
+
+// ---------- committee sign-in and sign-out ----------
+
+// A request that signs in or out sends no committee cookie of its own, so each case builds its own member and its own cookie.
+const googleSignIn = (email, options = {}) => call('POST', '/api/admin/google', { body: { credential: email }, ...options })
+const devSignIn = (email) => call('POST', '/api/admin/dev-login', { body: { email } })
+const signOut = (cookieHeader) => call('POST', '/api/admin/logout', { body: {}, ...(cookieHeader ? { cookie: cookieHeader } : {}) })
+const cookieOf = (answer) => String(answer.headers['set-cookie']).split(';')[0]
+const sessionOf = async (id) => one('select * from admin_sessions where admin_id = $1 order by created_at desc limit 1', [id])
+const meStatus = async (cookieHeader) => (await call('GET', '/api/admin/me', { cookie: cookieHeader })).status
+const ENDED = { status: 200, json: { ok: true } }
+const clearsTheCookie = (answer) => expect(String(answer.headers['set-cookie'])).toMatch(new RegExp(`^${ADMIN_COOKIE}=; .*Max-Age=0`))
+
+/** Runs `fn` with the local sign-in shortcut switched on (the way `npm run dev:api` does), and puts the environment back. */
+async function withDevLogin(fn) {
+  const saved = { DEV_ADMIN_LOGIN: process.env.DEV_ADMIN_LOGIN, VERCEL: process.env.VERCEL }
+  process.env.DEV_ADMIN_LOGIN = '1'
+  delete process.env.VERCEL
+  try {
+    return await fn()
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+
+describe('committee sign-in is recorded: session.sign_in', () => {
+  it('POST /admin/google writes one row: the member is the actor and the subject, and the detail is the method', async () => {
+    const { id, email } = await newMember({ name: 'Signing Member' })
+    const after = await lastAuditId()
+    const answer = await googleSignIn(email)
+    expect(answer.status, answer.text).toBe(200)
+    const rows = await rowsAfter(after)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      actor_type: 'admin', actor_id: id, actor_name: 'Signing Member', action: 'session.sign_in', entity: 'admin', entity_id: id,
+    })
+    expect(rows[0].detail).toEqual({ method: 'google' })
+  })
+
+  it('names a member who has no name yet by the name Google gave on that first sign-in, as the answer does', async () => {
+    const { id, email } = await newMember({ name: '' })
+    const after = await lastAuditId()
+    const answer = await googleSignIn(email)
+    expect(answer.json.admin.name).toBe('Test Admin')
+    const [row] = await rowsAfter(after)
+    expect(row).toMatchObject({ actor_id: id, actor_name: 'Test Admin', entity_id: id })
+  })
+
+  it('records every sign-in, one row each', async () => {
+    const { id, email } = await newMember()
+    const after = await lastAuditId()
+    expect((await googleSignIn(email)).status).toBe(200)
+    expect((await googleSignIn(email)).status).toBe(200)
+    expect((await rowsAfter(after)).map((r) => [r.action, r.entity_id])).toEqual([['session.sign_in', id], ['session.sign_in', id]])
+  })
+
+  it('holds no address, no browser, no Google account and no token: the member and the method only', async () => {
+    const { email } = await newMember()
+    const after = await lastAuditId()
+    const ip = '203.0.113.77'
+    const answer = await googleSignIn(email, { ip, headers: { 'user-agent': 'Fake Browser/9.9' } })
+    expect(answer.status).toBe(200)
+    const token = decodeURIComponent(cookieOf(answer).slice(ADMIN_COOKIE.length + 1))
+    expect(token.startsWith(ADMIN_TOKEN_PREFIX)).toBe(true)
+    const [row] = await rowsAfter(after)
+    expect(Object.keys(row.detail)).toEqual(['method'])
+    const text = JSON.stringify(row)
+    for (const secret of [ip, 'Fake Browser', `sub-${email}`, token, ADMIN_TOKEN_PREFIX]) expect(text, secret).not.toContain(secret)
+  })
+
+  it('is one transaction with the session: when the row is refused the answer is 500 and nothing was written, and a retry works', async () => {
+    const { id, email } = await newMember({ name: '' })
+    const before = await snapshot()
+    const { result: refused, logged } = await quietly(() => refusingAudit('session.sign_in', () => googleSignIn(email)))
+    expect(refused.status, refused.text).toBe(500)
+    expect(refused.json.error.code).toBe('server_error')
+    expect(refused.headers['set-cookie']).toBeUndefined()
+    expect(logged).toHaveLength(1)
+    // No session, no time of sign-in, no link to the Google account and no name: the whole database is as it was, apart from
+    // the record of the 500 (app_errors) and the throttle, which counts the attempt whatever happens (its own transaction).
+    await expectOnlyTheRecordOfTheFailure(before, 'POST /admin/google', 'auth_attempts')
+    expect(await sessionOf(id)).toBeUndefined()
+
+    const retry = await googleSignIn(email)
+    expect(retry.status, retry.text).toBe(200)
+    expect(await meStatus(cookieOf(retry))).toBe(200)
+    expect(await auditCount("action = 'session.sign_in' and entity_id = $1", [id])).toBe(1)
+  })
+
+  it('POST /admin/dev-login writes the same row with the method dev', async () => {
+    const { id, email } = await newMember({ name: 'Local Member' })
+    const after = await lastAuditId()
+    const answer = await withDevLogin(() => devSignIn(email))
+    expect(answer.status, answer.text).toBe(200)
+    const rows = await rowsAfter(after)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      actor_type: 'admin', actor_id: id, actor_name: 'Local Member', action: 'session.sign_in', entity: 'admin', entity_id: id,
+    })
+    expect(rows[0].detail).toEqual({ method: 'dev' })
+  })
+
+  it('POST /admin/dev-login names a member who has no name by the e-mail, like every other entry', async () => {
+    const { id, email } = await newMember({ name: '' })
+    const after = await lastAuditId()
+    expect((await withDevLogin(() => devSignIn(email))).status).toBe(200)
+    expect(await rowsAfter(after)).toMatchObject([{ actor_id: id, actor_name: email, entity_id: id }])
+  })
+
+  it('POST /admin/dev-login is one transaction with the session too', async () => {
+    const { id, email } = await newMember()
+    const before = await snapshot()
+    const { result: refused } = await quietly(() => refusingAudit('session.sign_in', () => withDevLogin(() => devSignIn(email))))
+    expect(refused.status, refused.text).toBe(500)
+    await expectOnlyTheRecordOfTheFailure(before, 'POST /admin/dev-login') // nothing written but the record of the 500
+    expect(await sessionOf(id)).toBeUndefined()
+    expect((await withDevLogin(() => devSignIn(email))).status).toBe(200)
+    expect(await sessionOf(id)).toBeDefined()
+  })
+
+  it('POST /admin/dev-login writes nothing when it is off, and for an e-mail that is not on the list', async () => {
+    const { email } = await newMember()
+    const off = await newMember({ active: false })
+    const before = await snapshot()
+    expect((await devSignIn(email)).status).toBe(404) // the shortcut is not switched on
+    const refused = await withDevLogin(async () => [await devSignIn('stranger@test.local'), await devSignIn(off.email)])
+    expect(refused.map((a) => [a.status, a.json.error.code])).toEqual([[403, 'not_an_admin'], [403, 'not_an_admin']])
+    expect(await snapshot()).toEqual(before)
+  })
+
+  describe('a refused sign-in writes no row (auth_attempts already counts it)', () => {
+    it('an e-mail that is not on the list, one that was switched off, and a Google account that is not the linked one', async () => {
+      const off = await newMember({ active: false })
+      const linked = await newMember({ googleSub: `sub-${uniq('linked')}` })
+      const after = await lastAuditId()
+      const answers = [await googleSignIn('stranger@test.local'), await googleSignIn(off.email), await googleSignIn(linked.email)]
+      expect(answers.map((a) => [a.status, a.json.error.code])).toEqual([
+        [403, 'not_an_admin'],
+        [403, 'not_an_admin'],
+        [403, 'google_account_mismatch'],
+      ])
+      expect(answers.every((a) => a.headers['set-cookie'] === undefined)).toBe(true)
+      expect(await rowsAfter(after)).toEqual([])
+    })
+
+    it('a sign-in that the throttle refuses', async () => {
+      const { email } = await newMember()
+      const ip = '203.0.113.88'
+      const key = `admin:${ip}:${ip}`
+      await q("insert into auth_attempts (scope, key) select 'admin', $1::text from generate_series(1, $2::int)", [key, LOGIN_MAX_FAILURES])
+      try {
+        const after = await lastAuditId()
+        const answer = await googleSignIn(email, { ip })
+        expect([answer.status, answer.json.error.code]).toEqual([429, 'too_many_attempts'])
+        expect(await rowsAfter(after)).toEqual([])
+      } finally {
+        await q("delete from auth_attempts where key = $1 or key = 'ip:' || $2", [key, ip])
+      }
+    })
+
+    it('a request with no credential, which fails before anything is looked up', async () => {
+      const after = await lastAuditId()
+      const answer = await call('POST', '/api/admin/google', { body: {} })
+      expect([answer.status, answer.json.error.code]).toEqual([400, 'missing_field'])
+      expect(await rowsAfter(after)).toEqual([])
+    })
+  })
+})
+
+describe('committee sign-out is recorded: session.sign_out', () => {
+  /** A member who is signed in: their id, their name and the cookie that their session answers to. */
+  async function signedIn(name = 'Leaving Member') {
+    const { id, email } = await newMember({ name })
+    const answer = await googleSignIn(email)
+    expect(answer.status, answer.text).toBe(200)
+    return { id, email, name, cookie: cookieOf(answer) }
+  }
+
+  it('ends a live session and writes one row, with the member who owned it as the actor and the subject, and no detail', async () => {
+    const member = await signedIn()
+    expect(await meStatus(member.cookie)).toBe(200)
+    const after = await lastAuditId()
+    const answer = await signOut(member.cookie)
+    expect([answer.status, answer.json]).toEqual([ENDED.status, ENDED.json])
+    clearsTheCookie(answer)
+    expect(await meStatus(member.cookie)).toBe(401)
+    expect((await sessionOf(member.id)).revoked_at).not.toBeNull()
+
+    const rows = await rowsAfter(after)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      actor_type: 'admin', actor_id: member.id, actor_name: 'Leaving Member', action: 'session.sign_out', entity: 'admin', entity_id: member.id,
+    })
+    expect(rows[0].detail).toBeNull()
+    expect(JSON.stringify(rows[0])).not.toContain(member.cookie.slice(ADMIN_COOKIE.length + 1))
+  })
+
+  it('names the member of THAT session, not another one: the other member stays signed in', async () => {
+    const first = await signedIn('First Member')
+    const second = await signedIn('Second Member')
+    const after = await lastAuditId()
+    expect((await signOut(first.cookie)).status).toBe(200)
+    expect(await rowsAfter(after)).toMatchObject([{ actor_id: first.id, actor_name: 'First Member', entity_id: first.id, action: 'session.sign_out' }])
+    expect(await meStatus(first.cookie)).toBe(401)
+    expect(await meStatus(second.cookie)).toBe(200)
+    expect((await sessionOf(second.id)).revoked_at).toBeNull()
+  })
+
+  it('ends only the session of the cookie: another session of the same member goes on', async () => {
+    const member = await signedIn()
+    const other = cookieOf(await googleSignIn(member.email))
+    const after = await lastAuditId()
+    expect((await signOut(member.cookie)).status).toBe(200)
+    expect(await rowsAfter(after)).toHaveLength(1)
+    expect(await meStatus(member.cookie)).toBe(401)
+    expect(await meStatus(other)).toBe(200)
+  })
+
+  it('is one transaction with the row: when the row is refused the answer is 500, the session is still live, and a retry works', async () => {
+    const member = await signedIn()
+    const before = await snapshot()
+    const { result: refused, logged } = await quietly(() => refusingAudit('session.sign_out', () => signOut(member.cookie)))
+    expect(refused.status, refused.text).toBe(500)
+    expect(refused.json.error.code).toBe('server_error')
+    expect(refused.headers['set-cookie']).toBeUndefined() // the cookie is cleared only when the sign-out happened
+    expect(logged).toHaveLength(1)
+    await expectOnlyTheRecordOfTheFailure(before, 'POST /admin/logout') // the session is not ended, nothing else is written
+    expect(await meStatus(member.cookie)).toBe(200)
+
+    const after = await lastAuditId()
+    const retry = await signOut(member.cookie)
+    expect([retry.status, retry.json]).toEqual([ENDED.status, ENDED.json])
+    expect(await meStatus(member.cookie)).toBe(401)
+    expect((await rowsAfter(after)).map((r) => r.action)).toEqual(['session.sign_out'])
+  })
+
+  describe('writes no row, and answers as it always did, when there is no live session to end', () => {
+    const expectNothingWritten = async (cookieHeader) => {
+      const after = await lastAuditId()
+      const before = await snapshot()
+      const answer = await signOut(cookieHeader)
+      expect([answer.status, answer.json]).toEqual([ENDED.status, ENDED.json])
+      clearsTheCookie(answer)
+      expect(await lastAuditId()).toBe(after)
+      expect(await snapshot()).toEqual(before)
+    }
+
+    it('with no cookie at all', async () => {
+      await expectNothingWritten(undefined)
+    })
+
+    it('with a cookie of the wrong shape (the route does not even query)', async () => {
+      for (const cookieHeader of [`${ADMIN_COOKIE}=`, `${ADMIN_COOKIE}=abc123`, `${ADMIN_COOKIE}=%`, `other=${randomToken(ADMIN_TOKEN_PREFIX)}`]) {
+        await expectNothingWritten(cookieHeader)
+      }
+    })
+
+    it('with a token that has the shape of a session token but belongs to no session', async () => {
+      await expectNothingWritten(`${ADMIN_COOKIE}=${randomToken(ADMIN_TOKEN_PREFIX)}`)
+    })
+
+    it('with the cookie of a session that was ended already: the time of the first sign-out is not moved either', async () => {
+      const member = await signedIn()
+      expect((await signOut(member.cookie)).status).toBe(200)
+      const first = await sessionOf(member.id)
+      expect(first.revoked_at).not.toBeNull()
+      await expectNothingWritten(member.cookie)
+      expect(await sessionOf(member.id)).toEqual(first)
+    })
+
+    it('with the cookie of a session that was ended by switching the member off (that is recorded as admin.disable, once)', async () => {
+      const member = await signedIn()
+      const after = await lastAuditId()
+      expect((await patch(`/api/admin/admins/${member.id}`, { is_active: false })).status).toBe(200)
+      expect((await rowsAfter(after)).map((r) => r.action)).toEqual(['admin.disable'])
+      await expectNothingWritten(member.cookie)
+    })
   })
 })
