@@ -23,8 +23,13 @@
 // .env.local. It prints the gate's decision and three public values (the environment, the branch and the first 7
 // characters of the commit), never any other variable. MIGRATION_GITHUB_TOKEN (optional) is read only to let a private
 // fork fetch its own migration files from GitHub; it is never printed.
+//
+// A failed migration is printed through buildFailureText (server/productionMigrate.js): the migration file and the SQLSTATE
+// with its condition name, for example `Migration 012_x.sql failed: 23505 (unique_violation)`, and never the message of the
+// database, which can quote a row value of production. This log is read by more people than the owner. To read the database's
+// own message, run the file against the non-production database with `npm run db:migrate` (docs/runbooks/deploy-and-rollback.md).
 import { spawnSync } from 'node:child_process'
-import { productionBuildDecision, migrateProduction } from '../server/productionMigrate.js'
+import { productionBuildDecision, migrateProduction, buildFailureText } from '../server/productionMigrate.js'
 
 const build = spawnSync('npm run build', { stdio: 'inherit', shell: true })
 if (build.status !== 0) process.exit(build.status ?? 1)
@@ -52,7 +57,7 @@ if (action === 'migrate') {
       log: console.log,
     })
   } catch (err) {
-    console.error(`Production migration failed: ${err.message}`)
+    console.error(`Production migration failed: ${buildFailureText(err)}`)
     process.exit(1)
   }
 }
