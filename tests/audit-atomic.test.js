@@ -74,6 +74,29 @@ async function snapshot() {
   return (await q(`select jsonb_build_object(${parts.join(', ')}) as state`)).rows[0].state
 }
 
+/**
+ * What a failed call leaves behind: nothing, except the record of its own 500 (server/errorLog.js writes one row of app_errors
+ * for every unhandled error of a matched route). So the whole schema is as it was in `before`, apart from app_errors, where
+ * exactly one event was added, in a new row or as one more in the row of the same hour that an earlier failure of the same
+ * route made, and that event holds the safe fields of this call (the route as written in the code, the method, the status)
+ * and nothing else. The rows of app_errors that the call did not touch are the very same rows.
+ * @param {object} before  the snapshot taken before the call
+ * @param {string} route  `METHOD /path` as the route is registered (an entry of ROUTES)
+ */
+async function expectOnlyTheRecordOfTheFailure(before, route) {
+  const [method, place] = route.split(' ')
+  const after = await snapshot()
+  const { app_errors: errorsBefore, ...restBefore } = before
+  const { app_errors: errorsAfter, ...restAfter } = after
+  expect(restAfter, 'a failed call changed the database').toEqual(restBefore)
+  const events = (rows) => rows.reduce((sum, r) => sum + r.count, 0)
+  expect(events(errorsAfter), 'one event recorded for the failed call').toBe(events(errorsBefore) + 1)
+  const changed = errorsAfter.filter((r) => errorsBefore.find((b) => b.id === r.id)?.count !== r.count)
+  expect(changed).toHaveLength(1)
+  expect(changed[0]).toMatchObject({ source: 'server', kind: 'error', place, method, status: 500 })
+  expect(errorsAfter.filter((r) => r.id !== changed[0].id)).toEqual(errorsBefore.filter((r) => r.id !== changed[0].id))
+}
+
 const auditCount = async (where = 'true', params = []) => (await one(`select count(*)::int as n from audit_log where ${where}`, params)).n
 const lastAuditId = async () => (await one('select coalesce(max(id), 0)::int as n from audit_log')).n
 
@@ -298,8 +321,9 @@ describe('every committee route that writes: the change and its audit row are on
         expect(refused.status, refused.text).toBe(500)
         expect(refused.json.error.code).toBe('server_error')
         expect(logged).toHaveLength(1) // the router logs the failure once, and nothing else logs it
-        // The whole database is as it was: the change was rolled back with its row, in every table.
-        expect(await snapshot()).toEqual(before)
+        // The whole database is as it was: the change was rolled back with its row, in every table. The one new thing is the
+        // record of the 500 itself (app_errors).
+        await expectOnlyTheRecordOfTheFailure(before, entry.route)
 
         // A retry is a first try: nothing of the failed call is left to make it a 404 or a 409.
         const retry = await send(entry, prepared)
@@ -479,7 +503,7 @@ describe('PATCH /api/admin/admins/:id: the switch and the sign-out of the sessio
     expect(answer.status).toBe(500)
     expect((await one('select is_active from admins where id = $1', [id])).is_active).toBe(true)
     expect((await one('select count(*)::int as n from admin_sessions where admin_id = $1 and revoked_at is null', [id])).n).toBe(1)
-    expect(await snapshot()).toEqual(before)
+    await expectOnlyTheRecordOfTheFailure(before, 'PATCH /admin/admins/:id')
   })
 
   it('switches the member off, signs out their sessions and records it, together', async () => {
