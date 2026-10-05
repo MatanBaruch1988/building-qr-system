@@ -6,6 +6,7 @@ import { safeStorage, readJson } from './storage.js'
 import { getCachedPoint, setCachedPoint, dropCachedPoint } from './pointCache.js'
 import { getCachedAddress, setCachedAddress } from './buildingCache.js'
 import { flushQueue } from './scanQueue.js'
+import { createDeviceReporter } from './deviceStatus.js'
 import { isoDay } from '../../shared/datetime.js'
 
 /** Provider names for the login tiles. Shows the last list instantly and refreshes in the background. */
@@ -130,13 +131,14 @@ export function useTodayVisits({ session, queue, refreshKey }) {
  * Sends saved check-ins whenever it can: on load, when the network returns, when the app comes back
  * to the foreground, and every 30 s while something is waiting.
  * A result only counts if the same person is still signed in when it arrives.
+ * `onFlushed` is told when an upload has ended (whatever came of it, except a sign-out): the phone reports its status then.
  */
-export function useQueueSync({ session, queue, onSignedOut, onDone }) {
+export function useQueueSync({ session, queue, onSignedOut, onDone, onFlushed }) {
   const [pending, setPending] = useState(0)
   const [syncing, setSyncing] = useState(false)
   const busy = useRef(false)
-  const cb = useRef({ onSignedOut, onDone })
-  cb.current = { onSignedOut, onDone }
+  const cb = useRef({ onSignedOut, onDone, onFlushed })
+  cb.current = { onSignedOut, onDone, onFlushed }
   const current = useRef(session)
   current.current = session
 
@@ -148,16 +150,21 @@ export function useQueueSync({ session, queue, onSignedOut, onDone }) {
     const stillSame = () => current.current?.token === token
     busy.current = true
     setSyncing(true)
+    let signedOut = false
     try {
       const res = await flushQueue({ queue, api, token, providerId: session.provider.id })
       if (stillSame() && (res.sent || res.rejected || res.dropped)) cb.current.onDone(res)
     } catch (err) {
-      if (err.status === 401 && stillSame()) cb.current.onSignedOut()
+      if (err.status === 401 && stillSame()) {
+        signedOut = true
+        cb.current.onSignedOut()
+      }
     } finally {
       busy.current = false
       setSyncing(false)
       refresh()
     }
+    if (!signedOut) cb.current.onFlushed?.()
   }, [session, queue, refresh])
 
   useEffect(() => {
@@ -176,4 +183,52 @@ export function useQueueSync({ session, queue, onSignedOut, onDone }) {
   }, [session, flush, refresh])
 
   return { pending, syncing, flush, refresh }
+}
+
+/**
+ * Tells the server how the phone is doing (src/worker/deviceStatus.js, ADR 0007 "Phone health"): what waits in the queue and
+ * since when, the build, the totals. Best effort, and nothing on the screen changes. It reports:
+ *  - once when the app has started and the server has confirmed the stored session (`confirmedToken` is that session's token),
+ *    or when somebody has just signed in (the app passes the new token the same way);
+ *  - when the app comes back to the foreground;
+ *  - when the function that it returns is called: the queue sync does that when an upload has ended.
+ * The reporter decides by itself whether to send (a changed queue at once, an unchanged one every 10 minutes, never
+ * offline, never for nobody), so calling it often is fine. A 401 signs the person out the way the other calls of the app do.
+ * @param {object} args
+ * @param {import('./session.js').Session | null} args.session
+ * @param {import('./scanQueue.js').Queue} args.queue
+ * @param {string | null} args.confirmedToken
+ * @param {() => void} args.onSignedOut
+ * @returns {() => Promise<unknown>}  asks for a report
+ */
+export function useDeviceStatus({ session, queue, confirmedToken, onSignedOut }) {
+  const current = useRef(session)
+  current.current = session
+  const signOut = useRef(onSignedOut)
+  signOut.current = onSignedOut
+  // One reporter for the life of the app: its throttle and its "this server has no such endpoint" are per run.
+  const [reporter] = useState(() =>
+    createDeviceReporter({
+      queue,
+      api,
+      getSession: () => (current.current ? { token: current.current.token, providerId: current.current.provider.id } : null),
+      onUnauthorized: (token) => current.current?.token === token && signOut.current(),
+    }),
+  )
+  const token = session?.token
+
+  useEffect(() => () => reporter.stop(), [reporter])
+
+  useEffect(() => {
+    if (token && token === confirmedToken) reporter.report()
+  }, [token, confirmedToken, reporter])
+
+  useEffect(() => {
+    if (!token) return
+    const onVisible = () => document.visibilityState === 'visible' && reporter.report()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [token, reporter])
+
+  return reporter.report
 }
