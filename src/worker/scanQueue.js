@@ -1,4 +1,5 @@
 import { safeStorage, readJson } from './storage.js'
+import { addToHealth } from './deviceStatus.js'
 import {
   SYNC_CHUNK_SIZE, SYNC_QUEUE_MAX_ITEMS, SYNC_PERMANENT_ERROR_CODES, OUTCOME_ACCEPTED,
 } from '../../shared/contract.js'
@@ -32,7 +33,14 @@ const PERMANENT = new Set(SYNC_PERMANENT_ERROR_CODES)
  */
 export function createQueue(storage = safeStorage) {
   const read = () => readJson(storage, KEY, [])
-  const write = (items) => storage.setItem(KEY, JSON.stringify(items.slice(-MAX_ITEMS)))
+  // The cap keeps the newest items. The oldest ones that it drops are counted (qr.health.v1, src/worker/deviceStatus.js), so
+  // the committee can tell a phone that lost visits from one that did not. The stored format of the queue is unchanged.
+  const write = (items) => {
+    const kept = items.slice(-MAX_ITEMS)
+    const saved = storage.setItem(KEY, JSON.stringify(kept))
+    if (items.length > kept.length) addToHealth({ overflowed: items.length - kept.length }, storage)
+    return saved
+  }
   return {
     /**
      * @param {string} providerId
@@ -48,10 +56,15 @@ export function createQueue(storage = safeStorage) {
       if (items.some((i) => i.id === item.id)) return true
       return write([...items, item]) !== false
     },
-    /** @param {string[]} ids */
-    remove(ids) {
+    /**
+     * @param {string[]} ids  the items that leave the queue
+     * @param {{ notAccepted?: number }} [why]  how many of them the server refused for good (a permanent code): they are
+     *   counted in the same call as the removal, so a refusal is counted once
+     */
+    remove(ids, { notAccepted = 0 } = {}) {
       const drop = new Set(ids)
       write(read().filter((i) => !drop.has(i.id)))
+      addToHealth({ not_accepted: notAccepted }, storage)
     },
   }
 }
@@ -93,6 +106,7 @@ export async function flushQueue({ queue, api, token, providerId }) {
       break // no signal / server hiccup: keep everything for the next attempt
     }
     const done = []
+    let refused = 0 // of `done`, the ones that the server refused for good
     for (const r of res.results) {
       if (!inBatch.has(r.id)) continue // never trust ids we did not send
       if (r.ok) {
@@ -101,11 +115,12 @@ export async function flushQueue({ queue, api, token, providerId }) {
         done.push(r.id)
       } else if (PERMANENT.has(r.error?.code)) {
         dropped++
+        refused++
         done.push(r.id)
       }
     }
     if (!done.length) break // nothing progressed: avoid spinning on a stuck batch
-    queue.remove(done)
+    queue.remove(done, { notAccepted: refused })
   }
   return { sent, rejected, dropped, remaining: queue.list(providerId).length }
 }

@@ -1,4 +1,5 @@
 import { safeStorage } from './storage.js'
+import { resetHealth } from './deviceStatus.js'
 import { PROVIDER_TOKEN_PREFIX, MAX_TOKEN_LENGTH } from '../../shared/contract.js'
 
 /** @import { Provider } from '../../shared/types.js' */
@@ -108,7 +109,7 @@ export function loadSession() {
  * @param {boolean} remember
  */
 export function saveSession({ token, provider }, remember) {
-  clearSession()
+  clearSession() // also the totals that the phone reports (resetHealth): a new token is a new phone for the server, which counts from zero
   const value = JSON.stringify({ token, provider })
   if (remember) safeStorage.setItem(KEY, value)
   else {
@@ -120,7 +121,13 @@ export function saveSession({ token, provider }, remember) {
   }
 }
 
+/**
+ * Forgets who is signed in, and the totals that the phone reports about itself (src/worker/deviceStatus.js): they are counted
+ * from a sign-in to its sign-out, because the server keeps them on the row of that sign-in's device token. Signing in goes
+ * through here too (saveSession), so every new token starts from zero.
+ */
 export function clearSession() {
+  resetHealth()
   safeStorage.removeItem(KEY)
   try {
     sessionStorage.removeItem(KEY)
