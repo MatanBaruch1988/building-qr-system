@@ -14,6 +14,7 @@ one. Dates are DD/MM/YYYY.
 | `SMOKE_AGENT_KEY` | GitHub Actions secret of the repository. Read by `smoke.yml` only | The owner, or a committee member who can open the Agent tab of `/admin` (to make and revoke the key) | Never, until it is revoked | 03/10/2026 |
 | The production database credentials (`DATABASE_URL`, `DATABASE_URL_UNPOOLED`) | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local` | The owner, in Vercel | Never, until rotated | 03/10/2026 |
 | `CRON_SECRET` | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local`, never in the Preview or Development environments | The owner, in Vercel (a long random value, see below) | Never, until rotated | 05/10/2026 |
+| `HEALTH_HEARTBEAT_URL` | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local`, never in the Preview or Development environments. It is the ping address of the server's own check on healthchecks.io (ADR 0007), and anybody who has it can say that the check is fine or failing. Without it the server sends nothing | The owner, in Vercel and in healthchecks.io. If it leaks: create a new check in healthchecks.io, put the new address in Vercel and redeploy, then delete the old check | Never, until rotated | Not set yet: write the date here when you set it |
 | `MIGRATION_GITHUB_TOKEN` | Not used. Only a private fork needs it, in its Vercel project, so that the build can read the migrations from GitHub (`deploy-and-rollback.md`) | The owner of that fork | Set by the owner of the fork when the token is made | Not applicable |
 | `GOOGLE_CLIENT_ID` | Vercel (Production) and `.env.local`. It is public by nature: it is in the code that every browser loads | Nobody needs to rotate it: it identifies the app, it does not protect anything | Never | Not applicable |
 | Agent keys of the committee's own AI agent | The secrets vault of the agent platform that the committee uses, never in a chat (`docs/agent-prompt.md`) | The committee, in the Agent tab of `/admin` | Never, until revoked | Each key shows its own date in the Agent tab |
@@ -60,7 +61,7 @@ deleted, and the daily call shows as a 401 in the Cron Jobs log of Vercel.
   command line that the shell keeps in its history, and never into a chat, an issue or a pull request. Then redeploy: a new
   value reaches only the deployments that are built after it is set. Write the date in the table above.
 - **Check that it works.** In Vercel, Settings, Cron Jobs, run the job once, and open its log: a line that starts with
-  `retention:` followed by three counts means that it ran. (Vercel Cron only calls the production deployment, so the
+  `retention:` followed by the counts means that it ran. (Vercel Cron only calls the production deployment, so the
   Preview and Development environments do not need the variable.)
 - **If it leaked:** set a new value as above and redeploy. Whoever held the old value could only start the same job that runs
   every day anyway, and it deletes only what is past its period, so the harm is small, but replace it all the same.

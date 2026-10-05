@@ -63,17 +63,35 @@ export const ADMIN_COOKIE = 'qr_admin'
 //  - a login attempt is deleted after this many days (guardLogin in server/auth.js prunes the same way when someone signs in),
 //  - the label of a phone (the browser string it sent at sign-in) is cleared this many days after the phone was revoked, together
 //    with what the phone reported about itself (migration 010: its build, how many visits waited and since when, the totals),
-//  - a recorded error (app_errors: safe fields only, no personal data) is deleted this many days after its last event.
+//  - a recorded error (app_errors: safe fields only, no personal data) is deleted this many days after its last event,
+//  - a day of the alert throttle (alert_pings: one date, no personal data) is deleted this many days after that day.
 export const RETENTION_SESSION_DAYS = 30
 export const RETENTION_LOGIN_ATTEMPT_DAYS = 1
 export const RETENTION_DEVICE_LABEL_DAYS = 90
 export const RETENTION_APP_ERROR_DAYS = 90
+export const RETENTION_ALERT_PING_DAYS = 30
 
 // Recording an unhandled server error in app_errors (server/errorLog.js) is one insert that the answer of the request waits
 // for, so it is bounded: when the database does not answer within this many milliseconds the answer goes out without the
 // record, and the record is lost (the error has already been logged once). The ADR of the topic (docs/adr/0007) names the
 // cost: a 500 can take this much longer, never more.
 export const ERROR_RECORD_TIMEOUT_MS = 1500
+
+// The first server error of a building day pings healthchecks.io (server/alerts.js, server/heartbeat.js, docs/adr/0007). The
+// host (Vercel Hobby) has no way to finish work after the answer, and the function may freeze once it has answered, so the
+// answer of the request waits for the ping, and every wait is bounded. It happens at most once a day, or once an hour (per
+// function instance) when the database itself is down.
+//  - ALERT_DB_TIMEOUT_MS: the one insert that decides whether the day was already announced. When it does not answer in time
+//    the database counts as unreachable, and the throttle in memory decides instead.
+//  - HEARTBEAT_TIMEOUT_MS: the request to healthchecks.io. One try, no retry on the path of a request.
+//  - ALERT_TOTAL_TIMEOUT_MS: the whole of noteServerError, whatever happens inside it (the two above, one after the other).
+//  - ALERT_UNREACHABLE_INTERVAL_MS: with no database to ask, one ping an hour at most per function instance.
+//  - HEARTBEAT_BODY_MAX_BYTES: what is sent is a short line of text; a longer body is cut (healthchecks.io keeps 100 kB at most).
+export const ALERT_DB_TIMEOUT_MS = 1500
+export const HEARTBEAT_TIMEOUT_MS = 1000
+export const ALERT_TOTAL_TIMEOUT_MS = 2500
+export const ALERT_UNREACHABLE_INTERVAL_MS = 60 * 60 * 1000
+export const HEARTBEAT_BODY_MAX_BYTES = 8 * 1024
 
 // The audit log keeps the name of the committee member as it was at the time of the action (audit_log.actor_name, a
 // snapshot, so the entry stays readable after the member is deleted). The column refuses more than this many characters

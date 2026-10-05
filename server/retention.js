@@ -12,7 +12,9 @@
 //     holds a status is cleared too, so a status never outlives the period because the label happened to be empty.
 //   - deletes the recorded errors (app_errors, safe fields only: server/errorLog.js) whose last event is older than
 //     RETENTION_APP_ERROR_DAYS,
-//   - writes one audit_log row (`retention.run`, actor `system`) that holds the four counts and nothing else.
+//   - deletes the days of the alert throttle (alert_pings: one date each, no personal data: server/alerts.js) that are older
+//     than RETENTION_ALERT_PING_DAYS,
+//   - writes one audit_log row (`retention.run`, actor `system`) that holds the five counts and nothing else.
 // What it never touches: a scan, the audit log, a session that is active or expired less than the period ago, a phone that
 // is not revoked or was revoked less than the period ago. Their retention waits for a legal decision (docs/privacy.md).
 //
@@ -25,11 +27,12 @@ import {
   RETENTION_LOGIN_ATTEMPT_DAYS,
   RETENTION_DEVICE_LABEL_DAYS,
   RETENTION_APP_ERROR_DAYS,
+  RETENTION_ALERT_PING_DAYS,
 } from './config.js'
 
 /**
- * Runs the job once and returns what it removed: `{ sessions, loginAttempts, deviceLabels, appErrors }` (numbers of rows;
- * `deviceLabels` is the number of phones that were cleared, the label and the reported status together). The four statements
+ * Runs the job once and returns what it removed: `{ sessions, loginAttempts, deviceLabels, appErrors, alertPings }` (numbers of
+ * rows; `deviceLabels` is the number of phones that were cleared, the label and the reported status together). The five statements
  * and the audit row are one transaction, so the audit row says what really happened: all of it or none of it.
  * Each statement still has the 15 second limit of the app (server/db.js). A failure is thrown as it is and the router
  * answers 500 and logs only its code (server/router.js); nothing here logs an error or a row.
@@ -59,11 +62,14 @@ export async function runRetention() {
     const errors = await c.query('delete from app_errors where last_at < now() - make_interval(days => $1::int)', [
       RETENTION_APP_ERROR_DAYS,
     ])
+    // The day is a building day (a date), so the period counts in whole days: a day is due once it is more than the period back.
+    const pings = await c.query('delete from alert_pings where day < current_date - $1::int', [RETENTION_ALERT_PING_DAYS])
     const counts = {
       sessions: sessions.rowCount,
       loginAttempts: attempts.rowCount,
       deviceLabels: labels.rowCount,
       appErrors: errors.rowCount,
+      alertPings: pings.rowCount,
     }
     // Counts only: no id, no name, no label. The audit log has no end date, and nothing in the app reads it today (no screen,
     // no agent API, no export): only whoever holds the database or a backup can.
@@ -76,6 +82,7 @@ export async function runRetention() {
         login_attempts: counts.loginAttempts,
         device_labels: counts.deviceLabels,
         app_errors: counts.appErrors,
+        alert_pings: counts.alertPings,
       },
     })
     return counts

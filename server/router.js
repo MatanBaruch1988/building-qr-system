@@ -2,6 +2,7 @@ import { Answer, ApiError, assertSafeWrite, bad } from './http.js'
 import { accessFor } from './access.js'
 import { oneLine, failureLabel } from './logSafe.js'
 import { recordEvent, requestIdOf } from './errorLog.js'
+import { noteServerError } from './alerts.js'
 import { commit } from './health.js'
 
 /** @import { ApiRequest, SendResult } from './http.js' */
@@ -220,17 +221,23 @@ export async function handle(req, res) {
     // are answered above and are not recorded. recordEvent never throws and never logs, and it waits for the database at most
     // ERROR_RECORD_TIMEOUT_MS, so the answer below is sent in any case.
     if (matched) {
+      const code = failureLabel(raw)
       await recordEvent({
         source: 'server',
         kind: 'error',
         place: matched.pattern,
         method: matched.method,
         status: 500,
-        code: failureLabel(raw),
+        code,
         appBuild: commit() ?? '',
         requestId,
         error: raw,
       })
+      // The first error of a building day also pings the owner's check on healthchecks.io (docs/adr/0007, step 2): the same
+      // safe fields, and no request id (it is in the record). It is awaited, because the host may freeze the function once the
+      // answer is sent, and it is bounded (server/alerts.js). It does nothing without HEALTH_HEARTBEAT_URL, and it never
+      // throws and never logs.
+      await noteServerError({ place: matched.pattern, method: matched.method, code, error: raw })
     }
     return send(res, {
       status: 500,

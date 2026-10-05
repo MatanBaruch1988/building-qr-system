@@ -54,7 +54,7 @@
 //   api_key.create            api_key   key         { name }
 //   api_key.revoke            api_key   key         null
 //   api_key.delete            api_key   key         { name, key_prefix, was_revoked }
-//   retention.run             (null)    (null)      { sessions, login_attempts, device_labels }  counts only (the system actor)
+//   retention.run             (null)    (null)      { sessions, login_attempts, device_labels, app_errors, alert_pings }  counts only (the system actor)
 import pg from 'pg'
 import { AUDIT_ACTOR_NAME_MAX_LENGTH } from './config.js'
 
