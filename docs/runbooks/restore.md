@@ -38,8 +38,15 @@ select count(*) from providers;
 select max(received_at) from scans;
 ```
 
-Also look at `point_providers`, `provider_devices`, `admins`, `api_keys` and `audit_log` when they are part of the damage.
-`max(received_at)` of `scans` tells you how far the copy goes. Compare the counts with production now.
+Also look at `point_providers`, `provider_devices`, `admins`, `api_keys`, `audit_log` and `scan_refusals` (the visits that the
+server refused) when they are part of the damage. `max(received_at)` of `scans` tells you how far the copy goes. Compare the
+counts with production now.
+
+`scan_refusals` is append-only like `scans` and holds the names as they were at the time, so a lost row can be put back as it
+was. `app_errors` and `alert_pings` are the server's own records (ADR 0007, `incident.md`): they hold no personal data and
+nothing depends on them, so they are rarely worth copying back. A restore takes them back to the restore point: the errors of
+the hours after it are gone from `app_errors` (healthchecks.io still has their pings), and a day whose alert was sent after the
+point is announced again by its next error, so one ping can repeat.
 
 ## 3. Choose how to recover
 
@@ -52,7 +59,12 @@ Also look at `point_providers`, `provider_devices`, `admins`, `api_keys` and `au
 
 After a restore, call `/api/health/db` with an agent key (see `incident.md`) and look at a few screens of `/admin`.
 Check in the Neon SQL editor that `public.environment_marker` still says `production` (the marker is part of the data,
-so a restore from before it was created removes it: the next deploy marks the database again).
+so a restore from before it was created removes it: the next deploy marks the database again). The same holds for a
+migration: a restore to a point before one leaves the running code expecting tables or columns that are gone. `migration` in
+the answer of `/api/health/db` must be the newest file in `db/migrations/`; if it is older, the next production deployment
+migrates the database again (`deploy-and-rollback.md`). For `010_app_errors.sql` and `011_alert_pings.sql` the symptom is mild:
+the server keeps answering (recording an error never fails a request), and its alerts say "Server error, alert record failed"
+(`incident.md`) until the tables are back.
 
 ## 4. Afterwards
 

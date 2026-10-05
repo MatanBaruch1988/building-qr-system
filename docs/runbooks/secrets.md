@@ -14,7 +14,7 @@ one. Dates are DD/MM/YYYY.
 | `SMOKE_AGENT_KEY` | GitHub Actions secret of the repository. Read by `smoke.yml` only | The owner, or a committee member who can open the Agent tab of `/admin` (to make and revoke the key) | Never, until it is revoked | 03/10/2026 |
 | The production database credentials (`DATABASE_URL`, `DATABASE_URL_UNPOOLED`) | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local` | The owner, in Vercel | Never, until rotated | 03/10/2026 |
 | `CRON_SECRET` | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local`, never in the Preview or Development environments | The owner, in Vercel (a long random value, see below) | Never, until rotated | 05/10/2026 |
-| `HEALTH_HEARTBEAT_URL` | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local`, never in the Preview or Development environments. It is the ping address of the server's own check on healthchecks.io (ADR 0007), used for the alert on the first server error of a day and for the daily summary of the last 24 hours (`GET /api/cron/daily-summary`, `server/summary.js`), and anybody who has it can say that the check is fine or failing. Without it the server sends nothing | The owner, in Vercel and in healthchecks.io. If it leaks: create a new check in healthchecks.io, put the new address in Vercel and redeploy, then delete the old check | Never, until rotated | Not set yet: write the date here when you set it |
+| `HEALTH_HEARTBEAT_URL` | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local`, never in the Preview or Development environments. It is the ping address of the server's own check on healthchecks.io, named "building-qr server" (ADR 0007), used for the alert on the first server error of a day and for the daily summary of the last 24 hours (`GET /api/cron/daily-summary`, `server/summary.js`), and anybody who has it can say that the check is fine or failing. Without it the server sends nothing | The owner, in Vercel and in healthchecks.io. If it leaks: create a new check in healthchecks.io, put the new address in Vercel and redeploy, then delete the old check | Never, until rotated | 05/10/2026 |
 | `MIGRATION_GITHUB_TOKEN` | Not used. Only a private fork needs it, in its Vercel project, so that the build can read the migrations from GitHub (`deploy-and-rollback.md`) | The owner of that fork | Set by the owner of the fork when the token is made | Not applicable |
 | `GOOGLE_CLIENT_ID` | Vercel (Production) and `.env.local`. It is public by nature: it is in the code that every browser loads | Nobody needs to rotate it: it identifies the app, it does not protect anything | Never | Not applicable |
 | Agent keys of the committee's own AI agent | The secrets vault of the agent platform that the committee uses, never in a chat (`docs/agent-prompt.md`) | The committee, in the Agent tab of `/admin` | Never, until revoked | Each key shows its own date in the Agent tab |
@@ -66,6 +66,26 @@ deleted, and the daily call shows as a 401 in the Cron Jobs log of Vercel.
 - **If it leaked:** set a new value as above and redeploy. Whoever held the old value could only start the same job that runs
   every day anyway, and it deletes only what is past its period, so the harm is small, but replace it all the same.
 
+## `HEALTH_HEARTBEAT_URL`
+
+The ping address of the server's own check on healthchecks.io, named "building-qr server" (ADR 0007). The server pings it at
+once for the first server error of a day (`server/alerts.js`) and once a day for the summary of the last 24 hours
+(`server/summary.js`); `incident.md` says how to read what it sends. It is not the address of the backup's check: that one is
+`BACKUP_HEARTBEAT_URL` on the owner's computer (`restore.md`). With no value, or one that is not an `https:` address or that holds
+a user name or a password, the server sends nothing and nothing else changes.
+
+- **Create or rotate.** In healthchecks.io make (or open) the check and copy its ping address. In the Vercel project open Settings,
+  Environment Variables, add `HEALTH_HEARTBEAT_URL` for the **Production** environment only, mark it sensitive and paste the
+  address there. No spaces or line breaks in it. Never type it into a command line, a chat, an issue or a pull request. Then
+  redeploy: a new value reaches only the deployments that are built after it is set. Write the date in the table above and in
+  the rotation log.
+- **Check that it works.** In Vercel, Settings, Cron Jobs, run `daily-summary` once and open its log: the line starts with
+  `daily-summary:` and ends with `heartbeat=sent` when healthchecks.io took the ping. Any other word says why not:
+  `not_configured` (the variable is missing or empty), `invalid_url` (not an `https:` address, or a user name or a password in
+  it), `rejected` (healthchecks.io answered, but not with a success status), `timeout` or `failed` (no answer). Then open the
+  check: its newest event is from just now. That run is a real ping with the verdict of the last 24 hours, so a `/fail` is
+  e-mailed like any other.
+
 ## The production database credentials
 
 They live only in Vercel (Production environment, sensitive), so they never reach GitHub or an agent. Vercel builds with them
@@ -85,3 +105,4 @@ One line per creation or rotation, with no value in it.
 - `03/10/2026`: `SMOKE_AGENT_KEY` was set as a GitHub Actions secret (an agent key made in the Agent tab of `/admin`).
 - `04/10/2026`: `CLAUDE_CODE_OAUTH_TOKEN` was created with `claude setup-token` and set as a GitHub Actions secret.
 - `05/10/2026`: `CRON_SECRET` was set by the owner in the Production environment of Vercel (sensitive), for the daily retention job.
+- `05/10/2026`: `HEALTH_HEARTBEAT_URL` was set by the owner in the Production environment of Vercel (sensitive): the ping address of the check "building-qr server" on healthchecks.io, for the first-error alert and the daily summary.
