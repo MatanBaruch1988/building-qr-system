@@ -52,7 +52,9 @@ or name, counts and times. Part b is the committee app itself, so it shows the n
 
 healthchecks.io has two checks of ours. The daily backup (`restore.md`) says only whether the owner's computer made its dump.
 **"building-qr server"** is the server's own check. Open it and read its list of events, newest first: each ping has its time
-and a short text. Read down to the last time the check was green. The server sends two kinds of ping.
+and a short text. Read down to the last time the check was green. Its period is 1 day and its grace 3 hours (set on
+05/10/2026): the daily summary keeps it green, so if no ping arrives for 27 hours the check goes down by itself and alerts, which
+is how a server or a cron job that stopped altogether is noticed. The server sends two kinds of ping.
 
 **The first server error of a building day**, at once, to the `/fail` address, so the check turns down and healthchecks.io
 alerts the owner. The day is the building's (Asia/Jerusalem, midnight to midnight). Only the first error of a day sends it: the
