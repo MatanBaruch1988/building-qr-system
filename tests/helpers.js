@@ -1,7 +1,7 @@
 import pg from 'pg'
 import { randomBytes } from 'node:crypto'
 import { loadEnv } from '../server/loadEnv.js'
-import { migrate } from '../server/migrate.js'
+import { migrate, MigrationError } from '../server/migrate.js'
 import { setPool, poolConfig, guardPool, createPool } from '../server/db.js'
 import { assertNotProduction } from '../server/dbGuard.js'
 import { setGoogleVerifier } from '../server/google.js'
@@ -26,7 +26,14 @@ export async function setupDb() {
   // The app's own kind of pool (server/db.js), so that every test also runs through the query limits of every statement.
   const pool = createPool({ ...poolConfig(raw, schema), max: 6 })
   setPool(pool)
-  await migrate(pool)
+  try {
+    await migrate(pool)
+  } catch (err) {
+    // A MigrationError says the file and the SQLSTATE only (server/migrate.js). A test database holds fake data, so say why too,
+    // or a broken new migration would fail every test file with no reason.
+    if (err instanceof MigrationError) console.error(`${err.message}. Database message: ${err.databaseMessage}`)
+    throw err
+  }
   // Tests sign in "with Google" by presenting the e-mail as the credential.
   setGoogleVerifier(async (credential) => ({ email: String(credential).toLowerCase(), name: 'Test Admin', sub: 'sub-' + String(credential).toLowerCase() }))
   return {

@@ -4,7 +4,7 @@ import { loadEnv } from '../server/loadEnv.js'
 loadEnv()
 
 const { poolConfig, guardPool } = await import('../server/db.js')
-const { migrate } = await import('../server/migrate.js')
+const { migrate, MigrationError } = await import('../server/migrate.js')
 const { assertNotProduction } = await import('../server/dbGuard.js')
 
 // The migration holds a session-level advisory lock for the whole run (server/migrate.js). A transaction pooler (the
@@ -26,6 +26,14 @@ try {
   console.log(applied.length ? `Applied: ${applied.join(', ')}` : 'Database is up to date.')
 } catch (err) {
   console.error(err.message)
+  if (err instanceof MigrationError) {
+    // The message of a MigrationError says the file and the SQLSTATE only, because the production build log must never hold the
+    // database's own text (it can quote a row value). Here it is safe to print more: assertNotProduction ran first and refuses a
+    // production database, and this tool is for the development database, which holds fake data only. This is where a person
+    // reads why a migration failed.
+    console.error(`Database message: ${err.databaseMessage}`)
+    if (err.position) console.error(`Position in ${err.file}: character ${err.position}`)
+  }
   process.exitCode = 1
 } finally {
   await pool?.end()
