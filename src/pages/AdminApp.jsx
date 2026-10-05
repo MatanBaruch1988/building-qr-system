@@ -9,6 +9,7 @@ import ProvidersView from '../admin/views/ProvidersView.jsx'
 import HistoryView from '../admin/views/HistoryView.jsx'
 import AgentView from '../admin/views/AgentView.jsx'
 import CommitteeView from '../admin/views/CommitteeView.jsx'
+import { useTab } from '../admin/tab.js'
 import { applyUpdate, isUpdateReady, subscribeUpdate } from '../worker/update.js'
 import ThemeSwitch, { HEBREW_THEME_LABELS as THEME_LABELS } from '../ui/ThemeSwitch.jsx'
 import { IconPin, IconUsers, IconList, IconKey, IconShield, IconLogout, IconQr, IconDevice, IconAlert, IconRefresh } from '../admin/icons.jsx'
@@ -21,17 +22,8 @@ const TABS = [
   { key: 'committee', label: 'ועד', icon: IconShield, View: CommitteeView },
 ]
 
-const tabFromHash = () => TABS.find((t) => t.key === window.location.hash.slice(1))?.key ?? 'points'
-
-function useTab() {
-  const [tab, setTab] = useState(tabFromHash)
-  useEffect(() => {
-    const onHash = () => setTab(tabFromHash())
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [])
-  return [tab, (key) => { window.location.hash = key }]
-}
+// The tab that is open lives in the address (#history), see src/admin/tab.js. The first tab is the one that opens by default.
+const TAB_KEYS = TABS.map((t) => t.key)
 
 // Defined once, outside Shell: a component created inside a render would be a new type each time and every
 // tab change would remount the buttons (losing keyboard focus).
@@ -57,7 +49,7 @@ function ShellTools({ onSignOut }) {
 
 function Shell({ admin, onSignedOut }) {
   const toast = useToast()
-  const [tab, goTo] = useTab()
+  const [tab, goTo] = useTab(TAB_KEYS)
   const { View, label } = TABS.find((t) => t.key === tab)
   const updateReady = useSyncExternalStore(subscribeUpdate, isUpdateReady)
   const mainRef = useRef(null)

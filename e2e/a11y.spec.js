@@ -255,13 +255,13 @@ const loaded = async (page, title) => {
   await expect(page.getByRole('status').filter({ hasText: 'טוען' })).toHaveCount(0)
 }
 /**
- * Waits until the committee app is ready to change tabs. The heading is on the screen a moment before the shell listens for
- * a change of the address (an effect runs after the first paint), and a tab that is opened by address in that moment
- * stays on the first one. The title is set by the effect that follows the listener, so it says the listener is there.
+ * Waits until the committee app has signed in and shows its first screen. Nothing more is needed before a tab is opened by
+ * address: the tab follows the address through an external store that React subscribes to (src/admin/tab.js), so an address
+ * that changes in the moment after the shell appears is not lost. (Until that was so, this also waited for the title, which the
+ * effect that attaches the listener sets, because a tab opened in that moment stayed on the first one.)
  */
 const signedIn = async (page) => {
   await expect(page.getByRole('heading', { name: 'נקודות סריקה', level: 1 })).toBeVisible()
-  await expect(page).toHaveTitle(/ · נוכחות בבניין$/)
 }
 const openTab = async (page, tab, title) => {
   await page.goto(`/admin#${tab}`)
