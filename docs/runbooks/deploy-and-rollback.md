@@ -80,8 +80,9 @@ something, or did not take effect. It links to the run. Read the `FAIL` line the
 - `the database is at <old file>, the code expects <new file>`: the deployment is live but its migration did not run. Look
   in the build log for the `Deploy gate:` line, and read "A failed migration" below. Fix forward: never edit a merged
   migration.
-- `the database check failed (HTTP 503)`: this deployment cannot reach its database, so see steps 3 to 5 of
-  [incident.md](incident.md). The script asked three times, 5 s apart, so it was not one slow wake-up.
+- `the database check failed (HTTP 503)`: this deployment cannot reach its database, so see steps 3 to 6 of
+  [incident.md](incident.md), and "When the alert is about the database" there. The script asked three times, 5 s apart, so
+  it was not one slow wake-up.
 - `the agent key was refused (HTTP 401)`: the secret is wrong or the key was revoked. Make a new key in the Agent tab and
   set the secret again. The site itself may be fine.
 
