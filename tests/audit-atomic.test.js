@@ -88,11 +88,13 @@ async function snapshot() {
  * and nothing else. The rows of app_errors that the call did not touch are the very same rows.
  * @param {object} before  the snapshot taken before the call
  * @param {string} route  `METHOD /path` as the route is registered (an entry of ROUTES)
+ * @param {...string} skipped  tables that change whatever happens and are left out of the comparison (the sign-in throttle)
  */
-async function expectOnlyTheRecordOfTheFailure(before, route) {
+async function expectOnlyTheRecordOfTheFailure(before, route, ...skipped) {
   const [method, place] = route.split(' ')
-  const after = await snapshot()
-  const { app_errors: errorsBefore, ...restBefore } = before
+  const without = (state) => Object.fromEntries(Object.entries(state).filter(([name]) => !skipped.includes(name)))
+  const after = without(await snapshot())
+  const { app_errors: errorsBefore, ...restBefore } = without(before)
   const { app_errors: errorsAfter, ...restAfter } = after
   expect(restAfter, 'a failed call changed the database').toEqual(restBefore)
   const events = (rows) => rows.reduce((sum, r) => sum + r.count, 0)
@@ -1088,14 +1090,15 @@ describe('committee sign-in is recorded: session.sign_in', () => {
 
   it('is one transaction with the session: when the row is refused the answer is 500 and nothing was written, and a retry works', async () => {
     const { id, email } = await newMember({ name: '' })
-    const before = await snapshotWithout('auth_attempts') // the throttle counts the attempt whatever happens: it has its own transaction
+    const before = await snapshot()
     const { result: refused, logged } = await quietly(() => refusingAudit('session.sign_in', () => googleSignIn(email)))
     expect(refused.status, refused.text).toBe(500)
     expect(refused.json.error.code).toBe('server_error')
     expect(refused.headers['set-cookie']).toBeUndefined()
     expect(logged).toHaveLength(1)
-    // No session, no time of sign-in, no link to the Google account and no name: the whole database is as it was.
-    expect(await snapshotWithout('auth_attempts')).toEqual(before)
+    // No session, no time of sign-in, no link to the Google account and no name: the whole database is as it was, apart from
+    // the record of the 500 (app_errors) and the throttle, which counts the attempt whatever happens (its own transaction).
+    await expectOnlyTheRecordOfTheFailure(before, 'POST /admin/google', 'auth_attempts')
     expect(await sessionOf(id)).toBeUndefined()
 
     const retry = await googleSignIn(email)
@@ -1129,7 +1132,7 @@ describe('committee sign-in is recorded: session.sign_in', () => {
     const before = await snapshot()
     const { result: refused } = await quietly(() => refusingAudit('session.sign_in', () => withDevLogin(() => devSignIn(email))))
     expect(refused.status, refused.text).toBe(500)
-    expect(await snapshot()).toEqual(before)
+    await expectOnlyTheRecordOfTheFailure(before, 'POST /admin/dev-login') // nothing written but the record of the 500
     expect(await sessionOf(id)).toBeUndefined()
     expect((await withDevLogin(() => devSignIn(email))).status).toBe(200)
     expect(await sessionOf(id)).toBeDefined()
@@ -1241,7 +1244,7 @@ describe('committee sign-out is recorded: session.sign_out', () => {
     expect(refused.json.error.code).toBe('server_error')
     expect(refused.headers['set-cookie']).toBeUndefined() // the cookie is cleared only when the sign-out happened
     expect(logged).toHaveLength(1)
-    expect(await snapshot()).toEqual(before) // the session is not ended, nothing is written
+    await expectOnlyTheRecordOfTheFailure(before, 'POST /admin/logout') // the session is not ended, nothing else is written
     expect(await meStatus(member.cookie)).toBe(200)
 
     const after = await lastAuditId()
