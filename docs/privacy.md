@@ -75,7 +75,10 @@ The server cuts every report to a fixed list of fields (`shared/contract.js`) an
   Neon project, the app runs on Vercel). The committee's sign-in goes through Google, which handles it under its own terms.
   The owner's check on healthchecks.io gets one short line when the server has its first unexpected error of a day: the
   route as it is written in the code, the method, the error's code and the time. When an app reports the first crash of a day
-  instead, the line has the screen key, the error's name or code, the build and the time. It holds no personal data.
+  instead, the line has the screen key, the error's name or code, the build and the time. It holds no personal data. It also
+  gets one short summary of the last 24 hours each day (`server/summary.js`): counts, route patterns as they are written in
+  the code, error codes, screen keys, build versions and times, and nothing about a person (no name, e-mail address, QR code,
+  phone label or id).
 
 ## Backups
 
