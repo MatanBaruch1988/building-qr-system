@@ -4,11 +4,15 @@
 // The credentials below are DEV-ONLY sample values that exist only inside the scratch schema.
 import pg from 'pg'
 import { loadEnv } from '../server/loadEnv.js'
+import { assertScratchSchema } from './e2e-config.mjs'
 loadEnv()
 
-const schema = process.argv.find((a) => /^[a-z_][a-z0-9_]*$/.test(a) && !a.endsWith('.mjs') && !a.startsWith('node')) || 'dev_ui'
+// The name of the schema is the one argument that is not a flag. It goes into SQL as an identifier, so it is checked (and
+// `public` and `neon_auth` are refused) before anything else happens. An E2E run passes its own (E2E_SCHEMA).
+const names = process.argv.slice(2).filter((a) => !a.startsWith('--'))
+if (names.length > 1) throw new Error(`Expected one schema name, got ${names.length}: ${names.join(' ')}`)
+const schema = assertScratchSchema(names[0] ?? 'dev_ui')
 const drop = process.argv.includes('--drop')
-if (schema === 'public') throw new Error('Refusing to seed the public schema')
 
 const { normalizeConnectionString } = await import('../server/db.js')
 const raw = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL
