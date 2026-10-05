@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { I18nProvider, useI18n } from '../i18n/index.jsx'
 import { api } from '../api/client.js'
-import { loadSession, saveSession, clearSession } from '../worker/session.js'
+import { loadSession, saveSession, clearSession, isProvider } from '../worker/session.js'
 import { createQueue } from '../worker/scanQueue.js'
 import { getFix } from '../worker/geo.js'
 import { performCheckIn, withScanContext } from '../worker/checkIn.js'
@@ -89,11 +89,16 @@ function WorkerShell({ session, setSession }) {
   }, [notice])
 
   // A stored session may have been revoked (provider deactivated, password reset): check quietly.
+  // The answer refreshes the person's details, but only when it has usable ones. A 200 without them (an old or broken
+  // server) is no reason to sign out (the token was accepted) and must not replace what the screens draw from.
   useEffect(() => {
     if (!session) return
     const token = session.token
     api('/session', { token, timeoutMs: 8000 })
-      .then((res) => setSession((s) => (s && s.token === token ? { ...s, provider: res.provider } : s)))
+      .then((res) => {
+        if (!isProvider(res?.provider)) return
+        setSession((s) => (s && s.token === token ? { ...s, provider: res.provider } : s))
+      })
       .catch((err) => err.status === 401 && handleSignedOut())
     // eslint-disable-next-line react-hooks/exhaustive-deps -- check the stored session once, at app start: a later `session` is a new sign-in, and `handleSignedOut` changes with the language
   }, [])

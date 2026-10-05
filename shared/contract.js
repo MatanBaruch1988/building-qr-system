@@ -1,7 +1,8 @@
 // What the phone (src/) and the server (server/) must AGREE on: the one place. A value or a list that both sides use is
 // written here once and imported by both, so that the two can never drift apart. Runs in the browser and on the server,
 // so it holds plain constants only (no server secret, no database, nothing that belongs to one side). The flags of a scan
-// are the same kind of list and live in shared/flags.js; the token prefixes of the server are in server/config.js.
+// are the same kind of list and live in shared/flags.js; the prefixes of the other secrets that the server mints (a committee
+// session, an agent key) are in server/config.js, which also re-exports what is here.
 //
 // Moving a value here changes where it is written, never what it is. tests/contract.test.js pins every number and list,
 // and says why each one matters. The reason is always the same: an installed app keeps its own copy of the JavaScript
@@ -132,3 +133,17 @@ export const QR_TOKEN_PREFIX = 'BQR-'
  * (shared/qrToken.js) is the one reader of it.
  */
 export const QR_TOKEN_RE = /^BQR-[A-Za-z0-9-]{6,80}$/
+
+// ---- 6. The device token of a service provider -------------------------------------------------------------------
+// POST /api/session mints it, the phone keeps it in `qr.session` and sends it as `Authorization: Bearer ...`, and the server
+// refuses a token that is not shaped like one before any database query (server/auth.js). The phone applies the same shape
+// to what it reads back from its own storage (src/worker/session.js), so that a session that is not one of ours is dropped.
+
+/** What a provider's device token starts with. (server/config.js re-exports it, and the other prefixes are written there.) */
+export const PROVIDER_TOKEN_PREFIX = 'qrp_'
+
+/**
+ * The longest token of any kind that the server looks at: a minted token is its 4-character prefix plus 43 characters (32
+ * random bytes, base64url), 47 in all, and anything longer than this is not ours. (server/config.js re-exports it.)
+ */
+export const MAX_TOKEN_LENGTH = 200

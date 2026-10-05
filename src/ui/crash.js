@@ -64,6 +64,10 @@ export const UPDATE_RELOAD_FALLBACK_MS = 4000
 /**
  * "Reload the app". When a new version is already downloaded and waiting (src/worker/update.js), apply it: it reloads the
  * page into the new version, which may be the very fix for this crash. Otherwise a plain reload.
+ *
+ * It signs nobody out and clears nothing on the phone: a bug that is only passing must not sign every service provider out.
+ * What was stored and cannot be used is dealt with where it is read (a session without provider details is removed by
+ * loadSession in src/worker/session.js), so a stored value cannot keep this screen coming back.
  */
 export function reloadApp({ updateReady = isUpdateReady, apply = applyUpdate, reload = () => window.location.reload() } = {}) {
   if (updateReady()) {
