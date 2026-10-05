@@ -11,8 +11,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { setupDb } from './helpers.js'
-import { productionBuildDecision, migrateProduction } from '../server/productionMigrate.js'
+import { productionBuildDecision, migrateProduction, buildFailureText } from '../server/productionMigrate.js'
 import { maskDatabaseHost } from '../server/dbGuard.js'
+import { MigrationError } from '../server/migrate.js'
+import { SafeMessageError } from '../server/logSafe.js'
 
 const SHA = '0123456789abcdef0123456789abcdef01234567'
 const PRODUCTION = {
@@ -24,6 +26,8 @@ const PRODUCTION = {
   VERCEL_GIT_REPO_SLUG: 'some-repo',
 }
 const without = (env, ...keys) => Object.fromEntries(Object.entries(env).filter(([key]) => !keys.includes(key)))
+// A value that looks personal, to see that a failed production build never prints it. Fake data only.
+const PERSONAL = 'someone@example.com'
 
 describe('productionBuildDecision', () => {
   it('migrates a production build of a commit on master from Git', () => {
@@ -101,6 +105,84 @@ describe('productionBuildDecision', () => {
         else process.env[key] = value
       }
     }
+  })
+})
+
+describe('buildFailureText: what the production build prints when the migration fails', () => {
+  /** A pg-like error with a personal-looking value in its message and in every field that a Postgres error has. */
+  const databaseError = (code = '23505') =>
+    Object.assign(new Error(`duplicate key value violates unique constraint (${PERSONAL})`), {
+      code,
+      detail: `Key (email)=(${PERSONAL}) already exists.`,
+      where: `SQL statement "insert ... '${PERSONAL}'"`,
+      table: PERSONAL,
+      column: PERSONAL,
+      parameters: [PERSONAL],
+    })
+
+  it('prints a MigrationError as its message: the file and the SQLSTATE with its name', () => {
+    const text = buildFailureText(new MigrationError('012_x.sql', databaseError()))
+    expect(text).toBe('Migration 012_x.sql failed: 23505 (unique_violation)')
+  })
+
+  it('prints a database error as its code and never its message or any other field', () => {
+    const text = buildFailureText(databaseError())
+    expect(text).toBe('23505')
+    expect(text).not.toContain(PERSONAL)
+    expect(buildFailureText(databaseError('XX000'))).toBe('XX000')
+  })
+
+  it('prints an error with no code as its name, and anything that is not an Error as its type', () => {
+    expect(buildFailureText(new Error(`password authentication failed for user "${PERSONAL}"`))).toBe('Error')
+    expect(buildFailureText(new TypeError(PERSONAL))).toBe('TypeError')
+    expect(buildFailureText(Object.assign(new Error(PERSONAL), { code: 'ENOTFOUND' }))).toBe('ENOTFOUND')
+    expect(buildFailureText(PERSONAL)).toBe('thrown string')
+    expect(buildFailureText({ message: PERSONAL })).toBe('thrown object')
+    expect(buildFailureText(undefined)).toBe('thrown undefined')
+  })
+
+  it('trusts the class and nothing else: an error that only looks like ours is printed as its code', () => {
+    const lookalike = Object.assign(new Error(`Migration x.sql failed: ${PERSONAL}`), {
+      name: 'MigrationError',
+      file: 'x.sql',
+      code: '23505',
+    })
+    expect(buildFailureText(lookalike)).toBe('23505')
+    expect(buildFailureText(Object.assign(new Error(PERSONAL), { name: 'SafeMessageError' }))).toBe('SafeMessageError')
+  })
+
+  it('prints an error of ours on one line of bounded length', () => {
+    expect(buildFailureText(new SafeMessageError('first\n  second'))).toBe('first second')
+    expect(buildFailureText(new SafeMessageError('x'.repeat(2000)))).toHaveLength(500)
+  })
+
+  it("prints the gate's own refusals as their message, so that the owner still reads what to fix", async () => {
+    const quiet = { markerTable: 't_never_connected.environment_marker', dir: os.tmpdir(), log: () => {} }
+    const repo = { repoOwner: 'some-owner', repoSlug: 'some-repo' }
+    const pooled = 'postgres://user:pass@ep-cool-123456-pooler.eu-central-1.aws.neon.tech/db?sslmode=require'
+    const failures = [
+      await migrateProduction({ ...quiet, ...repo, connectionString: undefined }).catch((e) => e),
+      await migrateProduction({ ...quiet, ...repo, connectionString: pooled }).catch((e) => e),
+      await migrateProduction({ ...quiet, ...repo, connectionString: 'not a url' }).catch((e) => e),
+      await migrateProduction({ ...quiet, connectionString: 'postgres://user:pass@localhost:5432/db' }).catch((e) => e),
+    ]
+    const expected = [/DATABASE_URL_UNPOOLED is not set/, /pooled host/, /not a valid connection URL/, /VERCEL_GIT_REPO_OWNER/]
+    failures.forEach((err, i) => {
+      expect(err, String(i)).toBeInstanceOf(SafeMessageError)
+      expect(buildFailureText(err), String(i)).toBe(err.message)
+      expect(buildFailureText(err), String(i)).toMatch(expected[i])
+    })
+    expect(buildFailureText(failures[1])).not.toContain('ep-cool-123456')
+  })
+})
+
+describe('scripts/vercel-build.mjs', () => {
+  // The script runs the whole build when it is imported, so it cannot be loaded in a test: the one line that matters is read.
+  it('prints a failed migration only through buildFailureText, never through a message', () => {
+    const source = fs.readFileSync(new URL('../scripts/vercel-build.mjs', import.meta.url), 'utf8')
+    expect(source).toContain('Production migration failed: ${buildFailureText(err)}')
+    expect(source).not.toMatch(/\berr(?:or)?\.message\b/)
+    expect(source).not.toMatch(/\.stack\b/)
   })
 })
 
@@ -280,10 +362,64 @@ describe('migrateProduction against a throwaway schema', () => {
   it('does not mark the database when a migration fails, and says which one failed', async () => {
     write('pm_003_broken.sql', 'create table pm_extra (id int); select * from pm_does_not_exist;')
     publish('pm_003_broken.sql')
-    await expect(run().promise).rejects.toThrow(/^Migration pm_003_broken\.sql failed: /)
+    const err = await run().promise.catch((e) => e)
+    expect(err).toBeInstanceOf(MigrationError)
+    expect(err.message).toBe('Migration pm_003_broken.sql failed: 42P01 (undefined_table)')
+    expect(err.file).toBe('pm_003_broken.sql')
+    expect(err.code).toBe('42P01')
+    expect(err.databaseMessage).toMatch(/pm_does_not_exist/)
+    expect(err.message).not.toContain('pm_does_not_exist')
+    expect(err.message).not.toContain(err.databaseMessage)
     expect(await migrationRows()).toEqual(['pm_001_first.sql', 'pm_002_second.sql'])
     expect(await present(`${db.schema}.pm_extra`)).toBe(false)
     expect(await present(markerTable)).toBe(false)
+  })
+
+  describe('what the build would print for a failure', () => {
+    it('is the file and the SQLSTATE for a migration that fails on a value, and never the value', async () => {
+      write('pm_003_cast.sql', `create table pm_extra (n int); insert into pm_extra values ('${PERSONAL}'::int);`)
+      publish('pm_003_cast.sql')
+      const err = await run().promise.catch((e) => e)
+      expect(err).toBeInstanceOf(MigrationError)
+      // The database quoted the value in its message, so the check is meaningful: it is only in databaseMessage.
+      expect(err.databaseMessage).toContain(PERSONAL)
+      const text = buildFailureText(err)
+      expect(text).toBe('Migration pm_003_cast.sql failed: 22P02 (invalid_text_representation)')
+      expect(text).not.toContain(PERSONAL)
+      expect(await migrationRows()).toEqual(['pm_001_first.sql', 'pm_002_second.sql'])
+    })
+
+    it('is the message of a refusal of the gate itself: a file that differs from master, a file not on master, a nonprod marker', async () => {
+      master['pm_002_second.sql'] = Buffer.from('create table pm_second (id int primary key, sneaky int);')
+      const differs = await run().promise.catch((e) => e)
+      expect(buildFailureText(differs)).toBe(
+        'Migration pm_002_second.sql differs from the file on GitHub master: only merged migrations are applied',
+      )
+
+      publish('pm_002_second.sql')
+      delete master['pm_001_first.sql']
+      const missing = await run({ retryDelaysMs: [1] }).promise.catch((e) => e)
+      expect(buildFailureText(missing)).toMatch(
+        /^Migration pm_001_first\.sql could not be read from GitHub master after 2 tries \(HTTP 404\)/,
+      )
+
+      publish('pm_001_first.sql')
+      await db.pool.query(
+        `create table ${markerTable} (environment text primary key check (environment in ('production', 'nonprod')))`,
+      )
+      await db.pool.query(`insert into ${markerTable} values ('nonprod')`)
+      const nonprod = await run().promise.catch((e) => e)
+      expect(buildFailureText(nonprod)).toMatch(/non-production database: check the Production environment variables in Vercel/)
+    })
+
+    it('is only the code for a failure of the connection to the database, which has no message of ours', async () => {
+      // Nothing listens on this port: pg fails with ECONNREFUSED, and its message names the address that it tried.
+      const err = await run({ connectionString: 'postgresql://user:pass@127.0.0.1:1/none' }).promise.catch((e) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect(err).not.toBeInstanceOf(SafeMessageError)
+      expect(err.message).toContain('127.0.0.1')
+      expect(buildFailureText(err)).toBe('ECONNREFUSED')
+    })
   })
 
   describe('only migrations that are on GitHub master are applied', () => {

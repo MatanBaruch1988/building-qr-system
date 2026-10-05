@@ -90,7 +90,9 @@ unchanged.
   that can be repeated. A new self-hosted deployment is therefore marked on its first deploy. The marker is never changed
   from `production`, and a database marked `nonprod` is never migrated by this path.
 - **A failure.** A failed migration rolls back its own transaction, the build exits 1, and Vercel does not promote the
-  deployment: the previous one keeps serving, on the schema it already works with. The error is in the build log.
+  deployment: the previous one keeps serving, on the schema it already works with. The build log says the file and the
+  SQLSTATE with its condition name (`Migration 012_x.sql failed: 23505 (unique_violation)`), never the database's own
+  message, which can quote a row value of production (`scripts/vercel-build.mjs` prints a failure through `buildFailureText`).
   Migrations that already ran in the same build stay applied (each file is its own transaction), so a fix is a new
   migration, never an edit of an old one.
 - **Checking a deploy.** `GET /api/health` is public, free of the database, and shows the commit. `GET /api/health/db`

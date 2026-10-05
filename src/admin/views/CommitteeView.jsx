@@ -4,6 +4,7 @@ import { useLoad, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconBan, IconCheck, IconShield, IconAlert, IconTrash } from '../icons.jsx'
 import { ADDRESS_MAX_LENGTH, NAME_MAX_LENGTH } from '../../../shared/contract.js'
+import BuildLabel from '../../ui/BuildLabel.jsx'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -177,6 +178,9 @@ export default function CommitteeView({ admin }) {
       </div>
 
       <BuildingCard />
+
+      {/* Which build this computer or phone runs. The one place that both layouts reach (the tab bar and the side rail). */}
+      <BuildLabel label="גרסה" className="a-build" />
 
       {adding && <AddDialog onClose={() => setAdding(false)} onAdded={() => { setAdding(false); admins.reload() }} />}
     </>

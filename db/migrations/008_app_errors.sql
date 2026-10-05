@@ -22,7 +22,10 @@ create table app_errors (
   id bigserial primary key,
   -- date_trunc('hour', now()) when the event happened: one row per hour for each key.
   bucket timestamptz not null,
-  source text not null check (source in ('server', 'provider_app', 'committee_app')),
+  -- Written with `= any (array[...])` and not with `in`, on purpose: it is the same constraint for the database, but
+  -- tests/contract.test.js and tests/agent-docs.test.js read the latest check on a column named source that uses `in`, in
+  -- all the migrations, as the vocabulary of scans.source, and they would take this one for it.
+  source text not null check (source = any (array['server', 'provider_app', 'committee_app'])),
   kind text not null check (kind in ('error', 'refusal', 'slow', 'crash', 'unhandled', 'signed_out')),
   -- The route as written in the code, or a fixed screen key. Never the path that was asked for.
   place text not null check (char_length(place) between 1 and 120),

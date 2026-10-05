@@ -87,16 +87,27 @@ checkout of the deployed commit: `EXPECTED_SHA=<the full commit> node scripts/sm
 
 ## A failed migration
 
-The build prints `Production migration failed: Migration NNN_name.sql failed: <reason>` and exits 1. Vercel marks the
-deployment as failed and does **not** promote it, so the previous deployment keeps serving. Nothing is needed to "stay up".
+The build prints `Production migration failed: Migration NNN_name.sql failed: <SQLSTATE> (<condition name>)`, for example
+`Migration 012_x.sql failed: 23505 (unique_violation)`, and exits 1. Vercel marks the deployment as failed and does **not**
+promote it, so the previous deployment keeps serving. Nothing is needed to "stay up".
+
+The log never holds the message of the database: it can quote a row value of production, and the build log is read by more
+people than the owner. So the file, the code and the name of the condition are what it says (a code that has no name there is
+in appendix A of the PostgreSQL documentation, "PostgreSQL Error Codes"). To read the database's own message and the position
+in the file, run the same file against the non-production database: `npm run db:migrate` prints `Database message:` and the
+position, because that database holds fake data only. A failure that only production data causes (a duplicate key, a value
+that does not cast) does not happen there: the owner finds the row in the Neon console, and never copies it into a log, an
+issue or a pull request.
 
 - The file that failed was rolled back as a whole. Files that ran earlier in the same build stay applied.
 - Do not edit the file that was merged. Fix forward: a new pull request with a new migration (the next number), merged the
   same way.
 - `another migration run holds the lock` means two builds ran together, or a build was killed in the middle. Wait a minute
   and redeploy the same commit from the Vercel dashboard (**Redeploy**): the lock is released when its session ends.
-- `lock timeout` means the migration waited more than 5 s for a lock that live traffic held. Redeploy later, or rewrite the
-  migration (in a new pull request) so that it takes shorter locks.
+- `55P03 (lock_not_available)` means the migration waited more than 5 s for a lock that live traffic held. Redeploy later, or
+  rewrite the migration (in a new pull request) so that it takes shorter locks.
+- `57014 (query_canceled)` means a statement ran longer than the 5 minute limit of a migration. Rewrite the migration (in a
+  new pull request) so that it does less in one statement.
 - `Migration NNN_name.sql differs from the file on GitHub master` means the build holds a migration that is not the merged
   one (a deploy from a local checkout, or a file edited after the merge). Nothing was applied. Deploy by merging, and never
   edit a merged migration.
