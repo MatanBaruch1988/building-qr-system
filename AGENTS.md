@@ -23,7 +23,7 @@ Map of the repository:
 | `src/admin`, `src/pages/AdminApp.jsx` | The committee app (`/admin`): points, providers, history, agent keys. Google sign-in, only for people on the committee list |
 | `api/index.js`, `server/` | One Vercel function (`vercel.json` routes every `/api/*` to it) that runs `server/`: `routes/` (admin, provider, agent), the access policy (`access.js`), auth, scan rules (`scanLogic.js`, `scans.js`), Google token check, `db.js`, `migrate.js` |
 | `db/migrations/` | The database schema as numbered SQL files (`NNN_snake_case.sql`). Scans are append-only |
-| `shared/` | Code that runs in the browser and on the server. `shared/datetime.js` writes every date and time a person sees |
+| `shared/` | Code that runs in the browser and on the server. `shared/datetime.js` writes every date and time a person sees; `shared/contract.js` holds the values the phone and the server must agree on (the sync limits, error codes, GPS limits, vocabularies), `shared/types.js` the JSDoc shapes they exchange |
 | `tests/` | Vitest: logic, the API against a real Postgres in a throwaway schema, i18n, contrast, typography, `tests/components` |
 | `e2e/` | Playwright on a Pixel 7 (Chromium) and an iPhone 14 (WebKit) |
 | `scripts/` | Migrations, `create-admin`, the dev seed, the CI guards (`check-*.mjs`), the text rules and the edit hook |
@@ -46,6 +46,8 @@ npm run dev                          # the app on port 3000, it proxies /api to 
 Tests (details in the Testing section):
 
 ```
+npm run lint                         # ESLint (eslint.config.js): must pass with no warnings, CI runs it in the guards job
+npm run typecheck                    # TypeScript checks the JavaScript (jsconfig.json, JSDoc types): must pass, CI runs it in the guards job
 npm run test:unit                    # Vitest, all of it (about 8 minutes)
 npx vitest run tests/dates.test.js   # a quick loop: one file (or a folder, such as tests/components)
 npm run test:e2e                     # Playwright, both projects
@@ -84,6 +86,11 @@ of a merge to master, migrates the production database (ADR 0002). It is not run
   `e2e/admin.spec.js` measures it on every screen, so a new action goes in its place in that order.
 - Do not invent selectors or URLs in tests: read the real component, then use `getByRole` / `getByText` / `getByLabel`.
 - If a test fails because of a real app bug, report it. Do not change the test to hide it and do not fix the app silently.
+- `npm run lint` and `npm run typecheck` must pass. An `// eslint-disable-next-line <rule> -- <reason>` names its rule and
+  says why the code is right; a `// @ts-expect-error <reason>` likewise. Never switch a rule off, widen an ignore or loosen
+  a compiler option to get to zero: fix the code, or bring the exception to the owner.
+- A value that the phone and the server must agree on lives in `shared/contract.js` (and a shape they exchange in
+  `shared/types.js`), never as a copy on each side; `tests/contract.test.js` pins every value and fails on a copy.
 
 The two text rules (the em dash and the dates) live in one file, `scripts/text-rules.mjs`, which the two tests above and
 the Claude Code edit hook all read. Change a rule there, not in a copy.
@@ -114,6 +121,12 @@ Details that matter:
   password, a refused point, going offline) allows it with `allowConsoleErrors` in `e2e/fixtures.js`: that allows the
   message for the whole test, so keep the pattern as narrow as the message allows.
 - The offline tests run on `android-chrome` only: Playwright's WebKit cannot take a service-worker page offline.
+- Accessibility: `e2e/a11y.spec.js` scans the screens of both apps with axe (WCAG 2.1 A and AA, light and dark) through
+  `expectNoA11yViolations` in `e2e/fixtures.js`. A new screen or dialog gets a scan there. A problem that is a design
+  decision goes in `e2e/a11y-baseline.js` with its reason, matched exactly (screen, rule, element); an entry that no longer
+  occurs, or names a screen that is not scanned, fails. Fix a violation rather than baseline it.
+- Two E2E runs cannot share a machine's ports or the `e2e` schema, and the seed starts before the ports bind, so a free
+  port does not prove that no run is starting. Run one at a time.
 - The icons: iOS ignores an SVG as the Home Screen icon, so the PNGs in `public/` (`apple-touch-icon.png` 180x180 on a
   solid background, `pwa-192x192.png`, `pwa-512x512.png`) are made from `public/pwa-512x512.svg` by `npm run icons`.
   To change the logo, replace that SVG, run `npm run icons`, commit the PNGs. `tests/pwa-icons.test.js` and the
@@ -163,8 +176,9 @@ The same holds for the API and the offline sync payload (`POST /api/scans/sync`,
   ignore fields that you do not know (a newer client may send them).
 - A new rule must not reject what an old client sends in good faith. The old app decides from the error code what to do
   with a queued scan: a code it knows as permanent drops the scan on the phone, any other error keeps it for a retry
-  (`PERMANENT` in `src/worker/scanQueue.js`). So a new error code on that route is a decision, not a detail.
-- Lowering `MAX_SYNC_BATCH` or tightening a limit breaks an old app that sends the old batch size.
+  (`SYNC_PERMANENT_ERROR_CODES` in `shared/contract.js`, read as `PERMANENT` in `src/worker/scanQueue.js`). So a new
+  error code on that route is a decision, not a detail.
+- Lowering `MAX_SYNC_BATCH` (`shared/contract.js`) or tightening a limit breaks an old app that sends the old batch size.
 - When a version of a stored shape has to change (the queue key `qr.queue.v1`, the session in the browser), read the old
   one and the new one.
 
@@ -332,6 +346,11 @@ reviewing agent should apply it too.
 - A change to an existing file in `db/migrations/` (an edit, a rename, a delete), destructive SQL without a
   `-- contract: <reason>` line, or a schema change that breaks the deployment that is still serving.
 - A test that is deleted, skipped (`.skip`, `.only`, `xit`, `test.fixme`), weakened, or changed to match a bug.
+- A change that weakens the code checks: a rule switched off or turned from `error` to `warn` in `eslint.config.js`, a
+  path added to its ignores, `--max-warnings` raised, a compiler option loosened or a path dropped from `jsconfig.json`,
+  an `eslint-disable` or `@ts-expect-error` without a reason, a `@ts-ignore`, or an entry added to
+  `e2e/a11y-baseline.js` without a reason. A pull request runs its own copy of these files, so green checks do not prove
+  that they were not weakened.
 - A secret, token, password or connection string anywhere in the diff. A workflow that prints a secret, or that puts
   untrusted text (`${{ github.event.* }}`, titles, labels, branch names) straight into a `run:` script instead of `env`.
 - Personal data (names, phone numbers, e-mails, attendance rows, coordinates) written to logs or error messages, or real
