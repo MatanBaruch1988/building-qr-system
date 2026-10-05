@@ -6,8 +6,10 @@
 //     keeps the valid ones), takes an empty body and unknown fields, and always answers `{ ok: true, build }`;
 //   - the throttle is one statement (a `where`, no read before the write), so a second report within DEVICE_STATUS_MIN_INTERVAL_S
 //     changes nothing, also when two arrive together, and one after that period is stored;
-//   - the totals add up, are cut to DEVICE_STATUS_MAX_COUNT per report, and never overflow the column; `oldest_waiting_at` is kept
-//     only inside its window;
+//   - the two totals are cumulative and only grow: the column keeps the larger of its value and the reported one, so a report that
+//     is sent again, a late duplicate or an out-of-order report changes nothing; a reported value is cut to
+//     DEVICE_STATUS_MAX_TOTAL, an invalid one is ignored, and the old delta fields (not_accepted, overflowed) are ignored like any
+//     unknown field; `oldest_waiting_at` is kept only inside its window;
 //   - nobody can update another phone: the row comes from the token, never from the body; a revoked phone is refused by the guard;
 //   - the sync stamps `last_sync_at` for a phone of any version, a failure of that stamp changes nothing that the phone is told, and
 //     the answer of POST /api/scans/sync is byte for byte what it was;
@@ -24,7 +26,7 @@ import {
   APP_BUILD_RE,
   SYNC_QUEUE_MAX_ITEMS,
   DEVICE_STATUS_MIN_INTERVAL_S,
-  DEVICE_STATUS_MAX_COUNT,
+  DEVICE_STATUS_MAX_TOTAL,
   DEVICE_STATUS_MAX_AGE_DAYS,
   SCAN_ERROR_POINT_INACTIVE,
 } from '../shared/contract.js'
@@ -146,16 +148,16 @@ afterEach(() => {
 describe('parseDeviceStatusReport', () => {
   const NOW = Date.parse('2026-10-05T12:00:00.000Z')
   const parse = (body) => parseDeviceStatusReport(body, NOW)
-  const NO_REPORT = { build: null, waiting: null, oldest: undefined, notAccepted: 0, overflowed: 0 }
+  const NO_REPORT = { build: null, waiting: null, oldest: undefined, notAcceptedTotal: null, overflowedTotal: null }
 
   it('reads a full report', () => {
     const oldest = '2026-10-05T09:30:00.000Z'
-    expect(parse({ build: BUILD, waiting: 7, oldest_waiting_at: oldest, not_accepted: 2, overflowed: 3 })).toEqual({
+    expect(parse({ build: BUILD, waiting: 7, oldest_waiting_at: oldest, not_accepted_total: 2, overflowed_total: 3 })).toEqual({
       build: BUILD,
       waiting: 7,
       oldest: new Date(oldest),
-      notAccepted: 2,
-      overflowed: 3,
+      notAcceptedTotal: 2,
+      overflowedTotal: 3,
     })
   })
 
@@ -217,15 +219,20 @@ describe('parseDeviceStatusReport', () => {
     expect(parse({ waiting: -1 }).oldest).toBeUndefined()
   })
 
-  it('cuts a count to 0..DEVICE_STATUS_MAX_COUNT and counts anything that is not a whole number as 0', () => {
-    for (const [sent, kept] of [[0, 0], [1, 1], [999, 999], [DEVICE_STATUS_MAX_COUNT, DEVICE_STATUS_MAX_COUNT], [DEVICE_STATUS_MAX_COUNT + 1, DEVICE_STATUS_MAX_COUNT], [5000, DEVICE_STATUS_MAX_COUNT], [1e30, DEVICE_STATUS_MAX_COUNT], [-1, 0], [-5000, 0]]) {
-      expect(parse({ not_accepted: sent }).notAccepted, String(sent)).toBe(kept)
-      expect(parse({ overflowed: sent }).overflowed, String(sent)).toBe(kept)
+  it('takes a total as a whole number from 0, cut to DEVICE_STATUS_MAX_TOTAL, and ignores (null) anything else', () => {
+    for (const [sent, kept] of [[0, 0], [1, 1], [999, 999], [DEVICE_STATUS_MAX_TOTAL - 1, DEVICE_STATUS_MAX_TOTAL - 1], [DEVICE_STATUS_MAX_TOTAL, DEVICE_STATUS_MAX_TOTAL], [DEVICE_STATUS_MAX_TOTAL + 1, DEVICE_STATUS_MAX_TOTAL], [5_000_000, DEVICE_STATUS_MAX_TOTAL], [1e30, DEVICE_STATUS_MAX_TOTAL], [Number.MAX_SAFE_INTEGER, DEVICE_STATUS_MAX_TOTAL]]) {
+      expect(parse({ not_accepted_total: sent }).notAcceptedTotal, String(sent)).toBe(kept)
+      expect(parse({ overflowed_total: sent }).overflowedTotal, String(sent)).toBe(kept)
     }
-    for (const sent of [1.5, 0.5, '3', '', null, true, [], [2], {}, undefined]) {
-      expect(parse({ not_accepted: sent }).notAccepted, JSON.stringify(sent)).toBe(0)
-      expect(parse({ overflowed: sent }).overflowed, JSON.stringify(sent)).toBe(0)
+    for (const sent of [-1, -5000, -1e30, 1.5, 0.5, NaN, '3', '', null, true, false, [], [2], {}, undefined]) {
+      expect(parse({ not_accepted_total: sent }).notAcceptedTotal, JSON.stringify(sent)).toBeNull()
+      expect(parse({ overflowed_total: sent }).overflowedTotal, JSON.stringify(sent)).toBeNull()
     }
+  })
+
+  it('does not read the old delta fields `not_accepted` and `overflowed`: they are unknown fields now', () => {
+    expect(parse({ not_accepted: 5, overflowed: 7 })).toEqual(NO_REPORT)
+    expect(parse({ not_accepted: 5, overflowed: 7, not_accepted_total: 2, overflowed_total: 3 })).toEqual({ ...NO_REPORT, notAcceptedTotal: 2, overflowedTotal: 3 })
   })
 
   it('reads only the five fields: unknown fields, and a prototype that the body brings, change nothing', () => {
@@ -245,7 +252,7 @@ describe('POST /api/my/device-status', () => {
     const labelBefore = (await wholeRow(ids.a.deviceId)).label
     const oldest = agoIso(3 * HOUR)
 
-    const res = await report({ build: BUILD, waiting: 7, oldest_waiting_at: oldest, not_accepted: 2, overflowed: 3 }, ids.a.token)
+    const res = await report({ build: BUILD, waiting: 7, oldest_waiting_at: oldest, not_accepted_total: 2, overflowed_total: 3 }, ids.a.token)
     expect(res.status).toBe(200)
     expect(res.text).toBe(JSON.stringify({ ok: true, build: BUILD }))
 
@@ -266,9 +273,10 @@ describe('POST /api/my/device-status', () => {
   it('answers the same whatever it was sent: ok, and the server build (null when the server has none)', { timeout: 120_000 }, async () => {
     await blank(ids.a.deviceId)
     const bodies = [
-      { build: BUILD, waiting: 1, oldest_waiting_at: agoIso(HOUR), not_accepted: 1, overflowed: 1 },
+      { build: BUILD, waiting: 1, oldest_waiting_at: agoIso(HOUR), not_accepted_total: 1, overflowed_total: 1 },
       {},
-      { build: 'nonsense', waiting: -3, oldest_waiting_at: 'x', not_accepted: 'y', overflowed: null },
+      { build: 'nonsense', waiting: -3, oldest_waiting_at: 'x', not_accepted_total: 'y', overflowed_total: null },
+      { not_accepted: 4, overflowed: 4 }, // the old delta fields: unknown now, answered like any other body
       { future: 'field' },
     ]
     for (const [sha, build] of [[SHA, BUILD], [undefined, null], ['', null]]) {
@@ -287,7 +295,7 @@ describe('POST /api/my/device-status', () => {
 
   describe('a field that is not valid is ignored (never a 400), and the valid ones are kept', () => {
     // [field, a value that is not valid, what the column holds then (the three other fields are valid)]
-    const GOOD = { build: BUILD, waiting: 4, oldest_waiting_at: null, not_accepted: 1, overflowed: 1 }
+    const GOOD = { build: BUILD, waiting: 4, oldest_waiting_at: null, not_accepted_total: 1, overflowed_total: 1 }
     const EXPECTED_GOOD = { app_build: BUILD, waiting_count: 4, oldest_waiting_at: null, not_accepted_total: 1, overflow_total: 1 }
     const CASES = [
       ['build', 'not a build', { app_build: null }],
@@ -297,10 +305,12 @@ describe('POST /api/my/device-status', () => {
       ['waiting', '4', { waiting_count: null }],
       ['oldest_waiting_at', 'yesterday', { oldest_waiting_at: null }],
       ['oldest_waiting_at', agoIso((DEVICE_STATUS_MAX_AGE_DAYS + 1) * DAY), { oldest_waiting_at: null }],
-      ['not_accepted', 'many', { not_accepted_total: 0 }],
-      ['not_accepted', 2.5, { not_accepted_total: 0 }],
-      ['overflowed', null, { overflow_total: 0 }],
-      ['overflowed', {}, { overflow_total: 0 }],
+      ['not_accepted_total', 'many', { not_accepted_total: 0 }],
+      ['not_accepted_total', 2.5, { not_accepted_total: 0 }],
+      ['not_accepted_total', -3, { not_accepted_total: 0 }],
+      ['overflowed_total', null, { overflow_total: 0 }],
+      ['overflowed_total', {}, { overflow_total: 0 }],
+      ['overflowed_total', -1, { overflow_total: 0 }],
     ]
     for (const [field, bad, instead] of CASES) {
       it(`${field} = ${JSON.stringify(bad)}`, async () => {
@@ -316,7 +326,7 @@ describe('POST /api/my/device-status', () => {
 
     it('every field at once', async () => {
       await blank(ids.a.deviceId)
-      const res = await report({ build: [], waiting: 'x', oldest_waiting_at: 5, not_accepted: -1, overflowed: '1' }, ids.a.token)
+      const res = await report({ build: [], waiting: 'x', oldest_waiting_at: 5, not_accepted_total: -1, overflowed_total: '1' }, ids.a.token)
       expect(res.status).toBe(200)
       expect(res.json.ok).toBe(true)
       expect(await reported(ids.a.deviceId)).toEqual({ ...NOTHING, status_at: expect.any(Date), oldest_waiting_at: null })
@@ -362,8 +372,11 @@ describe('POST /api/my/device-status', () => {
       last_sync_at: agoIso(HOUR),
       last_seen_at: agoIso(HOUR),
       created_at: agoIso(DAY),
-      not_accepted_total: 500,
+      // The name of the column of the second total, which is not a field of a report (the field is `overflowed_total`), and the
+      // old delta fields: unknown, so they reach nothing. (`not_accepted_total` is a field of a report now, so it is not here.)
       overflow_total: 500,
+      not_accepted: 500,
+      overflowed: 500,
     }
     const res = await report(body, ids.a.token)
     expect(res.status).toBe(200)
@@ -380,7 +393,7 @@ describe('POST /api/my/device-status', () => {
 
     it('stores the first report, ignores the next ones within the period, and stores one after it', async () => {
       await blank(ids.a.deviceId)
-      expect((await report({ build: BUILD, waiting: 3, not_accepted: 1, overflowed: 1 }, ids.a.token)).status).toBe(200)
+      expect((await report({ build: BUILD, waiting: 3, not_accepted_total: 1, overflowed_total: 1 }, ids.a.token)).status).toBe(200)
       const first = await wholeRow(ids.a.deviceId)
       expect(first.waiting_count).toBe(3)
 
@@ -390,17 +403,18 @@ describe('POST /api/my/device-status', () => {
           await reportedAgo(ids.a.deviceId, seconds)
           first.status_at = (await wholeRow(ids.a.deviceId)).status_at
         }
-        const throttled = await report({ build: 'dev', waiting: 99, oldest_waiting_at: agoIso(HOUR), not_accepted: 50, overflowed: 50 }, ids.a.token)
+        const throttled = await report({ build: 'dev', waiting: 99, oldest_waiting_at: agoIso(HOUR), not_accepted_total: 50, overflowed_total: 50 }, ids.a.token)
         expect(throttled.status).toBe(200)
         expect(throttled.json.ok).toBe(true)
         expect(steady(await wholeRow(ids.a.deviceId)), `${seconds ?? 0} seconds after the last one`).toEqual(steady(first))
       }
 
-      // After the period it is stored, and the totals go on from what they were.
+      // After the period it is stored, and each total is the larger of what it was and what the report says (the totals are
+      // cumulative, so they are not added to what they were).
       await reportedAgo(ids.a.deviceId, DEVICE_STATUS_MIN_INTERVAL_S + 1)
-      const later = await report({ build: 'dev', waiting: 99, not_accepted: 50, overflowed: 40 }, ids.a.token)
+      const later = await report({ build: 'dev', waiting: 99, not_accepted_total: 50, overflowed_total: 40 }, ids.a.token)
       expect(later.status).toBe(200)
-      expect(await reported(ids.a.deviceId)).toMatchObject({ app_build: 'dev', waiting_count: 99, not_accepted_total: 51, overflow_total: 41 })
+      expect(await reported(ids.a.deviceId)).toMatchObject({ app_build: 'dev', waiting_count: 99, not_accepted_total: 50, overflow_total: 40 })
     })
 
     it('is a single UPDATE: no statement reads the phone\'s row to decide, so there is no read-then-write to race', async () => {
@@ -418,49 +432,99 @@ describe('POST /api/my/device-status', () => {
 
     it('holds when two reports arrive together: one is stored, the other is not', async () => {
       await blank(ids.a.deviceId)
+      // The two reports differ in every field, so the row says which one was stored, and that it is that one as a whole.
       const [one, two] = await Promise.all([
-        report({ waiting: 1, not_accepted: 1, overflowed: 1 }, ids.a.token),
-        report({ waiting: 2, not_accepted: 1, overflowed: 1 }, ids.a.token),
+        report({ waiting: 1, not_accepted_total: 1, overflowed_total: 11 }, ids.a.token),
+        report({ waiting: 2, not_accepted_total: 2, overflowed_total: 12 }, ids.a.token),
       ])
       expect([one.status, two.status]).toEqual([200, 200])
       const row = await reported(ids.a.deviceId)
-      // Counted once, not twice: the second statement waited for the first, saw its status_at, and matched no row.
-      expect([row.not_accepted_total, row.overflow_total]).toEqual([1, 1])
+      // Stored once, not twice: the second statement waited for the first, saw its status_at, and matched no row. If both were
+      // stored the totals would be 2 and 12 whichever ran last, which does not fit the row when `waiting: 1` ran last.
       expect([1, 2]).toContain(row.waiting_count)
+      expect([row.not_accepted_total, row.overflow_total]).toEqual([row.waiting_count, 10 + row.waiting_count])
     })
   })
 
-  describe('the running totals', () => {
-    it('add up from report to report, and a report adds at most DEVICE_STATUS_MAX_COUNT', { timeout: 120_000 }, async () => {
+  // The two totals are CUMULATIVE: the phone counts them since it signed in and never resets them, and the server keeps the larger
+  // of the stored value and the reported one. So nothing that repeats or arrives late can inflate them.
+  describe('the totals: cumulative, and they only grow', () => {
+    const totalsOf = (row) => [row.not_accepted_total, row.overflow_total]
+    /** Sends `body` as a report that is past the throttle window, so that it is really stored, and returns the row as stored. */
+    const send = async (body) => {
+      await reportedAgo(ids.a.deviceId, 60)
+      const aged = (await reported(ids.a.deviceId)).status_at
+      expect((await report(body, ids.a.token)).status).toBe(200)
+      const row = await reported(ids.a.deviceId)
+      expect(row.status_at.getTime(), 'the report was stored, not throttled').toBeGreaterThan(aged.getTime())
+      return row
+    }
+
+    it('a higher total raises it, and a total is taken as it is, never added to the stored one', { timeout: 120_000 }, async () => {
       await blank(ids.a.deviceId)
-      const total = async () => {
-        const { not_accepted_total, overflow_total } = await reported(ids.a.deviceId)
-        return [not_accepted_total, overflow_total]
-      }
-      const next = async (body) => {
-        await reportedAgo(ids.a.deviceId, 60)
-        expect((await report(body, ids.a.token)).status).toBe(200)
-        return total()
-      }
-      expect(await next({ not_accepted: 3, overflowed: 4 })).toEqual([3, 4])
-      expect(await next({ not_accepted: 2, overflowed: 1 })).toEqual([5, 5])
-      expect(await next({ not_accepted: 0 })).toEqual([5, 5])
-      expect(await next({})).toEqual([5, 5])
-      expect(await next({ not_accepted: DEVICE_STATUS_MAX_COUNT + 1, overflowed: 5000 })).toEqual([5 + DEVICE_STATUS_MAX_COUNT, 5 + DEVICE_STATUS_MAX_COUNT])
-      expect(await next({ not_accepted: -7, overflowed: -1 })).toEqual([5 + DEVICE_STATUS_MAX_COUNT, 5 + DEVICE_STATUS_MAX_COUNT]) // a negative count takes nothing away
-      expect(await next({ not_accepted: 'x', overflowed: 1.5 })).toEqual([5 + DEVICE_STATUS_MAX_COUNT, 5 + DEVICE_STATUS_MAX_COUNT])
+      expect(totalsOf(await send({ not_accepted_total: 3, overflowed_total: 4 }))).toEqual([3, 4])
+      expect(totalsOf(await send({ not_accepted_total: 5, overflowed_total: 4 }))).toEqual([5, 4]) // 5, not 3 + 5
+      expect(totalsOf(await send({ not_accepted_total: 5, overflowed_total: 10 }))).toEqual([5, 10]) // one total can rise alone
+      expect(totalsOf(await send({ not_accepted_total: 9 }))).toEqual([9, 10]) // a total that is not sent keeps its value
+      expect(totalsOf(await send({ build: BUILD, waiting: 1 }))).toEqual([9, 10])
+      expect(totalsOf(await send({}))).toEqual([9, 10])
     })
 
-    it('never overflow the column: the sum is cut to the largest integer, and the report is still stored', async () => {
+    it('the same report sent twice, after the throttle window, leaves the totals unchanged (a retry after a lost answer)', { timeout: 120_000 }, async () => {
       await blank(ids.a.deviceId)
-      await db.pool.query('update provider_devices set not_accepted_total = $2, overflow_total = $3 where id = $1', [ids.a.deviceId, INTEGER_MAX - 5, INTEGER_MAX])
-      const res = await report({ build: BUILD, waiting: 8, not_accepted: DEVICE_STATUS_MAX_COUNT, overflowed: DEVICE_STATUS_MAX_COUNT }, ids.a.token)
-      expect(res.status).toBe(200)
-      expect(res.json.ok).toBe(true)
-      expect(await reported(ids.a.deviceId)).toMatchObject({ app_build: BUILD, waiting_count: 8, not_accepted_total: INTEGER_MAX, overflow_total: INTEGER_MAX })
-      await reportedAgo(ids.a.deviceId, 60)
-      expect((await report({ not_accepted: 1, overflowed: 1 }, ids.a.token)).status).toBe(200)
-      expect(await reported(ids.a.deviceId)).toMatchObject({ not_accepted_total: INTEGER_MAX, overflow_total: INTEGER_MAX })
+      const body = { build: BUILD, waiting: 2, not_accepted_total: 7, overflowed_total: 3 }
+      expect(totalsOf(await send(body))).toEqual([7, 3])
+      // The phone sends the same report again, as a retry or by mistake, once the throttle window has passed: it is stored (status_at
+      // moves, which send() checks), and the totals are what they were. Adding "since the last report" would have made them 14 and 6.
+      for (let again = 1; again <= 3; again++) expect(totalsOf(await send(body)), `sent ${again + 1} times`).toEqual([7, 3])
+    })
+
+    it('a lower total than the stored one leaves the stored value (a late duplicate, an out-of-order report)', { timeout: 120_000 }, async () => {
+      await blank(ids.a.deviceId)
+      expect(totalsOf(await send({ not_accepted_total: 7, overflowed_total: 5 }))).toEqual([7, 5])
+      // The late report is stored for the rest (the build and the queue are as it says), and for the totals it changes nothing.
+      const late = await send({ build: 'dev', waiting: 6, not_accepted_total: 3, overflowed_total: 2 })
+      expect(late).toMatchObject({ app_build: 'dev', waiting_count: 6 })
+      expect(totalsOf(late)).toEqual([7, 5])
+      expect(totalsOf(await send({ not_accepted_total: 0, overflowed_total: 0 }))).toEqual([7, 5]) // a phone that counts from 0 again
+      expect(totalsOf(await send({ not_accepted_total: 2, overflowed_total: 9 }))).toEqual([7, 9]) // one total lower, one higher
+    })
+
+    it('ignores the old delta fields `not_accepted` and `overflowed`, alone and next to the totals', { timeout: 120_000 }, async () => {
+      await blank(ids.a.deviceId)
+      expect(totalsOf(await send({ build: BUILD, waiting: 4, not_accepted: 5, overflowed: 6 }))).toEqual([0, 0])
+      expect(await reported(ids.a.deviceId)).toMatchObject({ app_build: BUILD, waiting_count: 4 }) // the rest of that report was stored
+      expect(totalsOf(await send({ not_accepted_total: 2, overflowed_total: 2, not_accepted: 100, overflowed: 100 }))).toEqual([2, 2])
+      expect(totalsOf(await send({ not_accepted: 50, overflowed: 50 }))).toEqual([2, 2])
+    })
+
+    it('cuts a total to DEVICE_STATUS_MAX_TOTAL, and the report is still stored', { timeout: 120_000 }, async () => {
+      await blank(ids.a.deviceId)
+      expect(DEVICE_STATUS_MAX_TOTAL).toBe(1000000)
+      expect(totalsOf(await send({ not_accepted_total: DEVICE_STATUS_MAX_TOTAL - 1, overflowed_total: DEVICE_STATUS_MAX_TOTAL }))).toEqual([DEVICE_STATUS_MAX_TOTAL - 1, DEVICE_STATUS_MAX_TOTAL])
+      const over = await send({ build: BUILD, waiting: 8, not_accepted_total: DEVICE_STATUS_MAX_TOTAL + 1, overflowed_total: 5_000_000 })
+      expect(over).toMatchObject({ app_build: BUILD, waiting_count: 8 })
+      expect(totalsOf(over)).toEqual([DEVICE_STATUS_MAX_TOTAL, DEVICE_STATUS_MAX_TOTAL])
+      expect(totalsOf(await send({ not_accepted_total: 1e30, overflowed_total: Number.MAX_SAFE_INTEGER }))).toEqual([DEVICE_STATUS_MAX_TOTAL, DEVICE_STATUS_MAX_TOTAL])
+      expect(totalsOf(await send({ not_accepted_total: 1, overflowed_total: 1 }))).toEqual([DEVICE_STATUS_MAX_TOTAL, DEVICE_STATUS_MAX_TOTAL]) // it does not go down
+    })
+
+    it('keeps a stored value that is above the maximum (the column is an integer, and nothing makes it overflow)', async () => {
+      await blank(ids.a.deviceId)
+      await db.pool.query('update provider_devices set not_accepted_total = $2, overflow_total = $3 where id = $1', [ids.a.deviceId, INTEGER_MAX, INTEGER_MAX - 5])
+      expect(totalsOf(await send({ build: BUILD, waiting: 8, not_accepted_total: DEVICE_STATUS_MAX_TOTAL, overflowed_total: DEVICE_STATUS_MAX_TOTAL }))).toEqual([INTEGER_MAX, INTEGER_MAX - 5])
+      expect(await reported(ids.a.deviceId)).toMatchObject({ app_build: BUILD, waiting_count: 8 })
+    })
+
+    it('ignores a total that is not valid (never a 400), and the stored value stays', { timeout: 120_000 }, async () => {
+      await blank(ids.a.deviceId)
+      expect(totalsOf(await send({ not_accepted_total: 7, overflowed_total: 6 }))).toEqual([7, 6])
+      for (const bad of [-1, -1e30, 1.5, 0.5, '9', '', 'x', null, true, false, [], [9], {}]) {
+        expect(totalsOf(await send({ not_accepted_total: bad, overflowed_total: bad })), JSON.stringify(bad)).toEqual([7, 6])
+      }
+      // One valid total next to one that is not: the valid one is taken.
+      expect(totalsOf(await send({ not_accepted_total: 9, overflowed_total: 'x' }))).toEqual([9, 6])
+      expect(totalsOf(await send({ not_accepted_total: -2, overflowed_total: 8 }))).toEqual([9, 8])
     })
   })
 
@@ -495,7 +559,7 @@ describe('POST /api/my/device-status', () => {
       await blank(ids.a.deviceId)
       const when = agoIso(5 * HOUR)
       expect(await oldestAfter({ waiting: 6, oldest_waiting_at: when })).toEqual(new Date(when))
-      expect(await oldestAfter({ build: BUILD, not_accepted: 1 })).toEqual(new Date(when)) // a report about something else
+      expect(await oldestAfter({ build: BUILD, not_accepted_total: 1 })).toEqual(new Date(when)) // a report about something else
       expect(await oldestAfter({ waiting: 5 })).toEqual(new Date(when))
       expect(await oldestAfter({ waiting: 'x' })).toEqual(new Date(when))
       expect(await oldestAfter({ oldest_waiting_at: null })).toBeNull()
@@ -523,7 +587,7 @@ describe('POST /api/my/device-status', () => {
       const siblingBefore = await wholeRow(sibling.deviceId)
 
       const res = await report(
-        { build: BUILD, waiting: 9, not_accepted: 5, id: ids.b.deviceId, device_id: ids.b.deviceId, deviceId: ids.b.deviceId, provider_id: ids.b.id, token_hash: sha256(ids.b.token) },
+        { build: BUILD, waiting: 9, not_accepted_total: 5, id: ids.b.deviceId, device_id: ids.b.deviceId, deviceId: ids.b.deviceId, provider_id: ids.b.id, token_hash: sha256(ids.b.token) },
         ids.a.token,
       )
       expect(res.status).toBe(200)
@@ -539,7 +603,7 @@ describe('POST /api/my/device-status', () => {
       expect((await call('DELETE', '/api/session', { token: phone.token })).status).toBe(200)
       const revoked = await wholeRow(phone.deviceId)
 
-      const res = await report({ build: 'dev', waiting: 50, not_accepted: 9 }, phone.token)
+      const res = await report({ build: 'dev', waiting: 50, not_accepted_total: 9 }, phone.token)
       expect(res.status).toBe(401)
       expect(res.json).toEqual({ error: { code: 'invalid_session', message: 'Session expired' } })
       expect(steady(await wholeRow(phone.deviceId))).toEqual(steady(revoked))
@@ -634,7 +698,7 @@ describe('POST /api/scans/sync stamps last_sync_at', () => {
 
   it('is not a report: it leaves everything that a phone reports as it was', async () => {
     await blank(ids.a.deviceId)
-    expect((await report({ build: BUILD, waiting: 4, oldest_waiting_at: agoIso(HOUR), not_accepted: 2, overflowed: 1 }, ids.a.token)).status).toBe(200)
+    expect((await report({ build: BUILD, waiting: 4, oldest_waiting_at: agoIso(HOUR), not_accepted_total: 2, overflowed_total: 1 }, ids.a.token)).status).toBe(200)
     const before = await reported(ids.a.deviceId)
     expect((await sync([accepted()], ids.a.token)).status).toBe(200)
     expect(await reported(ids.a.deviceId)).toEqual({ ...before, last_sync_at: expect.any(Date) })
@@ -739,7 +803,7 @@ describe('GET /api/admin/providers/:id/devices', () => {
     reportedPhone = await signIn(c, LABEL)
     silentPhone = await signIn(c, LABEL + ' 2')
     signedOutPhone = await signIn(c, LABEL + ' 3')
-    expect((await report({ build: BUILD, waiting: 12, oldest_waiting_at: agoIso(6 * HOUR), not_accepted: 3, overflowed: 1 }, reportedPhone.token)).status).toBe(200)
+    expect((await report({ build: BUILD, waiting: 12, oldest_waiting_at: agoIso(6 * HOUR), not_accepted_total: 3, overflowed_total: 1 }, reportedPhone.token)).status).toBe(200)
     expect((await report({ build: BUILD, waiting: 1 }, signedOutPhone.token)).status).toBe(200)
     expect((await call('DELETE', '/api/session', { token: signedOutPhone.token })).status).toBe(200)
     // The silent phone synced once (an old app does that and reports nothing), and was used most recently.
