@@ -2,12 +2,13 @@
 // CRON_SECRET of the deployment). docs/privacy.md says what is kept and for how long; this file proves that the job does
 // exactly that and nothing more:
 //   - it deletes the committee sessions that expired or were revoked more than 30 days ago, the login attempts older than
-//     1 day, and it clears the label of a phone that was revoked more than 90 days ago TOGETHER WITH everything that the phone
-//     reported about itself (migration 010: build, time of the report, what waited and since when, the two totals, the last
-//     upload), also when the label of that phone is empty;
+//     1 day, and the recorded errors (app_errors) whose last event is older than 90 days, and it clears the label of a phone
+//     that was revoked more than 90 days ago TOGETHER WITH everything that the phone reported about itself (migration 010:
+//     build, time of the report, what waited and since when, the two totals, the last upload), also when the label of that
+//     phone is empty;
 //   - it never touches a scan, the audit log, an active session or phone (label and reported status alike), or anything that is
 //     not yet due (every table that the job may not change is compared row for row before and after);
-//   - it writes one audit row, with the three counts and nothing else, and a second run finds nothing more;
+//   - it writes one audit row, with the four counts and nothing else, and a second run finds nothing more;
 //   - the route refuses every request without the secret, and every request at all when CRON_SECRET is not set, before any
 //     database statement.
 // It runs against the throwaway schema like the other API tests. The data is fake: names like "Fake Browser A" stand in for
@@ -17,7 +18,12 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { setupDb, call, seedAdmin } from './helpers.js'
 import { runRetention } from '../server/retention.js'
 import { getPool, setPool } from '../server/db.js'
-import { RETENTION_SESSION_DAYS, RETENTION_LOGIN_ATTEMPT_DAYS, RETENTION_DEVICE_LABEL_DAYS } from '../server/config.js'
+import {
+  RETENTION_SESSION_DAYS,
+  RETENTION_LOGIN_ATTEMPT_DAYS,
+  RETENTION_DEVICE_LABEL_DAYS,
+  RETENTION_APP_ERROR_DAYS,
+} from '../server/config.js'
 
 let db
 let providerId
@@ -48,25 +54,33 @@ const ATTEMPTS_GONE = ['attempt-48h-a', 'attempt-48h-b']
 const ATTEMPTS_KEPT = ['attempt-1h', 'attempt-23h']
 const LABELS_CLEARED = ['revoked-91d', 'revoked-400d-with-scan']
 const LABELS_KEPT = { 'revoked-89d': 'Fake Browser B', active: 'Fake Browser C' }
+// The recorded errors (app_errors) are named by their `place`. The age that counts is the last event: a row whose first event
+// is old but whose last one is recent is still in use.
+const ERRORS_GONE = ['due-91d', 'due-400d']
+const ERRORS_KEPT = ['kept-89d', 'kept-now', 'kept-first-old-last-recent']
 // A phone that has no label but still holds what it reported is due too: a status must not outlive the period because the label was empty.
 const STATUS_ONLY_CLEARED = ['revoked-91d-no-label']
 const PHONES_CLEARED = [...LABELS_CLEARED, ...STATUS_ONLY_CLEARED]
 // A phone that is revoked and due but holds nothing to clear (no label, no status) is not touched and not counted.
 const NOTHING_TO_CLEAR = 'revoked-91d-nothing'
-const COUNTS = { sessions: 3, loginAttempts: 2, deviceLabels: 3 }
+const COUNTS = { sessions: 3, loginAttempts: 2, deviceLabels: 3, appErrors: 2 }
 // What a phone reports about itself (migration 010): every phone of the fixture but NOTHING_TO_CLEAR has this, and a cleared phone has CLEARED.
 const REPORTED = { app_build: 'abcdef1', waiting_count: 12, not_accepted_total: 4, overflow_total: 2 }
 const CLEARED = { label: '', app_build: null, status_at: null, waiting_count: null, oldest_waiting_at: null, last_sync_at: null, not_accepted_total: 0, overflow_total: 0 }
 
 /**
- * Replaces the sessions, login attempts and phones of the schema with the fixture above, and adds two scans (one from a
+ * Replaces the sessions, login attempts, phones and recorded errors of the schema with the fixture above, and adds two scans (one from a
  * phone whose label is due to be cleared, one from an active phone) and two audit rows (one old). The scans, the audit
  * log and the other tables are only ever added to: a test compares them before and after a run.
  */
 async function seed() {
   const q = (text, params) => db.pool.query(text, params)
   // One statement for each kind of row (a statement is several round trips to the database, and the schema is remote).
-  await q('with a as (delete from admin_sessions), b as (delete from auth_attempts), c as (delete from provider_devices) select 1')
+  await q(
+    `with a as (delete from admin_sessions), b as (delete from auth_attempts), c as (delete from provider_devices),
+          d as (delete from app_errors)
+     select 1`,
+  )
 
   // expires: in how many days it expires (negative = in the past), revoked: how many days ago it was revoked (null = never).
   const sessions = [
@@ -95,6 +109,22 @@ async function seed() {
     `insert into auth_attempts (scope, key, at)
      select 'admin', name, now() - make_interval(hours => hours) from jsonb_to_recordset($1::jsonb) as t(name text, hours int)`,
     [JSON.stringify(attempts)],
+  )
+
+  // Safe fields only, like the real rows: the route, the method, the status and a code. Days are counted back from now.
+  const events = [
+    { name: 'due-91d', first_days: 91, last_days: 91 },
+    { name: 'due-400d', first_days: 400, last_days: 400 },
+    { name: 'kept-89d', first_days: 89, last_days: 89 },
+    { name: 'kept-now', first_days: 0, last_days: 0 },
+    { name: 'kept-first-old-last-recent', first_days: 200, last_days: 1 },
+  ]
+  await q(
+    `insert into app_errors (bucket, source, kind, place, method, status, code, count, first_at, last_at)
+     select date_trunc('hour', now() - make_interval(days => last_days)), 'server', 'error', name, 'GET', 500, 'XX000', 3,
+            now() - make_interval(days => first_days), now() - make_interval(days => last_days)
+       from jsonb_to_recordset($1::jsonb) as t(name text, first_days int, last_days int)`,
+    [JSON.stringify(events)],
   )
 
   const fixtures = [
@@ -162,6 +192,10 @@ async function snapshot() {
 }
 
 // Sorted here, not by the database: its collation may order punctuation differently from the list that a test compares with.
+// The rows of app_errors that are named, as JSON, in the order of their place (the whole row, so a changed column shows).
+const errorRows = async (places) =>
+  (await db.pool.query('select to_jsonb(e) as row from app_errors e where place = any($1) order by place', [places])).rows
+const errorPlaces = async () => (await db.pool.query('select place from app_errors')).rows.map((r) => r.place).sort()
 const hashes = async (table, column) => (await db.pool.query(`select ${column} as name from ${table}`)).rows.map((r) => r.name).sort()
 /** One phone as JSON: its label and everything that it reported, with the other columns. */
 const phoneRow = async (id) => (await db.pool.query('select to_jsonb(d) as row from provider_devices d where id = $1', [id])).rows[0].row
@@ -172,7 +206,7 @@ const labelsByName = async (devices) => {
 }
 
 // The tables that the job is allowed to change. Everything else must come out of a run exactly as it went in.
-const MAY_CHANGE = new Set(['admin_sessions', 'auth_attempts', 'provider_devices', 'audit_log'])
+const MAY_CHANGE = new Set(['admin_sessions', 'auth_attempts', 'provider_devices', 'audit_log', 'app_errors'])
 const sameExceptWhatMayChange = (before, after) => {
   const keep = (state) => Object.fromEntries(Object.entries(state).filter(([name]) => !MAY_CHANGE.has(name)))
   expect(keep(after)).toEqual(keep(before))
@@ -200,9 +234,11 @@ async function withStatements(fn) {
 }
 
 describe('the periods are the owner\'s decision of 04/10/2026', () => {
-  it('are 30 days for a session, 1 day for a login attempt and 90 days for the label of a revoked phone', () => {
+  it('are 30 days for a session, 1 day for a login attempt, 90 days for the label of a revoked phone and 90 days for a recorded error', () => {
     // A change here is a change of what the committee promised in docs/privacy.md: it needs the owner's decision.
-    expect([RETENTION_SESSION_DAYS, RETENTION_LOGIN_ATTEMPT_DAYS, RETENTION_DEVICE_LABEL_DAYS]).toEqual([30, 1, 90])
+    expect([RETENTION_SESSION_DAYS, RETENTION_LOGIN_ATTEMPT_DAYS, RETENTION_DEVICE_LABEL_DAYS, RETENTION_APP_ERROR_DAYS]).toEqual([
+      30, 1, 90, 90,
+    ])
   })
 })
 
@@ -213,11 +249,18 @@ describe('runRetention', () => {
     const auditBefore = before.audit_log
     const keptSessions = (await db.pool.query(`select to_jsonb(s) as row from admin_sessions s where token_hash = any($1) order by token_hash`, [SESSIONS_KEPT])).rows
     const keptAttempts = (await db.pool.query(`select to_jsonb(a) as row from auth_attempts a where key = any($1) order by key`, [ATTEMPTS_KEPT])).rows
+    const keptErrors = await errorRows(ERRORS_KEPT)
 
     // The fixture is what the lists say: the due rows and the rest are all there before the run.
     expect(await hashes('admin_sessions', 'token_hash')).toEqual([...SESSIONS_GONE, ...SESSIONS_KEPT].sort())
     expect(await hashes('auth_attempts', 'key')).toEqual([...ATTEMPTS_GONE, ...ATTEMPTS_KEPT].sort())
-    expect([SESSIONS_GONE.length, ATTEMPTS_GONE.length, PHONES_CLEARED.length]).toEqual([COUNTS.sessions, COUNTS.loginAttempts, COUNTS.deviceLabels])
+    expect(await errorPlaces()).toEqual([...ERRORS_GONE, ...ERRORS_KEPT].sort())
+    expect([SESSIONS_GONE.length, ATTEMPTS_GONE.length, PHONES_CLEARED.length, ERRORS_GONE.length]).toEqual([
+      COUNTS.sessions,
+      COUNTS.loginAttempts,
+      COUNTS.deviceLabels,
+      COUNTS.appErrors,
+    ])
     // The phones of the fixture hold what the lists say (a fixture without a status would make the check below an empty one).
     const phonesBefore = Object.fromEntries(before.provider_devices.map((d) => [d.id, d]))
     for (const [name, id] of Object.entries(devices)) {
@@ -235,6 +278,10 @@ describe('runRetention', () => {
     expect(await hashes('auth_attempts', 'key')).toEqual([...ATTEMPTS_KEPT].sort())
     const afterAttempts = (await db.pool.query(`select to_jsonb(a) as row from auth_attempts a where key = any($1) order by key`, [ATTEMPTS_KEPT])).rows
     expect(afterAttempts).toEqual(keptAttempts)
+    // Recorded errors, the same way: the two whose last event is over 90 days old are gone (one of them by its first event as
+    // well), and the others are the very same rows, also the one whose first event is old but whose last one is recent.
+    expect(await errorPlaces()).toEqual([...ERRORS_KEPT].sort())
+    expect(await errorRows(ERRORS_KEPT)).toEqual(keptErrors)
     // Phones: every row is still there. A phone that is due has its label AND everything that it reported cleared, and no other
     // column changed. A phone that is not due (an active one, one revoked 89 days ago) is the very same row, status included, and a
     // due phone that holds nothing is the same row too.
@@ -272,7 +319,7 @@ describe('runRetention', () => {
       action: 'retention.run',
       entity: null,
       entity_id: null,
-      detail: { sessions: 3, login_attempts: 2, device_labels: 3 },
+      detail: { sessions: 3, login_attempts: 2, device_labels: 3, app_errors: 2 },
     })
   })
 
@@ -282,10 +329,10 @@ describe('runRetention', () => {
     await runRetention()
     const { rows } = await db.pool.query('select * from audit_log where id > $1', [max[0].n])
     expect(rows).toHaveLength(1)
-    expect(Object.keys(rows[0].detail).sort()).toEqual(['device_labels', 'login_attempts', 'sessions'])
+    expect(Object.keys(rows[0].detail).sort()).toEqual(['app_errors', 'device_labels', 'login_attempts', 'sessions'])
     for (const value of Object.values(rows[0].detail)) expect(Number.isInteger(value)).toBe(true)
     const text = JSON.stringify(rows[0])
-    for (const secret of ['Fake Browser', 'Fake Person', 'token-', 'expired-', 'revoked-', 'attempt-', 'admin@test.local', adminId, providerId]) {
+    for (const secret of ['Fake Browser', 'Fake Person', 'token-', 'expired-', 'revoked-', 'attempt-', 'due-', 'kept-', 'admin@test.local', adminId, providerId]) {
       expect(text, secret).not.toContain(secret)
     }
   })
@@ -294,24 +341,43 @@ describe('runRetention', () => {
     await seed()
     expect(await runRetention()).toEqual(COUNTS)
     const first = await snapshot()
-    expect(await runRetention()).toEqual({ sessions: 0, loginAttempts: 0, deviceLabels: 0 })
+    expect(await runRetention()).toEqual({ sessions: 0, loginAttempts: 0, deviceLabels: 0, appErrors: 0 })
     const second = await snapshot()
     sameExceptWhatMayChange(first, second)
     expect(second.admin_sessions).toEqual(first.admin_sessions)
     expect(second.auth_attempts).toEqual(first.auth_attempts)
     expect(second.provider_devices).toEqual(first.provider_devices)
+    expect(second.app_errors).toEqual(first.app_errors)
     // The second run adds only its own audit row, with zeros.
     expect(second.audit_log.filter((r) => first.audit_log.some((b) => b.id === r.id))).toEqual(first.audit_log)
     const added = second.audit_log.filter((r) => !first.audit_log.some((b) => b.id === r.id))
     expect(added).toHaveLength(1)
-    expect(added[0].detail).toEqual({ sessions: 0, login_attempts: 0, device_labels: 0 })
+    expect(added[0].detail).toEqual({ sessions: 0, login_attempts: 0, device_labels: 0, app_errors: 0 })
   })
 
   it('does nothing to a database where nothing is due', async () => {
     await db.pool.query('delete from admin_sessions')
     await db.pool.query('delete from auth_attempts')
     await db.pool.query('delete from provider_devices')
-    expect(await runRetention()).toEqual({ sessions: 0, loginAttempts: 0, deviceLabels: 0 })
+    await db.pool.query('delete from app_errors')
+    expect(await runRetention()).toEqual({ sessions: 0, loginAttempts: 0, deviceLabels: 0, appErrors: 0 })
+  })
+
+  it('deletes a recorded error 90 days after its last event, by last_at and not by first_at, and touches no other row', async () => {
+    await db.pool.query('delete from app_errors')
+    // Two rows that differ only by their last event: just over 90 days ago (due) and just under (kept). A third row has a
+    // first event that is over a year old but a last event from an hour ago (kept).
+    await db.pool.query(
+      `insert into app_errors (bucket, source, kind, place, status, count, first_at, last_at)
+       values (date_trunc('hour', now() - interval '91 days'), 'server', 'error', 'over-90d', 500, 1, now() - interval '91 days', now() - interval '90 days 1 hour'),
+              (date_trunc('hour', now() - interval '90 days'), 'server', 'error', 'under-90d', 500, 1, now() - interval '91 days', now() - interval '89 days 23 hours'),
+              (date_trunc('hour', now() - interval '400 days'), 'server', 'error', 'busy-old-row', 500, 9, now() - interval '400 days', now() - interval '1 hour')`,
+    )
+    const keptBefore = await errorRows(['under-90d', 'busy-old-row'])
+    expect((await runRetention()).appErrors).toBe(1)
+    expect(await errorPlaces()).toEqual(['busy-old-row', 'under-90d'])
+    expect(await errorRows(['under-90d', 'busy-old-row'])).toEqual(keptBefore)
+    expect((await runRetention()).appErrors).toBe(0)
   })
 
   it('never touches an active phone: its label and everything it reported stay, however old its last report is', async () => {
@@ -345,7 +411,7 @@ describe('runRetention', () => {
       'overflow_total = 1',
     ]) {
       await db.pool.query(`update provider_devices set ${set} where id = $1`, [id])
-      expect(await runRetention(), set).toEqual({ sessions: 0, loginAttempts: 0, deviceLabels: 1 })
+      expect(await runRetention(), set).toEqual({ sessions: 0, loginAttempts: 0, deviceLabels: 1, appErrors: 0 })
       expect(await phoneRow(id), set).toMatchObject(CLEARED)
     }
   })
@@ -475,12 +541,13 @@ describe('GET /api/cron/retention', () => {
       log.mockRestore()
     }
     expect(res.status).toBe(200)
-    expect(res.json).toEqual({ ok: true, sessions: 3, login_attempts: 2, device_labels: 3 })
+    expect(res.json).toEqual({ ok: true, sessions: 3, login_attempts: 2, device_labels: 3, app_errors: 2 })
     expect(res.headers['cache-control']).toBe('no-store')
-    expect(logged).toEqual([['retention: sessions=3 login_attempts=2 device_labels=3']])
+    expect(logged).toEqual([['retention: sessions=3 login_attempts=2 device_labels=3 app_errors=2']])
     // The job really ran: the due rows are gone, the labels are cleared, nothing else moved.
     expect(await hashes('admin_sessions', 'token_hash')).toEqual([...SESSIONS_KEPT].sort())
     expect(await hashes('auth_attempts', 'key')).toEqual([...ATTEMPTS_KEPT].sort())
+    expect(await errorPlaces()).toEqual([...ERRORS_KEPT].sort())
     const labels = await labelsByName(devices)
     for (const name of LABELS_CLEARED) expect(labels[name], name).toBe('')
     for (const [name, label] of Object.entries(LABELS_KEPT)) expect(labels[name], name).toBe(label)
@@ -490,7 +557,7 @@ describe('GET /api/cron/retention', () => {
     // Called again (Vercel Cron can deliver twice), it finds nothing more.
     const again = await get({ token: SECRET })
     expect(again.status).toBe(200)
-    expect(again.json).toEqual({ ok: true, sessions: 0, login_attempts: 0, device_labels: 0 })
+    expect(again.json).toEqual({ ok: true, sessions: 0, login_attempts: 0, device_labels: 0, app_errors: 0 })
   })
 
   it('answers a method other than GET with 405 and runs nothing, even with the secret', async () => {
@@ -503,7 +570,7 @@ describe('GET /api/cron/retention', () => {
     expect(await snapshot()).toEqual(before)
   })
 
-  it('answers 500 without detail and changes nothing when the job fails, and logs no row value', async () => {
+  it('answers 500 without detail and changes nothing but the one record of the error when the job fails, and logs no row value', async () => {
     const { devices } = await seed()
     const before = await snapshot()
     await db.pool.query(`alter table audit_log add constraint no_retention_row check (action <> 'retention.run' or id < 0) not valid`)
@@ -523,7 +590,28 @@ describe('GET /api/cron/retention', () => {
     const line = String(logged[0].join(' '))
     expect(line).toContain('GET /api/cron/retention')
     for (const text of ['no_retention_row', 'Fake Browser', 'Fake Person', 'retention.run', SECRET]) expect(line, text).not.toContain(text)
-    expect(await snapshot()).toEqual(before)
+    // The failed job changed nothing: every table is as it was, except app_errors, where the 500 itself is recorded
+    // (server/errorLog.js). That is exactly one new row, with safe fields only, and the rows that were there are untouched
+    // (the due ones are still there too: the job was rolled back).
+    const after = await snapshot()
+    const { app_errors: errorsBefore, ...restBefore } = before
+    const { app_errors: errorsAfter, ...restAfter } = after
+    expect(restAfter).toEqual(restBefore)
+    expect(errorsAfter.filter((r) => errorsBefore.some((b) => b.id === r.id))).toEqual(errorsBefore)
+    const recorded = errorsAfter.filter((r) => !errorsBefore.some((b) => b.id === r.id))
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0]).toMatchObject({
+      source: 'server',
+      kind: 'error',
+      place: '/cron/retention', // the route as written in the code
+      method: 'GET',
+      status: 500,
+      code: '23514', // the SQLSTATE of the failed audit row, never its message
+      count: 1,
+    })
+    for (const text of ['no_retention_row', 'Fake Browser', 'Fake Person', 'retention.run', SECRET]) {
+      expect(JSON.stringify(recorded[0]), text).not.toContain(text)
+    }
     expect((await labelsByName(devices))['revoked-91d']).toBe('Fake Browser A')
   })
 })

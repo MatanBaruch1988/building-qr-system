@@ -1,10 +1,18 @@
 // What the router writes to the log when no route handled an error. The runtime logs are kept by the host and read by more
 // people than the committee, so the line may hold only fields that cannot carry personal data (see describeUnhandled in
 // server/router.js). A Postgres error object carries the values of the failing row in `detail`: it must never be logged.
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest'
+import pg from 'pg'
 import { call } from './helpers.js'
 import { route } from '../server/router.js'
+import { getPool, setPool } from '../server/db.js'
 
+// An unhandled error on a matched route is also recorded in app_errors (server/errorLog.js), so the router asks the database for
+// an insert. This file has no database and must not reach one: it is not in a throwaway schema, and it does not run the guard
+// that refuses a production database (setupDb in tests/helpers.js). So the only pool is a stub that writes down what it is asked
+// and writes nothing, the URLs of the database are blanked for the file (a pool that was not the stub could not be built), and
+// every test ends by checking that no connection was opened.
+//
 // The routes below exist only for this file, and they answer without credentials because what is tested is what the router
 // logs, not who may call. The router gives a route to nobody by default (server/access.js: a pattern that is neither PUBLIC
 // nor owned by a rule cannot be registered), and the production PUBLIC list must not learn about test routes. So this file
@@ -85,7 +93,38 @@ route('GET', '/test/thrown-object', async () => {
   throw { detail: PERSONAL, code: 'XX000', message: PERSONAL }
 })
 
-afterEach(() => vi.restoreAllMocks())
+/** What the 500 path asked of the database (the stub below answers every query with no rows and refuses every connection). */
+const attempts = []
+const noDatabase = {
+  query: (text, params, options) => {
+    attempts.push({ text: String(text).replace(/\s+/g, ' ').trim(), params, options })
+    return Promise.resolve({ rows: [], rowCount: 0 })
+  },
+  connect: () => {
+    attempts.push({ text: '(a connection)' })
+    return Promise.reject(new Error('tests/router-log.test.js does not open a connection'))
+  },
+}
+let realConnections // spies on the real pool and client of `pg`: neither may be asked for a connection
+
+beforeAll(() => {
+  vi.stubEnv('DATABASE_URL', '')
+  vi.stubEnv('DATABASE_URL_UNPOOLED', '')
+  vi.stubEnv('DB_SCHEMA', '')
+  setPool(noDatabase)
+})
+afterAll(() => {
+  setPool(undefined)
+  vi.unstubAllEnvs()
+})
+beforeEach(() => {
+  attempts.length = 0
+  realConnections = [vi.spyOn(pg.Pool.prototype, 'connect'), vi.spyOn(pg.Client.prototype, 'connect')]
+})
+afterEach(() => {
+  for (const spy of realConnections) expect(spy).not.toHaveBeenCalled()
+  vi.restoreAllMocks()
+})
 
 /** Calls a route that throws and returns the response and everything that was passed to console.error. */
 async function boom(path) {
@@ -199,5 +238,37 @@ describe('an unhandled error', () => {
     const { r, calls } = await boom('/api/test/nothing-here')
     expect(r.status).toBe(404)
     expect(calls).toEqual([])
+  })
+})
+
+describe('the record of an unhandled error (app_errors), with no database behind it', () => {
+  it('has the stub as its only pool, and no URL of a database in the environment', () => {
+    expect(getPool()).toBe(noDatabase)
+    expect(process.env.DATABASE_URL).toBe('')
+    expect(process.env.DATABASE_URL_UNPOOLED).toBe('')
+  })
+
+  it('is attempted once for a 500 on a matched route: the insert, with the route as written in the code and nothing personal', async () => {
+    const { r } = await boom(`/api/test/postgres-error?code=BQR-1234&name=${PERSONAL}`)
+    expect(r.status).toBe(500)
+    expect(attempts).toHaveLength(1) // the insert, and nothing else: no connection, no second statement
+    expect(attempts[0].text).toMatch(/^insert into app_errors .* on conflict on constraint app_errors_key do update/)
+    expect(attempts[0].params.slice(0, 6)).toEqual(['server', 'error', '/test/postgres-error', 'GET', 500, 'XX000'])
+    const everything = JSON.stringify(attempts)
+    for (const value of [PERSONAL, 'example.com', 'BQR-1234', 'internal failure', 'secret_', 'Key (email)']) {
+      expect(everything, value).not.toContain(value)
+    }
+  })
+
+  it('is attempted for every kind of 500 the logging tests above make, and for no other answer', async () => {
+    for (const path of ['/api/test/plain-error', '/api/test/personal-message', '/api/test/thrown-string', '/api/test/thrown-object']) {
+      attempts.length = 0
+      expect((await boom(path)).r.status, path).toBe(500)
+      expect(attempts, path).toHaveLength(1)
+    }
+    attempts.length = 0
+    expect((await boom('/api/test/unique-violation')).r.status).toBe(409) // the caller's fault
+    expect((await boom('/api/test/nothing-here')).r.status).toBe(404)
+    expect(attempts).toEqual([])
   })
 })
