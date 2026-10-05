@@ -5,7 +5,8 @@
     "api/*.js": { "maxDuration": 30 }
   },
   "crons": [
-    { "path": "/api/cron/retention", "schedule": "0 1 * * *" }
+    { "path": "/api/cron/retention", "schedule": "0 1 * * *" },
+    { "path": "/api/cron/daily-summary", "schedule": "0 4 * * *" }
   ],
   "headers": [
     {

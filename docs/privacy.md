@@ -52,7 +52,10 @@ entry hold counts only (a number for each kind of row, nothing else).
 - **Whoever runs the services under the app**: the owner of the project and the services that host it (the database is a
   Neon project, the app runs on Vercel). The committee's sign-in goes through Google, which handles it under its own terms.
   The owner's check on healthchecks.io gets one short line when the server has its first unexpected error of a day: the
-  route as it is written in the code, the method, the error's code and the time. It holds no personal data.
+  route as it is written in the code, the method, the error's code and the time. It holds no personal data. It also gets
+  one short summary of the last 24 hours each day (`server/summary.js`): counts, route patterns as they are written in the
+  code, error codes, screen keys, build versions and times, and nothing about a person (no name, e-mail address, QR code,
+  phone label or id).
 
 ## Backups
 
