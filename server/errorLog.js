@@ -13,10 +13,19 @@
 //
 // This function never throws and never logs. The caller has already logged the error once (describeUnhandled in
 // server/router.js), and a failure to record it is not worth a second line or a second failure. It is awaited by the
-// router, so it is bounded: ERROR_RECORD_TIMEOUT_MS (server/config.js). When the error being recorded is itself a failure to
-// reach the database, the insert would fail as well and only hold the answer of the request, so it is not attempted.
-import { query } from './db.js'
-import { ERROR_RECORD_TIMEOUT_MS } from './config.js'
+// router, so it is bounded, and error reporting must never turn into the outage it reports on (a burst of failures while
+// the database is slow), so it is limited in four ways:
+//   1. It never queues: unless the pool could give a client at once and keep one for the requests that are being served
+//      (spareClients in server/db.js, ERROR_RECORD_POOL_RESERVE), nothing is attempted.
+//   2. The database bounds the statement itself (ERROR_RECORD_LIMITS: `set local statement_timeout`, `lock_timeout` and
+//      `idle_in_transaction_session_timeout` in the transaction of the insert), so a slow or blocked insert is cancelled there
+//      and its connection goes back to the pool in about that time. Giving up on the wait (below) does not stop a statement.
+//   3. The request waits for the insert at most ERROR_RECORD_TIMEOUT_MS (server/config.js), and a connection that arrives
+//      after that is given back unused (the abort signal of the transaction).
+//   4. When the error being recorded is itself a failure to reach the database, the insert would fail as well and only hold
+//      the answer of the request, so it is not attempted.
+import { query, spareClients } from './db.js'
+import { ERROR_RECORD_TIMEOUT_MS, ERROR_RECORD_LOCK_TIMEOUT_MS, ERROR_RECORD_POOL_RESERVE } from './config.js'
 import { oneLine } from './logSafe.js'
 
 /** The values of app_errors.source and app_errors.kind. tests/error-log.test.js compares them with the checks of the table. */
@@ -133,21 +142,40 @@ const UPSERT = `
         last_request_id = coalesce(excluded.last_request_id, app_errors.last_request_id)`
 
 /**
- * Records one event, or does nothing. Never throws, never logs, and waits for the database at most
- * ERROR_RECORD_TIMEOUT_MS. See the header of this file for what may be passed: safe fields only.
+ * The limits that the database puts on the insert (server/db.js sets them with `set local` in the transaction of this one
+ * statement; every other statement of the app keeps the limits of the pool). The statement and idle limits are the time the
+ * request waits, so a statement that the request gave up on is cancelled by the database in about that time, and a lock
+ * that is held by another transaction is given up on sooner (ERROR_RECORD_LOCK_TIMEOUT_MS).
+ */
+export const ERROR_RECORD_LIMITS = Object.freeze({
+  statementMs: ERROR_RECORD_TIMEOUT_MS,
+  idleInTransactionMs: ERROR_RECORD_TIMEOUT_MS,
+  lockMs: ERROR_RECORD_LOCK_TIMEOUT_MS,
+})
+
+/**
+ * Records one event, or does nothing. Never throws, never logs, never queues for a connection, and waits for the database
+ * at most ERROR_RECORD_TIMEOUT_MS. See the header of this file for the four limits, and for what may be passed: safe fields only.
  *
  * @param {RecordedEvent} event
  * @returns {Promise<void>}
  */
 export async function recordEvent(event) {
   let timer
+  const stopped = new AbortController()
   try {
     if (isConnectionFailure(event.error)) return
     const row = normalise(event)
     if (!row) return
+    // Not while the pool is busy: this must not queue behind other work, join a queue that is there, or take the connection
+    // that a request being served would need. The record is lost, like one that timed out (the error was logged once).
+    if (spareClients() <= ERROR_RECORD_POOL_RESERVE) return
     // A late failure of the insert (after the timeout won the race) is handled by the race itself: it listens to both.
     await Promise.race([
-      query(UPSERT, [row.source, row.kind, row.place, row.method, row.status, row.code, row.appBuild, row.requestId]),
+      query(UPSERT, [row.source, row.kind, row.place, row.method, row.status, row.code, row.appBuild, row.requestId], {
+        limits: ERROR_RECORD_LIMITS,
+        signal: stopped.signal,
+      }),
       new Promise((resolve) => {
         timer = setTimeout(resolve, ERROR_RECORD_TIMEOUT_MS)
       }),
@@ -156,5 +184,7 @@ export async function recordEvent(event) {
     // Silent on purpose: the caller has already logged the error once.
   } finally {
     clearTimeout(timer)
+    // Nobody waits for the insert any more. If it has not started (its connection is still being made), it will not.
+    stopped.abort()
   }
 }
