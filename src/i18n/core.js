@@ -14,6 +14,10 @@ export const LANGS = [
 export const DICTS = { he, en, ru, ar }
 export const DEFAULT_LANG = 'he'
 export const dirOf = (lang) => LANGS.find((l) => l.code === lang)?.dir ?? 'rtl'
+/**
+ * @param {unknown} code
+ * @returns {code is string}
+ */
 export const isLang = (code) => LANGS.some((l) => l.code === code)
 
 // Unicode "first strong isolate" … "pop directional isolate": keeps a name in another script
@@ -32,6 +36,7 @@ export function translate(lang, key, params) {
  * the person's choice, kept on their phone (see I18nProvider), the same as light/dark.
  * The phone's own language is deliberately NOT used: most phones here are set to English, but the people
  * using this app expect it to open in Hebrew.
+ * @param {{ stored?: unknown }} [options]  `stored` is whatever the phone had kept: a language code, nothing, or rubbish
  */
 export function pickLang({ stored } = {}) {
   return isLang(stored) ? stored : DEFAULT_LANG

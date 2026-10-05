@@ -2,6 +2,8 @@
 // the server treats a missing or vague fix as "unverified", not as a failure (see docs).
 import { GPS_MAX_USABLE_ACCURACY_M, GPS_MAX_STALE_AGE_S } from '../../shared/contract.js'
 
+/** @import { Gps } from '../../shared/types.js' */
+
 /**
  * One geolocation request with a watchdog of our own. The browser's `timeout` only starts once the
  * permission question is answered, and some browsers (Firefox "Not now") never answer it at all.
@@ -27,6 +29,10 @@ const ask = (options, watchdogMs) =>
  *    people usually arrive from outside, where GPS worked, so this is instant and works indoors.
  *    2) If that is too vague, try once for a fresh fix.
  * Returns { fix, reason } where fix is {lat, lng, accuracy, age_s} or null.
+ * @param {{ quickMs?: number, preciseMs?: number, maxAgeMs?: number }} [options]  the waits and the oldest position that is
+ *   accepted, in milliseconds
+ * @returns {Promise<{ fix: Gps | null, reason: string | null }>}  `reason` says why there is no fix: denied, unsupported,
+ *   timeout or unavailable
  */
 export async function getFix({ quickMs = 4000, preciseMs = 3000, maxAgeMs = GPS_MAX_STALE_AGE_S * 1000 } = {}) {
   const quick = await ask({ enableHighAccuracy: false, timeout: quickMs, maximumAge: maxAgeMs }, quickMs + 2500)

@@ -11,6 +11,7 @@ import {
 
 // The Hebrew words in these patterns are DATA, not UI text: they match what the old Firestore records contain (the
 // Hebrew words for cleaning and gardening in company names), so they must stay in Hebrew.
+/** @type {Array<[RegExp, string]>} */
 const SERVICE_TYPES = [
   [/ניקיון|ניקוי|clean/i, 'cleaning'],
   [/גינון|גנן|garden/i, 'gardening'],

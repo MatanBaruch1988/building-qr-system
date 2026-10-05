@@ -11,6 +11,8 @@ import { useProviders, useBuildingAddress, usePoint, useTodayVisits, useQueueSyn
 import { TopBar, LoginView, HomeView, WorkingView, ResultView } from '../worker/components.jsx'
 import '../ui/ui.css'
 
+/** @import { PublicPoint } from '../../shared/types.js' */
+
 export default function WorkerApp() {
   const [session, setSession] = useState(loadSession)
   return (
@@ -104,6 +106,10 @@ function WorkerShell({ session, setSession }) {
   //  the token comparison above covers the 200 case; `switchWorker` clears the verify via the token check below.)
 
   const runCheckIn = useCallback(
+    /**
+     * @param {string} theCode  the scanned QR address
+     * @param {PublicPoint | null} [pointOverride]  the point to check in at, instead of the one that was looked up
+     */
     async (theCode, pointOverride) => {
       const point = pointOverride ?? pointRef.current
       setResult(null)

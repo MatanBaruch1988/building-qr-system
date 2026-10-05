@@ -1,6 +1,8 @@
 import { safeStorage } from './storage.js'
 import { PROVIDER_TOKEN_PREFIX, MAX_TOKEN_LENGTH } from '../../shared/contract.js'
 
+/** @import { Provider } from '../../shared/types.js' */
+
 const KEY = 'qr.session'
 
 const isRecord = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -82,16 +84,29 @@ const tabStorage = {
 }
 
 /**
+ * Who is signed in on this phone: the device token that the server gave at sign-in, and the provider.
+ * @typedef {object} Session
+ * @property {string} token
+ * @property {Provider} provider
+ * @property {boolean} [remember]  set by loadSession: where the session was kept (see saveSession)
+ */
+
+/**
  * The provider's signed-in state on this phone. "Remember me" keeps it in localStorage; otherwise it
  * lives in sessionStorage and disappears when the tab closes (for a shared phone).
  *
  * What is read here was written by this app, possibly by an older version of it that has kept the phone for weeks. A
  * value that is not a usable session (see isSession) is removed and counts as signed out.
+ * @returns {Session | null}
  */
 export function loadSession() {
   return readFrom(safeStorage, true) ?? readFrom(tabStorage, false)
 }
 
+/**
+ * @param {Session} session  only its `token` and `provider` are kept
+ * @param {boolean} remember
+ */
 export function saveSession({ token, provider }, remember) {
   clearSession()
   const value = JSON.stringify({ token, provider })
