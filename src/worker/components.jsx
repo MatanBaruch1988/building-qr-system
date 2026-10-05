@@ -7,6 +7,7 @@ import { providerLabel } from './checkIn.js'
 import { isSession } from './session.js'
 import { DEVICE_LABEL_MAX_LENGTH } from '../../shared/contract.js'
 import ThemeSwitch from '../ui/ThemeSwitch.jsx'
+import BuildLabel from '../ui/BuildLabel.jsx'
 import {
   IconAlert, IconChevron, IconCheck, IconCloudOff, IconEye, IconEyeOff, IconGlobe, IconInfo, IconLock, IconPin,
   IconPinOff, IconQr, IconRefresh, IconSend, IconUser, IconX,
@@ -282,6 +283,7 @@ export function HomeView({ session, visits, pending, syncing, onSync, notice, on
 
       <button className="w-link" onClick={onSwitch}>{t('home.switchWorker')}</button>
       <AdminLink />
+      <BuildLabel label={t('app.version')} className="w-build--center" />
     </div>
   )
 }
