@@ -3,8 +3,9 @@
 // (GET /api/admin/providers/:id/devices). There is nothing on the provider's screen for it, so this reads it the way the committee
 // screen of a later release will: from the API, as the committee.
 //
-// Chromium only, like the other tests that the phone's own behaviour decides: the report does not depend on the engine, and one
-// run of it is enough to show the whole chain (the app, the server, the database, the committee's list).
+// Both projects run it (the Pixel in Chromium and the iPhone in WebKit). The server's answers are made up with page.route and the
+// network is never switched off, so the one thing that Playwright's WebKit cannot do (take a service-worker page offline, see
+// skipOfflineOnWebKit in fixtures.js) does not come up.
 import { test, expect, he, POINTS, PEOPLE, ADMIN_EMAIL, signIn, clearScans, allowConsoleErrors } from './fixtures.js'
 import { SCAN_ERROR_POINT_INACTIVE } from '../shared/contract.js'
 
@@ -25,8 +26,7 @@ async function phonesOf(request, contactName) {
 /** What the browser does when the app comes back to the foreground. */
 const comeBackToTheApp = (page) => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
 
-test('a visit that waits on the phone shows on the committee\'s list of phones, and clears when it is sent', async ({ page, request, browserName }) => {
-  test.skip(browserName === 'webkit', 'the phone-health report is checked on Chromium only: it does not depend on the engine')
+test('a visit that waits on the phone shows on the committee\'s list of phones, and clears when it is sent', async ({ page, request }) => {
   test.setTimeout(120_000) // a report that comes too soon after the last one is held back for 10 seconds, twice in this test
   // the browser notes the 503 answers that this test makes up (the check-in and the upload both fail)
   allowConsoleErrors(page, /status of 503/)
@@ -70,8 +70,7 @@ test('a visit that waits on the phone shows on the committee\'s list of phones, 
   expect(cleared.last_sync_at).toMatch(/^\d{4}-\d{2}-\d{2}T/) // the server stamped the end of the upload
 })
 
-test('a visit that the server refuses for good is dropped by the phone and counted, and the total reaches the committee\'s list', async ({ page, request, browserName }) => {
-  test.skip(browserName === 'webkit', 'the phone-health report is checked on Chromium only: it does not depend on the engine')
+test('a visit that the server refuses for good is dropped by the phone and counted, and the total reaches the committee\'s list', async ({ page, request }) => {
   test.setTimeout(120_000)
   allowConsoleErrors(page, /status of 503/) // the check-in is made to fail, so that the visit is kept on the phone
   await page.route('**/api/scan', (route) => route.fulfill({ status: 503, json: { error: { code: 'unavailable' } } }))
