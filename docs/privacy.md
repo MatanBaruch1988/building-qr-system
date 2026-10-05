@@ -5,9 +5,9 @@ the basis for a notice to the service providers (the cleaning company, the garde
 rules for the code are in `AGENTS.md` (Safety); the periods below are constants in `server/config.js`, and a daily job
 applies them (`server/retention.js`).
 
-Retention periods were decided by the owner on 04/10/2026, and the period of the recorded errors on 05/10/2026. Three things
-have no period yet: the scans, the refused visits and the audit log wait for a legal decision, and until then they are kept
-(see the table).
+Retention periods were decided by the owner on 04/10/2026, and the periods of the recorded errors and of the alert days on
+05/10/2026. Three things have no period yet: the scans, the refused visits and the audit log wait for a legal decision, and
+until then they are kept (see the table).
 
 ## What is kept, and for how long
 
@@ -22,10 +22,11 @@ have no period yet: the scans, the refused visits and the audit log wait for a l
 | Audit log (`audit_log`) | Which committee member did what and when, with the member's name as it was at the time of the action (their e-mail when they have no name), so that the entry stays readable after the member is removed. The details of some entries hold a name or an e-mail (for example a provider that was created or a member that was removed), the building's address, the reason that a member typed when voiding a scan, and an update holds the value that it replaced next to the new one (for example the contact name of a provider before and after), never a password or its hash. It also holds when a committee member signed in (and whether through Google) and when they signed out: the member and the time only, no network address, no device or browser details, no Google account id and no cookie. A sign-in that was refused writes no entry, and a service provider's sign-in is not in this log (the phones of a provider are in `provider_devices`). A member that the owner added with the command `npm run db:create-admin` is in the log too, as added by the command (no member is named as the actor). The daily job writes one entry a day with counts only. The table is append-only: the database refuses to change or delete a row, and to empty the table. Committee members can read it (see "Who can see it") | Until a legal decision on how long it may be kept is made. Nothing deletes it by itself |
 | Login attempts (`auth_attempts`) | When someone tried to sign in, with the network (IP) address of the request. A committee attempt holds the IP address only (no e-mail, because the e-mail is not known before Google has been asked). A provider attempt holds the provider's id and the IP address (no name and no password). They are only used to slow down guessing | Deleted after 1 day |
 | Recorded errors (`app_errors`) | Nothing about a person, by construction. When the server fails with an error that it did not expect, one row per kind of failure per hour: the route as it is written in the code (for example `/admin/points/:id`, never the address that was asked for), the method, the status, the error's code or name (never its message), the version of the app, how many times it happened, the first and the last time, and the request id that the host (Vercel) gave to the latest request, so that the failure can be found in the host's own log within the hour. No message, no name, no e-mail, no IP address, no QR code, no position, nothing from the body of a request | Deleted 90 days after the last time it happened |
+| Alert days (`alert_pings`) | Nothing about a person, by construction. One date (a day in the building's time zone) for each day on which the server had an unexpected error and told the owner, and the moment the row was made. It is what lets the server send one alert for a day and not one for every error. Nothing about the error is in it | Deleted 30 days after the day |
 | Agent keys (`api_keys`) | The name the committee gave the key, a fingerprint of the key, when it was last used. No personal data unless the committee puts a name in the key's name | Until the committee deletes the key |
 
 The daily job never deletes or changes a scan, a refused visit, the audit log, an active session or an active phone. A
-session, a phone or a recorded error that is not yet past its period is left as it is. The job's own log line and its audit
+session, a phone, a recorded error or an alert day that is not yet past its period is left as it is. The job's own log line and its audit
 entry hold counts only (a number for each kind of row, nothing else).
 
 ## Who can see it
@@ -43,7 +44,7 @@ entry hold counts only (a number for each kind of row, nothing else).
   entry is about, taken from the committee's own lists), through the committee's own endpoint (`GET /api/admin/audit`,
   the same sign-in), and on a read-only screen in the committee app, a section at the foot of the Committee tab
   ("יומן פעולות"). It shows the same entries by the fields it knows and leaves out any value that looks like a key, a hash or
-  a token. The committee app does not show the label of a phone, the sessions, the login attempts or the recorded errors.
+  a token. The committee app does not show the label of a phone, the sessions, the login attempts, the recorded errors or the alert days.
 - **The committee's own AI agent**, through the read-only agent API (`docs/agent-api.md`), with a key that the committee
   made: the points, the providers (company, contact name, kind of service, whether active, the time of the last scan) and the
   scans (provider name, point, times, distance, accuracy, flags). It cannot write anything, and it does not see the phones or
@@ -51,6 +52,8 @@ entry hold counts only (a number for each kind of row, nothing else).
   token.
 - **Whoever runs the services under the app**: the owner of the project and the services that host it (the database is a
   Neon project, the app runs on Vercel). The committee's sign-in goes through Google, which handles it under its own terms.
+  The owner's check on healthchecks.io gets one short line when the server has its first unexpected error of a day: the
+  route as it is written in the code, the method, the error's code and the time. It holds no personal data.
 
 ## Backups
 

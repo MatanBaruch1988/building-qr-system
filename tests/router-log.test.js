@@ -6,12 +6,16 @@ import pg from 'pg'
 import { call } from './helpers.js'
 import { route } from '../server/router.js'
 import { getPool, setPool } from '../server/db.js'
+import { resetAlertThrottle, ALERT_LIMITS } from '../server/alerts.js'
 
 // An unhandled error on a matched route is also recorded in app_errors (server/errorLog.js), so the router asks the database for
 // an insert. This file has no database and must not reach one: it is not in a throwaway schema, and it does not run the guard
 // that refuses a production database (setupDb in tests/helpers.js). So the only pool is a stub that writes down what it is asked
 // and writes nothing, the URLs of the database are blanked for the file (a pool that was not the stub could not be built), and
-// every test ends by checking that no connection was opened.
+// every test ends by checking that no connection was opened. The same holds for the network: the first error of a day also
+// pings healthchecks.io (server/alerts.js), but the tests have no address for it (tests/setup-no-heartbeat.js), and every test
+// ends by checking that the real fetch was not asked for anything. The one test that does set an address sends through a fetch
+// that it injects.
 //
 // The routes below exist only for this file, and they answer without credentials because what is tested is what the router
 // logs, not who may call. The router gives a route to nobody by default (server/access.js: a pattern that is neither PUBLIC
@@ -95,10 +99,13 @@ route('GET', '/test/thrown-object', async () => {
 
 /** What the 500 path asked of the database (the stub below answers every query with no rows and refuses every connection). */
 const attempts = []
+// The insert of the alert (alert_pings) is answered with one row ("the first error of the day") when a test sets this.
+let firstErrorOfTheDay = false
 const noDatabase = {
   query: (text, params, options) => {
     attempts.push({ text: String(text).replace(/\s+/g, ' ').trim(), params, options })
-    return Promise.resolve({ rows: [], rowCount: 0 })
+    const claimed = firstErrorOfTheDay && /^\s*insert into alert_pings /.test(String(text))
+    return Promise.resolve({ rows: claimed ? [{ day: params[0] }] : [], rowCount: claimed ? 1 : 0 })
   },
   connect: () => {
     attempts.push({ text: '(a connection)' })
@@ -106,6 +113,7 @@ const noDatabase = {
   },
 }
 let realConnections // spies on the real pool and client of `pg`: neither may be asked for a connection
+let reachedForTheNetwork // what the real fetch was asked for: nothing may be
 
 beforeAll(() => {
   vi.stubEnv('DATABASE_URL', '')
@@ -119,11 +127,19 @@ afterAll(() => {
 })
 beforeEach(() => {
   attempts.length = 0
+  firstErrorOfTheDay = false
   realConnections = [vi.spyOn(pg.Pool.prototype, 'connect'), vi.spyOn(pg.Client.prototype, 'connect')]
+  reachedForTheNetwork = []
+  vi.stubGlobal('fetch', (url) => {
+    reachedForTheNetwork.push(String(url))
+    return Promise.reject(new Error('tests/router-log.test.js does not reach the network'))
+  })
 })
 afterEach(() => {
   for (const spy of realConnections) expect(spy).not.toHaveBeenCalled()
+  expect(reachedForTheNetwork, 'a test reached for the real fetch').toEqual([])
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 /** Calls a route that throws and returns the response and everything that was passed to console.error. */
@@ -270,5 +286,64 @@ describe('the record of an unhandled error (app_errors), with no database behind
     expect((await boom('/api/test/unique-violation')).r.status).toBe(409) // the caller's fault
     expect((await boom('/api/test/nothing-here')).r.status).toBe(404)
     expect(attempts).toEqual([])
+  })
+})
+
+describe('the first-error alert of the day (server/alerts.js), with no database and no network behind it', () => {
+  const ADDRESS = 'https://hc.example.test/ping/00000000-0000-4000-8000-0000000000cc' // fake: the real address is a secret
+  let savedAddress
+  beforeEach(() => {
+    savedAddress = process.env.HEALTH_HEARTBEAT_URL
+    resetAlertThrottle()
+  })
+  afterEach(() => {
+    if (savedAddress === undefined) delete process.env.HEALTH_HEARTBEAT_URL
+    else process.env.HEALTH_HEARTBEAT_URL = savedAddress
+  })
+
+  it('has no address in the tests, so a 500 sends nothing and asks the stub for the record only', async () => {
+    expect(process.env.HEALTH_HEARTBEAT_URL).toBe('')
+    const { r } = await boom('/api/test/postgres-error')
+    expect(r.status).toBe(500)
+    expect(attempts).toHaveLength(1) // the record of app_errors, and no alert insert
+    expect(attempts[0].text).toMatch(/^insert into app_errors /)
+    expect(reachedForTheNetwork).toEqual([])
+  })
+
+  it('with an address, asks the stub once more (the alert insert, with the short limits) and sends only through the fetch that the test injects', async () => {
+    process.env.HEALTH_HEARTBEAT_URL = ADDRESS
+    firstErrorOfTheDay = true
+    const sent = []
+    vi.stubGlobal('fetch', async (url, init) => {
+      sent.push({ url: String(url), method: init.method, body: init.body })
+      return { status: 200, body: null }
+    })
+    const { r } = await boom(`/api/test/postgres-error?code=BQR-1234&name=${PERSONAL}`)
+    expect(r.status).toBe(500)
+    expect(attempts).toHaveLength(2) // the record, then the alert insert: both through the stub, no connection
+    expect(attempts[1].text).toBe('insert into alert_pings (day) values ($1) on conflict do nothing returning day')
+    expect(attempts[1].options.limits).toBe(ALERT_LIMITS)
+    expect(attempts[1].options.signal).toBeInstanceOf(AbortSignal)
+    expect(sent).toHaveLength(1)
+    expect(sent[0].url).toBe(`${ADDRESS}/fail`)
+    expect(sent[0].method).toBe('POST')
+    expect(sent[0].body).toMatch(/^First server error today, \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}: GET \/test\/postgres-error XX000$/)
+    for (const value of [PERSONAL, 'example.com', 'BQR-1234', 'internal failure', 'secret_', 'Key (email)']) {
+      expect(JSON.stringify([attempts, sent]), value).not.toContain(value)
+    }
+    expect(reachedForTheNetwork).toEqual([])
+  })
+
+  it('sends nothing for a 500 that is not the first of the day (the stub says the day is taken)', async () => {
+    process.env.HEALTH_HEARTBEAT_URL = ADDRESS
+    const sent = []
+    vi.stubGlobal('fetch', async (url) => {
+      sent.push(String(url))
+      return { status: 200, body: null }
+    })
+    const { r } = await boom('/api/test/postgres-error')
+    expect(r.status).toBe(500)
+    expect(attempts).toHaveLength(2)
+    expect(sent).toEqual([])
   })
 })
