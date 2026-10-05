@@ -510,3 +510,88 @@ test.describe('dates on the committee screens', () => {
     }
   })
 })
+
+// ---- the audit log -------------------------------------------------------------------------------------------------
+// A section at the foot of the Committee tab, opened by the button "יומן פעולות" (it is not a tab of its own: six tabs do not fit
+// the phone's bar at 360 px without wrapping a label). Read only, so there are no row actions to measure: the order of the
+// actions of every tile is still measured by the test above, for the five screens that have tiles.
+
+test('the audit log opens from the Committee tab, lists what was done and by whom, filters, and has no actions, on a phone and on a computer', async ({ page }) => {
+  await adminSignIn(page)
+  const tag = randomUUID().slice(0, 6)
+  const name = `נקודת יומן ${tag}`
+  const me = (await (await page.request.get('/api/admin/me')).json()).admin
+  // A throwaway point that is created, switched off and on again: three entries of the committee's own, with the point's name.
+  const created = await page.request.post('/api/admin/points', { data: { name, lat: SAMPLE_POINT.lat, lng: SAMPLE_POINT.lng, gps_mode: 'none' } })
+  const point = (await created.json()).point
+  try {
+    expect((await page.request.patch(`/api/admin/points/${point.id}`, { data: { is_active: false } })).ok()).toBe(true)
+    expect((await page.request.patch(`/api/admin/points/${point.id}`, { data: { is_active: true } })).ok()).toBe(true)
+
+    for (const size of [null, COMPUTER]) {
+      if (size) await page.setViewportSize(size)
+      const where = size ? 'computer' : 'phone'
+      // from another tab, so that the Committee tab opens with its section closed again
+      await page.goto('/admin#points')
+      await loaded(page, 'נקודות סריקה')
+      await page.goto('/admin#committee')
+      await loaded(page, 'חברי הוועד')
+
+      // closed at first: a button, no log
+      const opener = page.getByRole('button', { name: 'יומן פעולות', exact: true })
+      await expect(opener).toHaveAttribute('aria-expanded', 'false')
+      await expect(page.getByLabel('סוג פעולה')).toHaveCount(0)
+      await opener.click()
+      await expect(opener).toHaveAttribute('aria-expanded', 'true')
+
+      const log = page.getByRole('region', { name: 'יומן פעולות' })
+      const rowsOfPoint = log.getByRole('listitem').filter({ hasText: name })
+      await expect(rowsOfPoint).toHaveCount(3) // created, switched off, switched on
+      // what the actions were, in words: the switch off and the switch on say from what to what
+      await expect(rowsOfPoint.filter({ hasText: 'יצירת נקודה' })).toHaveCount(1)
+      await expect(rowsOfPoint.filter({ hasText: 'עדכון נקודה' }).filter({ hasText: 'פעיל: כן ← לא' })).toHaveCount(1)
+      await expect(rowsOfPoint.filter({ hasText: 'עדכון נקודה' }).filter({ hasText: 'פעיל: לא ← כן' })).toHaveCount(1)
+      // by whom: the signed-in member, and the time of the building
+      for (const row of await rowsOfPoint.all()) {
+        await expect(row).toContainText(`על ידי ${me.name}`)
+        await expect(row).toContainText(/\d{2}:\d{2}/)
+      }
+      await expect(log.getByRole('heading', { level: 3 }).filter({ hasText: /^\d{2}\/\d{2}\/\d{4} · \d+$/ }).first()).toBeVisible()
+
+      // read only: no action on any row, and no file
+      for (const row of await log.getByRole('listitem').all()) {
+        await expect(row.getByRole('button'), `${where}: an action on a row`).toHaveCount(0)
+        await expect(row.getByRole('link'), `${where}: a link on a row`).toHaveCount(0)
+      }
+      await expect(log.getByRole('link', { name: /ייצוא/ })).toHaveCount(0)
+      await expect(log.getByRole('button', { name: /ייצוא/ })).toHaveCount(0)
+
+      // the group: the entries of another group leave, and come back with their own
+      await log.getByLabel('סוג פעולה').selectOption({ label: 'נותני שירות' })
+      await expect(rowsOfPoint).toHaveCount(0)
+      await log.getByLabel('סוג פעולה').selectOption({ label: 'נקודות' })
+      await expect(rowsOfPoint).toHaveCount(3)
+      // the member: the entries of the signed-in member are these
+      await log.getByLabel('חבר ועד').selectOption({ label: me.name })
+      await expect(rowsOfPoint).toHaveCount(3)
+      await log.getByLabel('חבר ועד').selectOption({ label: 'כל החברים' })
+
+      // a stretch of time in which nothing was done: its own empty state
+      const from = log.getByLabel('מתאריך')
+      const until = log.getByLabel('עד תאריך')
+      await from.fill('')
+      await from.pressSequentially('01012020')
+      await until.fill('')
+      await until.pressSequentially('02012020')
+      await expect(page.getByRole('heading', { level: 2, name: 'אין פעולות בטווח הזה' })).toBeVisible()
+      expect(await noHorizontalScroll(page), `the audit log at ${where} width`).toBe(true)
+
+      // closed again with the same button
+      await opener.click()
+      await expect(opener).toHaveAttribute('aria-expanded', 'false')
+      await expect(page.getByLabel('סוג פעולה')).toHaveCount(0)
+    }
+  } finally {
+    await page.request.delete(`/api/admin/points/${point.id}`, { data: {} })
+  }
+})

@@ -26,4 +26,5 @@ export const IconLocate = (p) => <Svg {...p}><circle cx="12" cy="12" r="3.5" /><
 export const IconUndo = (p) => <Svg {...p}><path d="M9 7L4 12l5 5M4 12h10a6 6 0 0 1 6 6" /></Svg>
 export const IconTrash = (p) => <Svg {...p}><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></Svg>
 export const IconBan = (p) => <Svg {...p}><circle cx="12" cy="12" r="9" /><path d="M5.7 5.7l12.6 12.6" /></Svg>
+export const IconClock = (p) => <Svg {...p}><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3.5 4v4.5H8M12 8v4.2l2.8 1.8" /></Svg>
 export const IconDevice = (p) => <Svg {...p}><rect x="7" y="3" width="10" height="18" rx="2" /><path d="M11 18h2" /></Svg>
