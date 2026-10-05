@@ -2,6 +2,7 @@
 import './routes/provider.js'
 import './routes/admin.js'
 import './routes/refusals.js'
+import './routes/devices.js'
 import './routes/agent.js'
 import './routes/cron.js'
 import { route } from './router.js'

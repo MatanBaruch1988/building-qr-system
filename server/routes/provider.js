@@ -5,6 +5,7 @@ import { ApiError, bad, notFound, requireUuid, str, clientIp } from '../http.js'
 import { requireProvider, guardLogin } from '../auth.js'
 import { recordScan, scanJson } from '../scans.js'
 import { recordRefusedVisit, isDataError } from '../scanRefusals.js'
+import { touchLastSync } from '../deviceStatus.js'
 import { parseQrToken } from '../../shared/qrToken.js'
 import { PROVIDER_TOKEN_PREFIX } from '../config.js'
 import {
@@ -143,6 +144,10 @@ route('POST', '/scans/sync', async ({ req, body }) => {
       }
     }
   }
+  // The items are recorded: stamp the end of the upload on the phone's row, for the committee's view of the phone (migration 010).
+  // The server does it from the sync itself, so it is right for a phone of any version, and it is the LAST thing the request does.
+  // A failure is swallowed and logged by touchLastSync, and the answer below is exactly what it always was.
+  await touchLastSync(deviceId)
   return { results }
 })
 

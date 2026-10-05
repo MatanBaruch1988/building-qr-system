@@ -161,3 +161,32 @@ export const MAX_TOKEN_LENGTH = 200
  * ever wrote.
  */
 export const APP_BUILD_RE = /^(?:[0-9a-f]{7}|dev)$/
+
+// ---- 8. What a phone reports about itself ------------------------------------------------------------------------
+// The phone tells the server how many visits wait in its offline queue and since when, which build it runs, and how many visits
+// it was told were not accepted or had to drop from a full queue (ADR 0007, "Phone health"). It travels in a request of its own,
+// POST /api/my/device-status (server/routes/devices.js, server/deviceStatus.js), and never in the sync request, so the offline
+// sync contract of section 1 does not change at all. The body is a DeviceStatusReport (shared/types.js): every field is optional,
+// and the server ignores a field that is not valid and a field that it does not know (an installed app of another version may
+// send fewer fields or more), so none of these limits can make the server refuse a phone.
+
+/**
+ * The shortest time between two reports of one phone that the server stores, in seconds. A report that comes sooner is answered
+ * as usual and changes nothing, so a phone that reports too often (a loop, a bug) costs the database one cheap statement and
+ * writes no row. The phone reports no more often than this either (the next pull request), so a lower value here makes the
+ * server store more than the phone sends and a higher one makes it drop reports of a phone that keeps to this rhythm.
+ */
+export const DEVICE_STATUS_MIN_INTERVAL_S = 10
+
+/**
+ * The most that one report adds to a running total (`not_accepted`, `overflowed`): a larger count is cut to it. The phone counts
+ * what happened since its last report, so a count of this size is a phone that was away for a long time, not a typical report.
+ */
+export const DEVICE_STATUS_MAX_COUNT = 1000
+
+/**
+ * How old `oldest_waiting_at` may be, in days: an older time is not believed and is stored as nothing. The phone's clock can be
+ * wrong, and a visit that waited longer than this is far outside what the app is made for (the server keeps the phone's clock for
+ * a visit only up to a week, server/config.js), so the committee is shown "unknown" rather than a date that is certainly off.
+ */
+export const DEVICE_STATUS_MAX_AGE_DAYS = 60
