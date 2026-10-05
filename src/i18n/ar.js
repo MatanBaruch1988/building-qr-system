@@ -1,5 +1,6 @@
 export default {
   'app.name': 'الحضور في المبنى',
+  'app.version': 'الإصدار',
   'lang.label': 'اللغة',
   'footer.admin': 'دخول اللجنة',
   'common.loading': 'جارٍ التحميل…',

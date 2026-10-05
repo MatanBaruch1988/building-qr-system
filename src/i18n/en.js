@@ -1,5 +1,6 @@
 export default {
   'app.name': 'Building attendance',
+  'app.version': 'Version',
   'lang.label': 'Language',
   'footer.admin': 'Committee sign-in',
   'common.loading': 'Loading…',

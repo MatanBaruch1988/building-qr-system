@@ -153,6 +153,9 @@ select.a-input {
   .a-scan__tools { grid-column: auto; grid-row: auto; }
 }
 
+/* The build id line at the foot of the Committee tab (src/ui/BuildLabel.jsx), under the building card and lined up with it. */
+.a-build { margin-block-start: 16px; }
+
 /* ----- modal ----- */
 .a-overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: var(--w-overlay); }
 .a-modal { width: 100%; max-height: 92vh; max-height: 92dvh; display: flex; flex-direction: column; background: var(--w-surface); border: 1px solid var(--w-border); border-radius: 24px 24px 0 0; outline: none; color: var(--w-text); }

@@ -2,7 +2,17 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// The build id of this bundle: the first 7 characters of the commit that Vercel builds (VERCEL_GIT_COMMIT_SHA, the same 7
+// characters that server/health.js reports as the server's own commit), or 'dev' for a build that has none (a local build and
+// the E2E tests). It is written into the JavaScript below, and src/ui/build.js reads it. Installed phones keep running old
+// JavaScript for days or weeks, so this is how the committee tells which version a phone has. APP_BUILD_RE in
+// shared/contract.js is its shape.
+const appBuild = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev'
+
 export default defineConfig({
+  // `define` is applied by `vite build` and by `vite dev` alike. Vitest reads vitest.config.js, not this file, so in a unit
+  // test the value is missing and src/ui/build.js answers 'dev'.
+  define: { 'import.meta.env.VITE_APP_BUILD': JSON.stringify(appBuild) },
   plugins: [
     react(),
     VitePWA({

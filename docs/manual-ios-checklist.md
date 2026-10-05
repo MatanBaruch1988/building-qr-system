@@ -50,7 +50,9 @@ Mark each item OK or write what you saw. Take a screenshot of anything that look
 ## Updates
 
 13. [ ] After a new version is deployed, open the installed app: the "update available" banner appears, and tapping it
-    loads the new version (the committee and provider screens still work).
+    loads the new version (the committee and provider screens still work). The "Version" line at the foot of the home
+    screen (and of the Committee tab in the committee app) shows the id of the new commit: the first 7 characters of it,
+    the same as the `commit` of `GET /api/health`.
 
 ## Printed QR
 

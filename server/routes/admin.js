@@ -10,7 +10,7 @@ import { verifyGoogleCredential } from '../google.js'
 import { readAddress, saveAddress, parseAddress } from '../building.js'
 import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvRow } from '../scans.js'
 import {
-  ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, API_KEY_PREFIX,
+  ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, API_KEY_PREFIX, AUDIT_ACTOR_NAME_MAX_LENGTH,
 } from '../config.js'
 import {
   GPS_MODES, GPS_MODE_REQUIRED, DEFAULT_GPS_MODE,
@@ -30,10 +30,13 @@ function baseUrl(req) {
   return `${proto}://${req.headers['x-forwarded-host'] || req.headers.host}`
 }
 
+/** The name an audit row keeps for a committee member: the name, or the e-mail when there is none. Cut by characters, not UTF-16 units. */
+const actorName = (admin) => Array.from(admin.name || admin.email || '').slice(0, AUDIT_ACTOR_NAME_MAX_LENGTH).join('') || null
+
 async function audit(admin, action, entity, entityId, detail) {
   await query(
-    'insert into audit_log (actor_type, actor_id, action, entity, entity_id, detail) values ($1,$2,$3,$4,$5,$6)',
-    ['admin', admin.id, action, entity, entityId ?? null, detail ? JSON.stringify(detail) : null],
+    'insert into audit_log (actor_type, actor_id, actor_name, action, entity, entity_id, detail) values ($1,$2,$3,$4,$5,$6,$7)',
+    ['admin', admin.id, actorName(admin), action, entity, entityId ?? null, detail ? JSON.stringify(detail) : null],
   )
 }
 
