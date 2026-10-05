@@ -400,6 +400,53 @@ describe('when the database is the failure', () => {
     expect(loggedAnything()).toEqual([])
   })
 
+  it('does not queue behind other work: with every connection of the pool in use it asks nothing and takes the way out, with its own words', async () => {
+    at(NOON)
+    // Every connection of the real pool is checked out, so a statement would have to wait in the queue of the pool.
+    const held = await Promise.all(Array.from({ length: db.pool.options.max }, () => db.pool.connect()))
+    try {
+      expect(db.pool.idleCount).toBe(0)
+      const started = performance.now() // the date is frozen in this test, the clock of the process is not
+      await noteServerError(EVENT)
+      expect(performance.now() - started).toBeLessThan(ALERT_DB_TIMEOUT_MS) // it did not wait for a connection
+      expect(bodies()).toEqual(['Server error, database busy, 05/10/2026 14:03: POST /scans/sync 57014'])
+      await noteServerError(EVENT) // the throttle in memory holds the second one back
+      expect(pings).toHaveLength(1)
+    } finally {
+      for (const client of held) client.release()
+    }
+    // Nothing waited in a queue and ran later: the day was not taken, so the first error after the rush alerts as usual.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(await days()).toEqual([])
+    await noteServerError(EVENT)
+    expect(bodies()).toEqual(['Server error, database busy, 05/10/2026 14:03: POST /scans/sync 57014', FIRST_LINE])
+    expect(await days()).toHaveLength(1)
+    expect(loggedAnything()).toEqual([])
+  })
+
+  it('reads the busy state from the pool: busy only when no connection is idle and the pool is at its size', async () => {
+    at(NOON)
+    const asked = []
+    const pool = (state) => ({ options: { max: 3 }, ...state, query: (text) => (asked.push(text), Promise.resolve({ rowCount: 1, rows: [{}] })) })
+    for (const busy of [{ idleCount: 0, totalCount: 3 }, { idleCount: 0, totalCount: 3, waitingCount: 2 }]) {
+      resetAlertThrottle()
+      setPool(pool(busy))
+      await noteServerError(EVENT)
+    }
+    expect(asked).toEqual([]) // not asked
+    const busyLine = 'Server error, database busy, 05/10/2026 14:03: POST /scans/sync 57014'
+    expect(bodies()).toEqual([busyLine, busyLine]) // one for each state (the throttle was reset between them)
+    for (const free of [{ idleCount: 1, totalCount: 3 }, { idleCount: 0, totalCount: 2 }, {}]) {
+      resetAlertThrottle()
+      pings.length = 0
+      asked.length = 0
+      setPool(pool(free))
+      await noteServerError(EVENT)
+      expect(asked, JSON.stringify(free)).toHaveLength(1) // asked
+      expect(bodies(), JSON.stringify(free)).toEqual([FIRST_LINE])
+    }
+  })
+
   it('treats an insert that does not answer in time as a database that is down, and stays inside the bound', async () => {
     setPool({ query: () => new Promise(() => {}) }) // a query that never answers
     const started = Date.now()
@@ -544,6 +591,16 @@ describe('through the router', () => {
     expect(String(errors[0])).not.toContain(PERSONAL)
     expect(bodies()).toEqual(['Server error, alert record failed, 05/10/2026 14:03: GET /test/alert/boom 57014'])
     expect(JSON.stringify(pings)).not.toContain(PERSONAL)
+  })
+
+  it('still answers the same 500, with one log line, when the pool is busy, and says so in the ping', async () => {
+    at(NOON)
+    setPool({ options: { max: 3 }, idleCount: 0, totalCount: 3, query: () => Promise.reject(new Error('the pool is busy')) })
+    const { r, errors } = await viaRouter('/api/test/alert/boom')
+    expect(r.status).toBe(500)
+    expect(r.json).toEqual(PLAIN_500)
+    expect(errors).toHaveLength(1)
+    expect(bodies()).toEqual(['Server error, database busy, 05/10/2026 14:03: GET /test/alert/boom 57014'])
   })
 
   it('answers within its bound, with the same 500 and one log line, when the fetch hangs', async () => {

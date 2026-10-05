@@ -9,9 +9,10 @@
 // is the building's (isoDay of shared/datetime.js), the same day that a person reads in the committee app.
 //
 // When the database is the failure there is nothing to ask and nothing to count. An error that is a failure to reach it
-// (isConnectionFailure of server/errorLog.js), an insert that fails, and an insert that does not answer in time all take the
-// same way out: a throttle in the memory of this function instance, one ping an hour at most. A long outage can ping more than
-// once an hour, once per instance (the ADR says so). That is the price of needing no database for the alert.
+// (isConnectionFailure of server/errorLog.js), a pool whose connections are all busy (the insert would queue behind other work,
+// and the error may be a sign of that very overload), an insert that fails, and an insert that does not answer in time all take
+// the same way out: a throttle in the memory of this function instance, one ping an hour at most. A long outage can ping more
+// than once an hour, once per instance (the ADR says so). That is the price of needing no database for the alert.
 //
 // What is sent (AGENTS.md, Safety): a short line with the route as it is written in the code, the HTTP method, the error's
 // code or name (failureLabel of server/logSafe.js) and the time, written by shared/datetime.js in the building's time zone.
@@ -22,7 +23,7 @@
 // an hour when the database is down. noteServerError never throws and never logs: the caller has already logged the error.
 // Without HEALTH_HEARTBEAT_URL (every Preview deployment, every local run and every test) it does nothing at all, not even a
 // query, so that a day is not marked as announced when no ping could be sent.
-import { query } from './db.js'
+import { getPool, query } from './db.js'
 import { ALERT_DB_TIMEOUT_MS, ALERT_TOTAL_TIMEOUT_MS, ALERT_UNREACHABLE_INTERVAL_MS } from './config.js'
 import { EVENT_METHODS, isConnectionFailure } from './errorLog.js'
 import { isHeartbeatConfigured, sendHeartbeat } from './heartbeat.js'
@@ -34,11 +35,12 @@ const CLAIM_DAY = 'insert into alert_pings (day) values ($1) on conflict do noth
 
 const TIMED_OUT = Symbol('timed out')
 
-// The text of each kind of line, in front of the time. The first is the daily alert; the two others are the way out when the
-// database cannot be asked (the second says what is known: it did not answer; the third that it answered, but the record of the
-// day failed).
+// The text of each kind of line, in front of the time. The first is the daily alert; the others are the way out when the database
+// cannot be asked: it did not answer, or every connection of the pool was busy so that the insert would have had to wait in a
+// queue behind other work, or it answered but the record of the day failed.
 const FIRST_OF_THE_DAY = 'First server error today'
 const DATABASE_UNREACHABLE = 'Database unreachable'
+const DATABASE_BUSY = 'Server error, database busy'
 const ALERT_RECORD_FAILED = 'Server error, alert record failed'
 
 // When this instance last pinged without the database, in milliseconds (Date.now()), or null. One variable for the whole
@@ -80,13 +82,27 @@ function takeThePlaceOfThisHour() {
 }
 
 /**
- * Asks the database whether this error is the first of the building day, and takes the day if it is. Never throws.
- * @returns {Promise<'first' | 'already' | 'unreachable' | 'failed'>} `unreachable`: it did not answer in time, or the insert
- *   failed because it could not be reached; `failed`: the insert failed for another reason (the table is not there, say)
+ * Whether a statement asked now would have to wait for a connection: every one is in use and the pool is at its size. A pool
+ * that does not say (a test double) is not busy.
+ */
+function poolIsBusy() {
+  const pool = getPool()
+  const max = pool?.options?.max
+  return Number.isInteger(max) && pool.idleCount === 0 && pool.totalCount >= max
+}
+
+/**
+ * Asks the database whether this error is the first of the building day, and takes the day if it is. Never throws. It never
+ * queues behind other work: when the pool is busy it does not ask at all (the error may be the sign of that very overload, and
+ * a wait would only hold up the answer of the request).
+ * @returns {Promise<'first' | 'already' | 'busy' | 'unreachable' | 'failed'>} `busy`: not asked, the pool had no free
+ *   connection; `unreachable`: it did not answer in time, or the insert failed because it could not be reached; `failed`: the
+ *   insert failed for another reason (the table is not there, say)
  */
 async function claimTheDay() {
   let timer
   try {
+    if (poolIsBusy()) return 'busy'
     const answer = await Promise.race([
       query(CLAIM_DAY, [isoDay()]),
       new Promise((resolve) => {
@@ -116,11 +132,11 @@ async function announce(event) {
     return
   }
   if (!takeThePlaceOfThisHour()) return
-  await sendHeartbeat(
+  const body =
     day === 'unreachable'
-      ? { signal: 'fail', body: bodyOf(DATABASE_UNREACHABLE, event, false) }
-      : { signal: 'fail', body: bodyOf(ALERT_RECORD_FAILED, event, true) },
-  )
+      ? bodyOf(DATABASE_UNREACHABLE, event, false)
+      : bodyOf(day === 'busy' ? DATABASE_BUSY : ALERT_RECORD_FAILED, event, true)
+  await sendHeartbeat({ signal: 'fail', body })
 }
 
 /**
