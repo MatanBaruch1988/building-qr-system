@@ -1,6 +1,6 @@
 # 0007: Observability lives in our own Postgres
 
-Status: Accepted
+Status: Accepted, not implemented yet
 
 Date: 05/10/2026
 
@@ -36,7 +36,9 @@ Errors stay in our own Postgres, alerts go through healthchecks.io, and no new s
    - The first server error of a building day (`BUILDING_TZ` in `shared/datetime.js`) pings the `/fail` address at once. A
      small alert-throttle table remembers that the day was announced.
    - A second daily Vercel cron job sends a short summary of the last 24 hours (counts, route patterns and codes only), as
-     a success ping, or as `/fail` when those hours held server errors.
+     a success ping, or as `/fail` when those hours held a technical problem (a server error, a crash on a phone, a
+     retention run that did not happen, a phone whose uploads are stuck). A refusal that the rules intend, such as a
+     provider who is not assigned to the point, is counted in the summary but does not fail it.
    - If the database itself is down, nothing can be counted, so an in-memory throttle still pings at most once an hour.
 3. **Reports from the phone and the committee app** go only through guarded endpoints of their own role: `/api/my/...` for
    a provider and `/api/admin/...` for the committee, so the guard of the router runs first (`server/access.js`). The body
@@ -57,7 +59,7 @@ Good:
 
 - No new vendor, account or secret, and no data from a phone leaves our database. The retention rules and the privacy
   page already cover the place where it lives.
-- A problem at night is recorded and reaches the owner without his laptop: the alert comes from the server and from Vercel
+- A problem at night is recorded and reaches the owner without the owner's laptop: the alert comes from the server and from Vercel
   Cron. A day with no summary ping is a signal too, as it is for the backup.
 - A lost upload and a crash on a phone become visible, and the audit log is finally read by somebody.
 
