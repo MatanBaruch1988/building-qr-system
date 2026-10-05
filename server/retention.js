@@ -16,6 +16,7 @@
 // It is safe to run twice, or late, or not at all for a day (Vercel Cron delivery is best effort): every statement is a
 // condition on age, so a run deletes what is due at that moment and the next one finds nothing more.
 import { tx } from './db.js'
+import { audit } from './audit.js'
 import {
   RETENTION_SESSION_DAYS,
   RETENTION_LOGIN_ATTEMPT_DAYS,
@@ -57,21 +58,17 @@ export async function runRetention() {
     }
     // Counts only: no id, no name, no label. The audit log has no end date, and nothing in the app reads it today (no screen,
     // no agent API, no export): only whoever holds the database or a backup can.
-    // actor_name stays null on purpose: it is the snapshot of a person's name, and the system actor is already named by
-    // actor_type, so a screen can name it in the reader's own language (src/i18n), which a fixed English string in the
-    // database could not do.
-    await c.query(
-      `insert into audit_log (actor_type, actor_id, action, entity, entity_id, detail)
-       values ('system', null, 'retention.run', null, null, $1)`,
-      [
-        JSON.stringify({
-          sessions: counts.sessions,
-          login_attempts: counts.loginAttempts,
-          device_labels: counts.deviceLabels,
-          app_errors: counts.appErrors,
-        }),
-      ],
-    )
+    // The name of the system actor stays null on purpose: actor_name is the snapshot of a person's name, and the system actor
+    // is already named by actor_type, so a screen can name it in the reader's own language (src/i18n), which a fixed English
+    // string in the database could not do.
+    await audit(c, { type: 'system', id: null, name: null }, 'retention.run', {
+      detail: {
+        sessions: counts.sessions,
+        login_attempts: counts.loginAttempts,
+        device_labels: counts.deviceLabels,
+        app_errors: counts.appErrors,
+      },
+    })
     return counts
   })
 }

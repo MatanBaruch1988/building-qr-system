@@ -27,9 +27,12 @@ export async function readAddress() {
   return rows[0]?.address ?? ''
 }
 
-/** Saves the address and who saved it. An upsert, so a row that went missing does not turn a save into an error. */
-export async function saveAddress(adminId, address) {
-  const { rows } = await query(
+/**
+ * Saves the address and who saved it, with the client `c` of the transaction that also writes the audit row (server/audit.js),
+ * so the change and its record commit together. An upsert, so a row that went missing does not turn a save into an error.
+ */
+export async function saveAddress(c, adminId, address) {
+  const { rows } = await c.query(
     `insert into building_settings (id, address, updated_at, updated_by) values (1, $1, now(), $2)
      on conflict (id) do update
        set address = excluded.address, updated_at = excluded.updated_at, updated_by = excluded.updated_by
