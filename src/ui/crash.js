@@ -6,6 +6,7 @@
 import { currentApp, APP_COMMITTEE } from '../appKind.js'
 import { isUpdateReady, applyUpdate } from '../worker/update.js'
 import { DEFAULT_LANG, dirOf, pickLang, readStoredLang, translate } from '../i18n/core.js'
+import { noteClientError, currentPlace } from './errorReport.js'
 import { ERROR_NAME_RE } from '../../shared/contract.js'
 
 // An error's `name` is the class of the error (TypeError, RangeError, ...): not a value that anybody typed. Anything that
@@ -33,13 +34,87 @@ export function logCrash(error, app = currentApp()) {
 }
 
 /**
+ * What is done for a crash: the console line (logCrash), and a note in the outbox of src/ui/errorReport.js (kind `crash`, the screen
+ * that the app said it was showing, the error's name and nothing else), which goes to the server with the next report, after sign-in.
+ * It never throws: a handler that fails inside React's error handler would only make things worse.
+ */
+export function reportCrash(error) {
+  logCrash(error)
+  try {
+    noteClientError({ kind: 'crash', place: currentPlace(), name: errorName(error) })
+  } catch {
+    /* noteClientError does not throw; this is for currentPlace */
+  }
+}
+
+/**
  * The options of createRoot (main.jsx). React's own handler for an error that a boundary caught prints the error with
  * its message and the component stack, so ours replaces it: it is the only way to keep those out of the console.
- * `onUncaughtError` is for what no boundary caught (the fallback itself breaking), which leaves a blank page.
+ * `onUncaughtError` is for what no boundary caught (the fallback itself breaking), which leaves a blank page. Both are a crash,
+ * and both go to reportCrash.
  */
 export const crashRootOptions = {
-  onCaughtError: (error) => logCrash(error),
-  onUncaughtError: (error) => logCrash(error),
+  onCaughtError: (error) => reportCrash(error),
+  onUncaughtError: (error) => reportCrash(error),
+}
+
+// ---- what nothing caught ----------------------------------------------------------------------------------------------
+
+/**
+ * Is this the address of a file on our own origin? An error from another origin reaches `window` with its details hidden (its
+ * `filename` is empty, or masked by the browser): the sign-in script of Google is the one that comes up, and it is not ours to report.
+ * @param {unknown} filename  the `filename` of an ErrorEvent
+ * @param {string} origin  `location.origin`
+ */
+export function isOwnOrigin(filename, origin) {
+  if (typeof filename !== 'string' || filename === '') return false
+  try {
+    return new URL(filename).origin === origin
+  } catch {
+    return false // not an address
+  }
+}
+
+/**
+ * Starts noting what nothing caught: an error that reaches `window`, only when it comes from a file of our own origin (isOwnOrigin; a
+ * cross-origin "Script error." says nothing and is ignored), and a promise that was rejected with nobody to handle it. Both are kind
+ * `unhandled`, with the error's class as the name (errorName) or, for a rejection with something that is not an Error (a string, an
+ * object, nothing), the fixed code `non_error`. The message, the file name and the line are never read. The default handling of the
+ * browser stays as it is: nothing here prevents the console line, so it is not a way to hide an error. It never throws, which also keeps
+ * a failure in here from raising the very events it listens for.
+ * @param {object} [options]
+ * @param {EventTarget} [options.target]
+ * @param {string} [options.origin]
+ * @param {import('../worker/storage.js').StorageLike} [options.storage]
+ * @returns {() => void}  stops noting
+ */
+export function watchUnhandledErrors({ target = window, origin = window.location.origin, storage } = {}) {
+  /** @param {Event} event */
+  const onError = (event) => {
+    try {
+      const { filename, error } = /** @type {ErrorEvent} */ (event)
+      if (!isOwnOrigin(filename, origin)) return
+      noteClientError({ kind: 'unhandled', place: currentPlace(), name: errorName(error) }, storage)
+    } catch {
+      /* never an error inside an error handler */
+    }
+  }
+  /** @param {Event} event */
+  const onRejection = (event) => {
+    try {
+      const { reason } = /** @type {PromiseRejectionEvent} */ (event)
+      const what = reason instanceof Error ? { name: errorName(reason) } : { code: 'non_error' }
+      noteClientError({ kind: 'unhandled', place: currentPlace(), ...what }, storage)
+    } catch {
+      /* never an error inside an error handler */
+    }
+  }
+  target.addEventListener('error', onError)
+  target.addEventListener('unhandledrejection', onRejection)
+  return () => {
+    target.removeEventListener('error', onError)
+    target.removeEventListener('unhandledrejection', onRejection)
+  }
 }
 
 /**

@@ -60,3 +60,9 @@ Mark each item OK or write what you saw. Take a screenshot of anything that look
 
 14. [ ] Scan a printed QR from before the move (`building-qr-system.web.app`): it lands on the new address with the
     right point, and signing in and checking in works.
+
+## Crashes
+
+15. [ ] If the crash screen ("Something went wrong on this screen") showed up during this pass, tap "Reload the app"
+    and sign in: the phone sends the report of that crash by itself (a crash before sign-in waits on the phone until
+    the next sign-in), and nothing about it is shown to the person.

@@ -45,7 +45,7 @@ export const providerLabel = (p) => (p?.contact_name ? `${p.contact_name} · ${p
  *   | { kind: 'far', scan: Scan }
  *   | { kind: 'needLocation', scan: Scan, locationReason: string | null }
  *   | { kind: 'queued', id: string, client_time: string, persisted: boolean }
- *   | { kind: 'signedOut' }
+ *   | { kind: 'signedOut', code: string }
  *   | { kind: 'error', code: string }} CheckInResult
  */
 
@@ -83,7 +83,7 @@ export async function performCheckIn({ code, point, session, deps, onPhase = () 
     if (scan.outcome === OUTCOME_REJECTED_NO_LOCATION) return { kind: 'needLocation', scan, locationReason }
     return { kind: res.duplicate ? 'duplicate' : 'success', scan }
   } catch (err) {
-    if (err.status === 401) return { kind: 'signedOut' }
+    if (err.status === 401) return { kind: 'signedOut', code: err.code } // the code that the server answered: the app notes it (src/ui/errorReport.js)
     if (err.transient) {
       // No signal (or a server hiccup): keep the visit on the phone. The same id is reused on upload,
       // so if the server did receive it after all, the retry cannot create a second record.

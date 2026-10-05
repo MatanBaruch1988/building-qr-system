@@ -81,6 +81,33 @@ export async function adminSignIn(page) {
   await expect(page.getByRole('heading', { name: 'נקודות סריקה' })).toBeVisible()
 }
 
+/**
+ * The request that an app makes to report its errors (src/ui/errorReport.js): a POST to `path` (`/api/my/errors` for the provider app,
+ * `/api/admin/client-errors` for the committee app). Pass it to `page.waitForRequest`, which must be called before the action that
+ * makes the app send it.
+ */
+export const isErrorReport = (path) => (request) => request.method() === 'POST' && new URL(request.url()).pathname === path
+
+/**
+ * Checks a request that an app made to report its errors: the server answered 200, and the body is `{ events }` with exactly the events
+ * in `expected` (`kind`, `place` and a `name` or a `code`; `count` is 1 unless it says), each with the build of an end-to-end run
+ * ('dev') and with no other field. Nothing that says what happened is in the body: no message, no stack, no address, no token, no QR code.
+ */
+export async function expectErrorReport(request, expected) {
+  const raw = request.postData() ?? ''
+  const body = JSON.parse(raw)
+  expect(Object.keys(body), 'the body is only a list of events').toEqual(['events'])
+  expect(body.events).toHaveLength(expected.length)
+  expected.forEach((want, i) => {
+    const event = body.events[i]
+    expect(Object.keys(event).sort(), `the fields of event ${i}`).toEqual([...Object.keys(want), 'build', 'count'].sort())
+    expect(event).toEqual({ ...want, build: 'dev', count: 1, ...(want.count ? { count: want.count } : {}) })
+  })
+  expect(raw).not.toMatch(/message|stack|Cannot read|https?:|\.js|qrp_|BQR-/)
+  const response = await request.response()
+  expect(response?.status(), 'the server took the report').toBe(200)
+}
+
 /** Deletes every scan, so that each test starts without the visits an earlier one made (the cooldown would hide them). */
 export async function clearScans(request) {
   const login = await request.post('/api/admin/dev-login', { data: { email: ADMIN_EMAIL } })
