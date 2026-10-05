@@ -106,7 +106,7 @@ test('printing a sign builds the sheet with the name of the point and its QR ima
   // its own class names are the handle.
   const sign = page.locator('.a-print-only .a-sign')
   await expect(sign).toHaveCount(1)
-  await expect(sign.locator('h2')).toHaveText('לובי')
+  await expect(sign.locator('h1')).toHaveText('לובי')
   await expect(sign.locator('img')).toHaveAttribute('src', /^data:image\/png;base64,.{100,}/)
   await expect.poll(() => sign.locator('img').evaluate((img) => img.naturalWidth)).toBeGreaterThan(0)
   await expect(sign.locator('p')).toHaveCount(4) // the instruction in the four languages

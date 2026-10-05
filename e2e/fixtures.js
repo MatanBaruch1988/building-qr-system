@@ -93,11 +93,16 @@ export async function clearScans(request) {
 
 // ---- accessibility ---------------------------------------------------------------------------------------------
 
-/** The rules that the scan runs: WCAG 2.1 level A and AA (the level that tests/contrast.test.js holds the colour tokens to). */
-export const A11Y_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
+/**
+ * The rules that the scan runs: WCAG 2.1 level A and AA (the level that tests/contrast.test.js holds the colour tokens to),
+ * and axe's `best-practice` rules. Those are not WCAG success criteria: they are the good practice that screen-reader
+ * users feel, mostly the structure of the page (one banner and one main landmark, landmarks that can be told apart, a
+ * heading level that follows the one before it, everything inside a landmark).
+ */
+export const A11Y_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice']
 
 /**
- * Scans the page as it is now with axe-core (the WCAG 2.1 A and AA rules) and fails the test, with a list that says what
+ * Scans the page as it is now with axe-core (A11Y_TAGS: WCAG 2.1 A and AA, and best practice) and fails the test, with a list that says what
  * is wrong and where, when it finds a problem that e2e/a11y-baseline.js does not list. The test goes on after a failure
  * (a soft expectation), so one run lists every screen that has a problem.
  *

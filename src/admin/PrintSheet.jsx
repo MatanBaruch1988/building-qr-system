@@ -63,11 +63,14 @@ export default function PrintSheet({ points, layout, onDone }) {
   }, [images, onDone])
 
   if (!images) return null
+  // In print the sheet is the whole document (admin.css hides everything else, <main> of the screen included), so it is
+  // the <main> of that document and the name of the point is its <h1>. On a screen it is display: none, so the page has
+  // no second <main> and no second <h1>.
   return createPortal(
-    <div className="a-print-only" aria-hidden="true" ref={root}>
+    <main className="a-print-only" aria-hidden="true" ref={root}>
       {points.map((p, i) => (
         <section key={p.id} className={`a-sign a-sign--${layout}`}>
-          <h2>{p.name}</h2>
+          <h1>{p.name}</h1>
           <img src={images[i]} alt="" />
           <div className="a-sign__langs">
             {LINES.map((l) => (
@@ -76,7 +79,7 @@ export default function PrintSheet({ points, layout, onDone }) {
           </div>
         </section>
       ))}
-    </div>,
+    </main>,
     document.querySelector('.a-app') ?? document.body,
   )
 }
