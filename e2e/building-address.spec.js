@@ -172,12 +172,14 @@ const signedOutLogin = async (page) => {
   await expect(page.getByRole('heading', { level: 1, name: 'ניהול נוכחות הבניין' })).toBeVisible()
 }
 /**
- * The card of the sign-in screen (the parent of its title) is inside the screen, and so is the building's name in it. The scroll width
- * of the whole page is not asked here: in WebKit the sign-in screen is a few pixels wider than the phone with or without a name, because
- * the hidden <select> of its light/dark picker (src/ui/ThemeSwitch.jsx) is wider than the 44 px box that holds it. That is not about
- * the name, and it is in the notes of the pull request.
+ * The sign-in screen fits the screen: the page itself does not scroll sideways, the card (the parent of its title) is inside the screen,
+ * and so is the building's name in it. The scroll width of the page is asked on purpose, whatever the name: in WebKit this screen used
+ * to be 23 px wider than an iPhone, with or without a name, because the hidden <select> of its light/dark picker (src/ui/ThemeSwitch.jsx)
+ * ran past the 44 px box that holds it (fixed in src/ui/ui.css). The two checks after it say where the card and the name are, which the
+ * scroll width alone does not.
  */
 async function loginFits(page, what, name) {
+  expect(await noHorizontalScroll(page), `${what}: the page does not scroll sideways`).toBe(true)
   const title = page.getByRole('heading', { level: 1, name: 'ניהול נוכחות הבניין' })
   const card = await title.locator('xpath=..').boundingBox()
   const view = page.viewportSize()
