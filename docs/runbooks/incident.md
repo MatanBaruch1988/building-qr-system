@@ -68,8 +68,9 @@ which is the time, the HTTP method, the route as it is written in the code, and 
 is a statement that the database cancelled for taking too long), a network code (`ECONNRESET`), or the name of the error's
 class (`TypeError`). Never the message. A crash that the provider's app or the committee app reports counts as the first
 error of the day too, and then the text is `First app error today, <time>: <screen key> <code> (build <build>)`, with a screen
-key such as `provider:home`. At the time of writing the apps do not send reports yet (the server accepts them already,
-`server/routes/clientErrors.js`), so this text appears only after the release that makes them send. The other texts of this
+key such as `provider:home`. An app keeps what it noted on the device and sends it after the next sign-in, when it starts,
+and when it comes back to the screen (`src/ui/errorReport.js`), so an app's crash can arrive some time after it happened, and
+a crash before sign-in only after the next sign-in. The other texts of this
 ping, for a database that cannot be asked, are in "When the alert is about the database" below.
 
 **The daily summary**, once a day, about 06:00 to 08:00 in the building's time: Vercel Cron starts the job at 04:00 UTC

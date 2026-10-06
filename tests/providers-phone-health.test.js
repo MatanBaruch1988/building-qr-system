@@ -1,4 +1,4 @@
-// The health of a provider's phones on the committee's Providers list (ADR 0007, decision 4, "Phone health"; migration 010,
+// The health of a provider's phones on the committee's Providers list (ADR 0007, decision 4, "Phone health"; migration 009,
 // server/deviceStatus.js for what a phone reports, `PROVIDER_SELECT` in server/routes/admin.js for what the list adds).
 //
 // What this file proves, for GET /api/admin/providers (and the single provider that POST and PATCH answer with):

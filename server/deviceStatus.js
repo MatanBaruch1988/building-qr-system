@@ -1,4 +1,4 @@
-// What a phone reports about itself, and what the committee reads of it (ADR 0007, decision 4, "Phone health"; migration 010).
+// What a phone reports about itself, and what the committee reads of it (ADR 0007, decision 4, "Phone health"; migration 009).
 //
 // Two writers, one reader:
 //   - the phone: POST /api/my/device-status carries a DeviceStatusReport (shared/types.js). parseDeviceStatusReport reads it and
