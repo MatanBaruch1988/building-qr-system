@@ -12,7 +12,7 @@ export const ACTION_LABELS = Object.freeze({
   'admin.enable': 'הפעלת חבר ועד',
   'admin.disable': 'השבתת חבר ועד',
   'admin.delete': 'מחיקת חבר ועד',
-  'building.update': 'עדכון כתובת הבניין',
+  'building.update': 'עדכון פרטי הבניין',
   'point.create': 'יצירת נקודה',
   'point.update': 'עדכון נקודה',
   'point.delete': 'מחיקת נקודה',

@@ -4,7 +4,7 @@ import { parseQrToken } from '../../shared/qrToken.js' // one definition of "wha
 import { SCAN_ERROR_INVALID_CODE, SCAN_ERROR_UNKNOWN_CODE } from '../../shared/contract.js'
 import { safeStorage, readJson } from './storage.js'
 import { getCachedPoint, setCachedPoint, dropCachedPoint } from './pointCache.js'
-import { getCachedAddress, setCachedAddress } from './buildingCache.js'
+import { getCachedBuilding, setCachedBuilding, parseBuilding } from './buildingCache.js'
 import { flushQueue } from './scanQueue.js'
 import { createDeviceReporter } from './deviceStatus.js'
 import { createErrorReporter } from '../ui/errorReport.js'
@@ -32,26 +32,28 @@ export function useProviders() {
 }
 
 /**
- * The building's address for the header. The last one the phone saw is shown at once (and with no signal), then the
- * network answer replaces it, an empty one included. A failed request changes nothing. Asked once, when the app starts.
+ * The building's address and name for the header (and the name for the title of the window). The last ones the phone saw are shown
+ * at once (and with no signal), then the network answer replaces them, an empty one included. A failed request, or an answer that
+ * is not ours, changes nothing. Asked once, when the app starts.
+ * @returns {import('./buildingCache.js').CachedBuilding}
  */
-export function useBuildingAddress() {
-  const [address, setAddress] = useState(() => getCachedAddress())
+export function useBuilding() {
+  const [building, setBuilding] = useState(() => getCachedBuilding())
   useEffect(() => {
     let cancelled = false
     api('/public/building', { timeoutMs: 8000 })
       .then((res) => {
-        const next = res?.building?.address
-        if (typeof next !== 'string') return // not an answer of ours: keep what the phone knows
-        setCachedAddress(next)
-        if (!cancelled) setAddress(next)
+        const next = parseBuilding(res?.building)
+        if (!next) return // not an answer of ours: keep what the phone knows
+        setCachedBuilding(next)
+        if (!cancelled) setBuilding(next)
       })
       .catch(() => {}) // no signal or a server hiccup: keep the saved one
     return () => {
       cancelled = true
     }
   }, [])
-  return address
+  return building
 }
 
 /**

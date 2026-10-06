@@ -32,6 +32,18 @@ export function translate(lang, key, params) {
 }
 
 /**
+ * The title of the window (the tab, "add to home screen"): the app's name in the language, with the building's name before it when
+ * the committee typed one. The building's name is data, not a translation, so it is written as it was typed.
+ * @param {string} lang
+ * @param {string} [buildingName]
+ */
+export function pageTitle(lang, buildingName = '') {
+  const app = translate(lang, 'app.name')
+  const name = buildingName.trim()
+  return name ? `${name} · ${app}` : app
+}
+
+/**
  * The person's own choice on this phone, otherwise Hebrew. The committee does not set a language for anyone: it is
  * the person's choice, kept on their phone (see I18nProvider), the same as light/dark.
  * The phone's own language is deliberately NOT used: most phones here are set to English, but the people

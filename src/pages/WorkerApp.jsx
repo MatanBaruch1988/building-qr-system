@@ -7,7 +7,7 @@ import { getFix } from '../worker/geo.js'
 import { performCheckIn, withScanContext } from '../worker/checkIn.js'
 import { uuid } from '../worker/uuid.js'
 import { SCAN_ERROR_POINT_INACTIVE } from '../../shared/contract.js'
-import { useProviders, useBuildingAddress, usePoint, useTodayVisits, useQueueSync, useDeviceStatus, useErrorReport } from '../worker/hooks.js'
+import { useProviders, useBuilding, usePoint, useTodayVisits, useQueueSync, useDeviceStatus, useErrorReport } from '../worker/hooks.js'
 import { noteClientError, setPlace, currentPlace } from '../ui/errorReport.js'
 import { TopBar, LoginView, HomeView, WorkingView, ResultView } from '../worker/components.jsx'
 import '../ui/ui.css'
@@ -16,9 +16,12 @@ import '../ui/ui.css'
 
 export default function WorkerApp() {
   const [session, setSession] = useState(loadSession)
+  // Asked here, above the language provider, because the building's name is part of the title of the window, which the provider
+  // writes (in the person's language); the header takes its two lines from the same answer. Asked once, when the app starts.
+  const building = useBuilding()
   return (
-    <I18nProvider>
-      <WorkerShell session={session} setSession={setSession} />
+    <I18nProvider buildingName={building.name}>
+      <WorkerShell session={session} setSession={setSession} building={building} />
     </I18nProvider>
   )
 }
@@ -38,11 +41,10 @@ const vibrate = () => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const stripCodeFromUrl = () => window.history.replaceState(null, '', '/')
 
-function WorkerShell({ session, setSession }) {
+function WorkerShell({ session, setSession, building }) {
   const { t } = useI18n()
   const queue = useMemo(() => createQueue(), [])
   const deps = useMemo(() => ({ api, getFix, queue, newId: uuid, now: () => new Date() }), [queue])
-  const address = useBuildingAddress() // the header's line, asked once when the app starts
 
   // The QR link is /scan?code=…. The code stays in the address bar (and in `code`) until the check-in has
   // produced an answer, so a refresh while signing in or while waiting does not lose it.
@@ -215,7 +217,7 @@ function WorkerShell({ session, setSession }) {
   return (
     <div className="w-app">
       <div className="w-shell">
-        <TopBar address={address} />
+        <TopBar name={building.name} address={building.address} />
         <main style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           {screen === 'login' ? (
             <LoginScreen pointName={pointState.point?.name} notice={loginNotice} onSignedIn={onSignedIn} />

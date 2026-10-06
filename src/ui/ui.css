@@ -114,6 +114,10 @@
    longer language, so it never pushes the two icons off the edge. It is the committee's own text (any language), and it
    is absent when the committee typed none. */
 .w-brand { min-width: 0; font-size: 1.25rem; line-height: 1.25; font-weight: var(--w-weight-semibold); color: var(--w-text); overflow-wrap: anywhere; }
+/* The name and the address are two lines in one box, so that the box is the one item that shrinks and wraps (a long name is as free to
+   wrap as a long address). With a name, the name is the title and the address under it is the quieter line. */
+.w-brandbox { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.w-brand--sub { font-size: 0.9375rem; line-height: 1.35; font-weight: var(--w-weight-medium); color: var(--w-text-2); }
 
 /* The appearance picker (src/ui/ThemeSwitch.jsx) and the language picker (TopBar) are just an icon: no edge, no fill,
    a 44px touch target. A real <select> lies invisibly over the icon, so the phone's own picker opens. Only the icon

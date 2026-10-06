@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { DICTS, LANGS, translate, pickLang, dirOf, makeFormatters } from '../src/i18n/core.js'
+import { DICTS, LANGS, translate, pageTitle, pickLang, dirOf, makeFormatters } from '../src/i18n/core.js'
 import { KNOWN_ERROR_CODES } from '../src/worker/errors.js'
 
 const params = (s) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort()
@@ -36,6 +36,20 @@ describe('translate', () => {
   })
   it('leaves an unknown placeholder untouched', () => {
     expect(translate('en', 'login.pointBanner', {})).toContain('{name}')
+  })
+})
+
+describe('the title of the window', () => {
+  it("is the name of the app in the language, with the building's name first when there is one", () => {
+    for (const { code } of LANGS) {
+      expect(pageTitle(code), code).toBe(DICTS[code]['app.name'])
+      expect(pageTitle(code, ''), code).toBe(DICTS[code]['app.name'])
+      expect(pageTitle(code, 'Sample Tower'), code).toBe(`Sample Tower · ${DICTS[code]['app.name']}`)
+    }
+  })
+  it('writes the name as it was typed (data, not a translation), without the spaces around it, and nothing for spaces alone', () => {
+    expect(pageTitle('en', '  בניין הדוגמה  ')).toBe('בניין הדוגמה · Building attendance')
+    expect(pageTitle('en', '   ')).toBe('Building attendance')
   })
 })
 

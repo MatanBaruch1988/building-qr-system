@@ -3,7 +3,8 @@ import { adminApi, errorText } from '../api.js'
 import { useLoad, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconBan, IconCheck, IconShield, IconAlert, IconTrash, IconClock, IconChevron } from '../icons.jsx'
-import { ADDRESS_MAX_LENGTH, NAME_MAX_LENGTH } from '../../../shared/contract.js'
+import { ADDRESS_MAX_LENGTH, BUILDING_NAME_MAX_LENGTH, NAME_MAX_LENGTH } from '../../../shared/contract.js'
+import { useBuildingName } from '../buildingName.jsx'
 import BuildLabel from '../../ui/BuildLabel.jsx'
 import AuditView from './AuditView.jsx'
 import HelpSection from './HelpSection.jsx'
@@ -13,39 +14,77 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 // The same limits as the server (shared/contract.js), so that the person is told before sending.
 const CONTROL_RE = /[\p{Cc}\p{Zl}\p{Zp}]/u
 
+// What the field says when the server refused it (a limit or a character that the form could not know about).
+const FIELD_REFUSED = {
+  address: 'הכתובת לא נשמרה: היא ארוכה מדי או מכילה תווים שאי אפשר לשמור.',
+  name: 'השם לא נשמר: הוא ארוך מדי או מכיל תווים שאי אפשר לשמור.',
+}
+
+/** What the toast says after a save, by what the person changed: the address alone, the name alone, or both. */
+function savedMessage({ addressChanged, nameChanged }, building) {
+  if (addressChanged && nameChanged) return 'פרטי הבניין נשמרו'
+  if (nameChanged) return building.name ? 'שם הבניין נשמר' : 'שם הבניין הוסר'
+  return building.address ? 'כתובת הבניין נשמרה' : 'כתובת הבניין הוסרה'
+}
+
 /**
- * The building's address: shown at the top of the service providers' app, kept in the database of this committee.
- * It can stay empty, and then that app shows no address. One field and a save button, so there are no row actions here
- * (and the card is not an <article>: the committee members' cards are).
+ * The building's name and address: shown at the top of the service providers' app (the name above the address) and, the name, in the
+ * committee app too. Both are kept in the database of this committee and either can stay empty (the apps then show nothing for it).
+ * One form and one save button for the two, so there are no row actions here (and the card is not an <article>: the committee
+ * members' cards are). A save tells the committee app the name that the server now has, so its brand follows with no reload.
  */
 function BuildingCard() {
   const titleId = useId()
   const toast = useToast()
+  const { setName: showName } = useBuildingName()
   const [busy, run] = useAction(toast, errorText)
-  const [stored, setStored] = useState('') // as the server has it
-  const [text, setText] = useState('') // what the field says now
-  const [error, setError] = useState('')
+  const [stored, setStored] = useState({ address: '', name: '' }) // as the server has it
+  const [addressText, setAddressText] = useState('') // what the fields say now
+  const [nameText, setNameText] = useState('')
+  const [errors, setErrors] = useState({ address: '', name: '' })
+
+  // Takes what the server has (a load, a save) into the fields and the brand. A server from before names existed sends no name.
+  const take = (building) => {
+    const next = { address: building.address, name: building.name ?? '' }
+    setStored(next)
+    setAddressText(next.address)
+    setNameText(next.name)
+    showName(next.name)
+  }
   const loaded = useLoad(async () => {
     const { building } = await adminApi('/building')
-    setStored(building.address)
-    setText(building.address)
+    take(building)
     return building
   })
 
-  const address = text.trim()
-  const changed = address !== stored
+  const address = addressText.trim()
+  const name = nameText.trim()
+  const addressChanged = address !== stored.address
+  const nameChanged = name !== stored.name
+  const changed = addressChanged || nameChanged
   const submit = async (e) => {
     e.preventDefault()
     if (busy || !changed) return
-    if (CONTROL_RE.test(address)) return setError('הכתובת מכילה תווים שאי אפשר לשמור, למשל ירידת שורה.')
-    const res = await run(
-      () => adminApi('/building', { method: 'PUT', body: { address } }),
-      address ? 'כתובת הבניין נשמרה' : 'כתובת הבניין הוסרה',
-    )
-    if (res) {
-      setStored(res.building.address)
-      setText(res.building.address)
+    const next = {
+      address: CONTROL_RE.test(address) ? 'הכתובת מכילה תווים שאי אפשר לשמור, למשל ירידת שורה.' : '',
+      name: CONTROL_RE.test(name) ? 'השם מכיל תווים שאי אפשר לשמור, למשל ירידת שורה.' : '',
     }
+    if (next.address || next.name) return setErrors(next)
+    // The server says which field it refused (`invalid_field` with `field`): that one shows under its own field, and nothing else
+    // is said. Any other failure is the usual toast.
+    const res = await run(async () => {
+      try {
+        return await adminApi('/building', { method: 'PUT', body: { address, name } })
+      } catch (err) {
+        const field = err?.code === 'invalid_field' ? err.extra?.field : undefined
+        if (field !== 'address' && field !== 'name') throw err
+        setErrors({ address: '', name: '', [field]: FIELD_REFUSED[field] })
+        return null
+      }
+    })
+    if (!res) return
+    take(res.building)
+    toast.ok(savedMessage({ addressChanged, nameChanged }, res.building))
   }
 
   return (
@@ -60,11 +99,17 @@ function BuildingCard() {
       )}
       {loaded.data && (
         <form className="a-form" onSubmit={submit} noValidate>
-          <Field label="כתובת הבניין" error={error}
+          <Field label="שם הבניין" error={errors.name}
+            hint="השם מופיע בראש שתי האפליקציות, מעל הכתובת. בלי שם, הכותרת בוועד היא נוכחות בבניין.">
+            {/* dir="auto": the name is typed in any language, and each one should read the right way round */}
+            <input className="a-input" dir="auto" value={nameText} maxLength={BUILDING_NAME_MAX_LENGTH} autoComplete="off"
+              onChange={(e) => { setNameText(e.target.value); setErrors((r) => ({ ...r, name: '' })) }} />
+          </Field>
+          <Field label="כתובת הבניין" error={errors.address}
             hint="הכתובת מופיעה בראש האפליקציה של נותני השירות, בדרך כלל תוך דקה מהשמירה. אפשר להשאיר ריק, ואז לא תוצג כתובת.">
             {/* dir="auto": the address is typed in any language, and each one should read the right way round */}
-            <input className="a-input" dir="auto" value={text} maxLength={ADDRESS_MAX_LENGTH} autoComplete="off"
-              onChange={(e) => { setText(e.target.value); setError('') }} />
+            <input className="a-input" dir="auto" value={addressText} maxLength={ADDRESS_MAX_LENGTH} autoComplete="off"
+              onChange={(e) => { setAddressText(e.target.value); setErrors((r) => ({ ...r, address: '' })) }} />
           </Field>
           <div className="a-actions">
             <button type="submit" className="w-btn w-btn--small" disabled={busy || !changed}>{busy ? 'שומר…' : 'שמירה'}</button>

@@ -10,6 +10,7 @@ import HistoryView from '../admin/views/HistoryView.jsx'
 import AgentView from '../admin/views/AgentView.jsx'
 import CommitteeView from '../admin/views/CommitteeView.jsx'
 import { useTab } from '../admin/tab.js'
+import { BuildingNameProvider, useBuildingName, APP_NAME } from '../admin/buildingName.jsx'
 import { useErrorReport } from '../admin/hooks.js'
 import { noteClientError, setPlace, currentPlace } from '../ui/errorReport.js'
 import { applyUpdate, isUpdateReady, subscribeUpdate } from '../worker/update.js'
@@ -51,8 +52,20 @@ function ShellTools({ onSignOut }) {
   )
 }
 
+// The brand: the building's name when the committee set one (kept to a few lines by CSS, an 80 character name included), else the
+// name of the app. It is the same text in the side rail of a computer and in the top bar of a phone, and the end of the window title.
+function Brand({ name }) {
+  return (
+    <div className="a-brand">
+      <span className="a-brand__mark"><IconQr size={22} /></span>
+      <span className="a-brand__text" dir="auto">{name || APP_NAME}</span>
+    </div>
+  )
+}
+
 function Shell({ admin, onSignedOut }) {
   const toast = useToast()
+  const { name: buildingName, loadName: loadBuildingName } = useBuildingName()
   const [tab, goTo] = useTab(TAB_KEYS)
   setPlace(`committee:${tab}`) // the screen for an error report (src/ui/errorReport.js), told while rendering so that a first draw that breaks is on this tab
   const { View, label } = TABS.find((t) => t.key === tab)
@@ -60,13 +73,29 @@ function Shell({ admin, onSignedOut }) {
   const mainRef = useRef(null)
   const first = useRef(true)
 
-  // A tab change is a page change: title for the tab strip/history, scroll to the top, focus to the content.
+  // The building's name, from the committee's own route, as soon as somebody is signed in. Until it answers (or when it cannot) the
+  // brand shows what the public route said, or the plain name of the app. The Committee tab tells the same state when it saves, and
+  // a save that comes before this answer wins over it (loadName drops an answer that is older than a save).
   useEffect(() => {
-    document.title = `${label} · נוכחות בבניין`
+    let cancelled = false
+    loadBuildingName(() => adminApi('/building').then((res) => (cancelled ? undefined : res?.building?.name)))
+      .catch(() => {}) // the brand stays as it is; a session that ended is announced by adminApi
+    return () => {
+      cancelled = true
+    }
+  }, [loadBuildingName])
+
+  // The title of the window: the page, then the building (or the app). A new name changes the title and nothing else.
+  useEffect(() => {
+    document.title = `${label} · ${buildingName || APP_NAME}`
+  }, [label, buildingName])
+
+  // A tab change is a page change: scroll to the top, focus to the content.
+  useEffect(() => {
     if (first.current) return void (first.current = false)
     window.scrollTo(0, 0)
     mainRef.current?.focus({ preventScroll: true })
-  }, [tab, label])
+  }, [tab])
 
   // Only leave the screen once the server has really ended the session; otherwise a reload would sign the
   // person straight back in (a shared computer).
@@ -82,7 +111,7 @@ function Shell({ admin, onSignedOut }) {
   return (
     <>
       <aside className="a-side">
-        <div className="a-brand"><span className="a-brand__mark"><IconQr size={22} /></span>נוכחות בבניין</div>
+        <Brand name={buildingName} />
         <nav className="a-nav" aria-label="ניווט ראשי">
           {TABS.map((t) => <NavItem key={t.key} tab={t} current={tab === t.key} onGo={goTo} className="a-nav__item" size={24} />)}
         </nav>
@@ -93,7 +122,7 @@ function Shell({ admin, onSignedOut }) {
       </aside>
 
       <header className="a-top">
-        <div className="a-brand"><span className="a-brand__mark"><IconQr size={22} /></span>{label}</div>
+        <Brand name={buildingName} />
         <ShellTools onSignOut={signOut} />
       </header>
 
@@ -181,9 +210,11 @@ export default function AdminApp() {
 
   return (
     <div className="a-app">
-      <ToastProvider>
-        <ConfirmProvider>{content}</ConfirmProvider>
-      </ToastProvider>
+      <BuildingNameProvider>
+        <ToastProvider>
+          <ConfirmProvider>{content}</ConfirmProvider>
+        </ToastProvider>
+      </BuildingNameProvider>
     </div>
   )
 }
