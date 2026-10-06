@@ -1,28 +1,33 @@
-// Vercel's build command (vercel.json "buildCommand"). Nobody runs it by hand: a merge to master is what deploys.
+// Vercel's build command (vercel.json "buildCommand"). Nobody runs it by hand: a merge to the production branch is what
+// deploys. The production branch is the default branch of the repository as GitHub reports it during the build (ADR 0002,
+// addendum of 06/10/2026), never an environment variable, a file of the build or a name written in this code.
 //
 // 1. It builds the app exactly as `npm run build` does (`vite build`). A failed build stops here, nothing is migrated.
 // 2. It asks productionBuildDecision (server/productionMigrate.js) what to do about the database:
 //    - skip: a Vercel preview or development build. The app is built and no database is touched.
-//    - migrate: the production build of a commit on master. The database in DATABASE_URL_UNPOOLED is migrated and, on
-//      the first deploy of a new installation, marked as production (ADR 0002). Only migrations that are byte-identical
-//      to the files on GitHub master are applied (migrateProduction checks that before it applies anything).
-//    - refuse: a production build that cannot prove it comes from a merge to master, and any build whose environment is
-//      unknown (no VERCEL_ENV: this script is only Vercel's build command, a local build is `npm run build`). The
-//      deployment fails, and the deployment that serves now keeps serving. It fails closed on purpose: if Vercel's
-//      system variables were ever not exposed to the build, a production build must not skip its migrations and deploy.
+//    - migrate: the production build of a commit that the Vercel Git integration built. migrateProduction then asks
+//      GitHub for the default branch and refuses unless the commit is on it, before it connects to any database. Then the
+//      database in DATABASE_URL_UNPOOLED is migrated and, on the first deploy of a new installation, marked as production
+//      (ADR 0002). Only migrations that are byte-identical to the files on that branch on GitHub are applied
+//      (migrateProduction checks that before it applies anything).
+//    - refuse: a production build that has no Git data, and any build whose environment is unknown (no VERCEL_ENV: this
+//      script is only Vercel's build command, a local build is `npm run build`). The deployment fails, and the deployment
+//      that serves now keeps serving. It fails closed on purpose: if Vercel's system variables were ever not exposed to
+//      the build, a production build must not skip its migrations and deploy.
 //
 // Why a gate, and why this one: VERCEL_ENV=production alone proves nothing. Any shell can set it, and a local
 // `vercel build --prod` sets it too (Codex showed this in the review of ADR 0005). Vercel sets VERCEL_GIT_COMMIT_REF,
 // VERCEL_GIT_COMMIT_SHA and the repository only for a deployment that its Git integration builds, so the gate asks for
-// the branch master, a full commit hash and the repository as well. What is left is a deliberate `vercel --prod` from a
-// checkout of master: the CLI uploads local files, so the GitHub check above is what keeps an unreviewed migration out
-// (the app code of such a deploy is not checked: Deployment Policies would, but they are a Pro feature). That is why
-// AGENTS.md and .claude/settings.json forbid it, and why the owner deploys only by merging.
+// a branch, a full commit hash and the repository as well, and for the branch to be the default branch on GitHub. What is
+// left is a deliberate `vercel --prod` from a checkout of the production branch: the CLI uploads local files, so the
+// GitHub check above is what keeps an unreviewed migration out (the app code of such a deploy is not checked: Deployment
+// Policies would, but they are a Pro feature). That is why AGENTS.md and .claude/settings.json forbid it, and why the
+// owner deploys only by merging.
 //
 // This file does not call loadEnv on purpose: on Vercel the variables come from Vercel, and a local run must not pick up
 // .env.local. It prints the gate's decision and three public values (the environment, the branch and the first 7
 // characters of the commit), never any other variable. MIGRATION_GITHUB_TOKEN (optional) is read only to let a private
-// fork fetch its own migration files from GitHub; it is never printed.
+// fork read its default branch and fetch its own migration files from GitHub; it is never printed.
 //
 // A failed migration is printed through buildFailureText (server/productionMigrate.js): the migration file and the SQLSTATE
 // with its condition name, for example `Migration 012_x.sql failed: 23505 (unique_violation)`, and never the message of the
@@ -53,6 +58,7 @@ if (action === 'migrate') {
       connectionString: env.DATABASE_URL_UNPOOLED,
       repoOwner: env.VERCEL_GIT_REPO_OWNER,
       repoSlug: env.VERCEL_GIT_REPO_SLUG,
+      commitRef: env.VERCEL_GIT_COMMIT_REF,
       githubToken: env.MIGRATION_GITHUB_TOKEN,
       log: console.log,
     })

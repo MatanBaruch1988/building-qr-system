@@ -1,7 +1,7 @@
 {
   "buildCommand": "node scripts/vercel-build.mjs",
   "git": {
-    "deploymentEnabled": { "**": false, "master": true }
+    "deploymentEnabled": { "**": false, "master": true, "main": true }
   },
   "regions": ["iad1"],
   "functions": {

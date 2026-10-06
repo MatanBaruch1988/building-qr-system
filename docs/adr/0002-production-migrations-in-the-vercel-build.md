@@ -120,3 +120,52 @@ unchanged.
   is outside the code: the Vercel credentials stay with the owner (an agent never deploys), and on Pro a Deployment
   Policy that allows only Git for production. Reviewers: a finding that only a hostile CLI deployer can exploit is
   answered by this paragraph, not by another check in the build.
+
+## Addendum (06/10/2026): the production branch is the default branch, as GitHub reports it
+
+The gate above wrote the branch `master` in two places: a production build migrated only when `VERCEL_GIT_COMMIT_REF` was
+`master`, and the check of the migration files fetched them from `refs/heads/master`. A copy of this project (a fork, or
+one made with the Deploy button) often has `main` as its default branch, and in such a copy nothing could deploy. The
+decision above is unchanged. Only where the name of the branch comes from changed.
+
+- **The rule.** The production branch is the repository's default branch, as GitHub reports it during the build. It is
+  never a value from the build environment (no variable), never a file of the build, and never a name written in the code
+  (`AGENTS.md`, "Database and API changes"). It is the branch that Vercel deploys to production and that the rulesets
+  protect (`~DEFAULT_BRANCH`), so "merged" and "on the production branch" mean the same.
+- **Why not a value from the environment (the Codex finding).** A name that the build environment supplies can be moved. A
+  build environment that names a topic branch would move both checks onto that branch: the gate would let a build of the
+  topic branch migrate, and the byte check would compare the pending files with the same unreviewed branch, so "identical
+  to the file on that branch" would stop meaning "reviewed and merged". The default branch is the one thing that the
+  environment of a build does not configure, and changing it is an administrator's action on GitHub.
+- **How it is read.** `readDefaultBranch` in `server/productionMigrate.js` asks git's smart HTTP discovery,
+  `GET https://github.com/<owner>/<slug>.git/info/refs?service=git-upload-pack`, which is what `git ls-remote --symref`
+  does, and takes the capability `symref=HEAD:refs/heads/<name>` of the first reference line. It is not the REST API: that
+  allows 60 requests an hour for each address without a token, and the build servers of Vercel share their addresses.
+  The request carries no `Git-Protocol` header, because protocol version 2 answers without the symref. The body is read as
+  a stream only as far as that first line (a repository lists every branch, tag and pull request after it) and the rest is
+  dropped. `tests/fixtures/github-info-refs.js` is a real answer, trimmed.
+- **What is checked.** The name must be a plain branch name: letters, digits and `._/-`, at most 100 characters, no leading
+  `-`, `.` or `/`, no `..`, `//` or `@{`, no trailing `/` or `.`. When the answer cannot be read (a failing status, a
+  network error, a timeout, a body that is not a reference list, no symref, a name that is not plain), the build is refused
+  with `The default branch of <owner>/<slug> could not be read from GitHub ...`. It never falls back to `master`, to `main`
+  or to the branch of the build. Failing statuses and network errors are retried with the waits of the migration files.
+- **The gate.** Every condition of the first gate stays: `VERCEL=1`, `VERCEL_ENV=production`, a full commit hash, the
+  repository, and a refusal of an unknown environment. Only the literal branch is gone. `productionBuildDecision` asks for
+  a branch to be present, and `migrateProduction` then reads the default branch and refuses unless `VERCEL_GIT_COMMIT_REF`
+  is exactly it, before it creates its pool: no statement runs against the database first. The refusal ends the build the
+  way a refusal always did (`Production migration failed: ...`, exit 1, the deployment fails, the current one keeps serving)
+  and names both branches. When the branch matches, the log says `Production branch: <name> (the default branch on GitHub)`.
+- **The byte check.** The files are fetched from `refs/heads/<default branch>/db/migrations/<file>`, each segment of the
+  branch name URL-encoded and the `/` kept as a separator. The messages name the branch, so for this repository they are
+  what they were (`verified against GitHub master`).
+- **A private repository.** `MIGRATION_GITHUB_TOKEN` is still the only credential. A file is fetched with
+  `Authorization: Bearer`, as before. The discovery is sent as git sends a token to github.com: Basic authentication with the
+  token as the password. The token is never logged and is in no message.
+- **`vercel.json`.** `git.deploymentEnabled` lists `master` and `main`. JSON has no comments, so the reason is in
+  `docs/runbooks/deploy-and-rollback.md`: a copy whose default branch has another name adds it there.
+- **What it costs.** Every production build makes one more request, a round trip to github.com, even when no migration is
+  pending, because the branch must be known before the database is touched. If GitHub cannot be reached, the deployment
+  fails and the current one keeps serving, as for a migration file that cannot be read.
+- **What is left.** A deploy through the CLI from a checkout still passes and still has the residual risk described above.
+  Whoever can change the default branch of the repository changes the production branch with it. That is an administrator,
+  who could change the rulesets as well, so it is outside what a check in the build can stop.
