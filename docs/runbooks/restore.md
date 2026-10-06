@@ -45,7 +45,8 @@ counts with production now.
 `scan_refusals` is append-only like `scans` and holds the names as they were at the time, so a lost row can be put back as it
 was. `app_errors` and `alert_pings` are the server's own records (ADR 0007, `incident.md`): they hold no personal data and
 nothing depends on them, so they are rarely worth copying back. A restore takes them back to the restore point: the errors of
-the hours after it are gone from `app_errors` (healthchecks.io still has their pings), and a day whose alert was sent after the
+the hours after it are gone from `app_errors` (healthchecks.io still has their pings, where the server's heartbeat is set up:
+the first installation has it, a copy only if it set `HEALTH_HEARTBEAT_URL`), and a day whose alert was sent after the
 point is announced again by its next error, so one ping can repeat.
 
 ## 3. Choose how to recover
@@ -402,7 +403,8 @@ if you want to survive the loss of this one): the dumps are as sensitive as the 
 
 A restore that was never tried is a hope, not a plan. Repeat the drill every few months, and after any change to the
 database setup (a new Neon project, plan or region, or a change of the production branch). Add one entry here each time,
-with no connection string, project id or personal data in it.
+with no connection string, project id or personal data in it. The entries below are the first installation's own record: a
+copy keeps its own drill log here, or removes them.
 
 - `03/10/2026`: restore drill on the production project with the Neon CLI. A branch of production as of one hour earlier
   (`neon branches create --project-id <id> --name restore-drill-<date> --parent <ISO timestamp> --expires-at <ISO timestamp> --no-secrets`)

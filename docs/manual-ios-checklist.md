@@ -2,7 +2,8 @@
 
 Playwright's WebKit is the Safari engine on a computer. It is not an iPhone: it cannot install to the Home Screen,
 run standalone, show the status bar, or go offline with a service worker. These are the things the automatic tests
-cannot see. Use a real iPhone with Safari, on the deployed address (`https://building-qr-system.vercel.app`).
+cannot see. Use a real iPhone with Safari, on the deployed address (`https://<your-domain>`; the first installation's is
+`https://building-qr-system.vercel.app`).
 
 Do this when a release touches the manifest, the service worker, the icons, the layout, the top bar, the date
 fields, or the location flow. Otherwise a quick pass over items 1, 4 and 8 is enough.
@@ -58,8 +59,9 @@ Mark each item OK or write what you saw. Take a screenshot of anything that look
 
 ## Printed QR
 
-14. [ ] Scan a printed QR from before the move (`building-qr-system.web.app`): it lands on the new address with the
-    right point, and signing in and checking in works.
+14. [ ] The first installation only: a copy that never printed codes for the old app skips this item. Scan a printed QR
+    from before the move (`building-qr-system.web.app`, the old Firebase address that `legacy-redirect/` forwards): it
+    lands on the new address with the right point, and signing in and checking in works.
 
 ## Crashes
 
