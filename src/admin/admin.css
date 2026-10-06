@@ -173,7 +173,8 @@ select.a-input {
 }
 
 /* ----- the audit log: the section of the Committee tab that a button opens, and its read only rows (no icons) ----- */
-.a-audit-section { margin-block-start: 24px; }
+/* The help (src/admin/views/HelpSection.jsx) is a section of the same kind, with the same button, so it shares these rules. */
+.a-audit-section, .a-help-section { margin-block-start: 24px; }
 .a-disclosure { margin: 0; } /* the button inside sets the size and the weight */
 .a-disclosure__btn {
   display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 12px 18px; background: var(--w-surface);
@@ -185,7 +186,10 @@ select.a-input {
 .a-disclosure__text { flex: 1; min-width: 0; }
 .a-disclosure__chevron { flex: none; color: var(--w-text-3); transform: rotate(90deg); } /* closed: points down */
 .a-disclosure__btn[aria-expanded='true'] .a-disclosure__chevron { transform: rotate(-90deg); } /* open: points up */
-.a-audit-section > div:not([hidden]) { margin-block-start: 16px; }
+.a-audit-section > div:not([hidden]), .a-help-section > div:not([hidden]) { margin-block-start: 16px; }
+/* The help's text: the topics in one card (the card's own look), a heading over its sentences, a line short enough to read on a computer. */
+.a-help { max-width: 720px; gap: 20px; }
+.a-help__topic { display: flex; flex-direction: column; gap: 4px; }
 /* Phone: the time and the action on the first line, then who, then the detail, all in the column of the action. */
 .a-audit {
   display: grid; gap: 0 14px; grid-template-columns: auto minmax(0, 1fr); align-items: start; padding: 12px 16px;

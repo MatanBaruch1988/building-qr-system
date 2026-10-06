@@ -84,11 +84,13 @@ event and `.github/workflows/smoke.yml` runs `scripts/smoke-check.mjs` against t
 of the deployment, which Vercel Deployment Protection can hide). It is not a merge check: it runs after the merge, so it
 cannot block one. If it finds something wrong it opens an issue.
 
-The domain is the repository variable `SMOKE_BASE_URL`, set once from the repository folder:
-`gh variable set SMOKE_BASE_URL --body https://<your-domain>` (the address that people open, with no path). It is not
-written in the repository, so that a copy tests its own site. Without it every run fails, and the issue is titled
-"Smoke test is not set up: SMOKE_BASE_URL is missing": set the variable, then re-run the failed jobs of that run. The
-variable decides where the agent key below is sent, so only someone with write access to the repository changes it.
+The domain is the variable `SMOKE_BASE_URL` of the environment `smoke` (Settings, Environments), set once from the
+repository folder: `gh variable set SMOKE_BASE_URL --env smoke --body https://<your-domain>` (the address that people
+open, with no path). It is not written in the repository, so that a copy tests its own site. Without it every run fails,
+and the issue is titled "Smoke test is not set up: SMOKE_BASE_URL is missing": set the variable, then re-run the failed
+jobs of that run. The variable decides where the agent key below is sent, so it is an environment variable, which only
+the owner of a personal repository (an admin of an organization's) can change, and not a repository variable, which any
+collaborator can.
 
 A production deployment that fails (the build, the gate or a migration) opens an issue too, titled "Production
 deployment failed for <commit>", with the link to its build log on Vercel: nothing is down then, but the merge is not in

@@ -10,12 +10,16 @@
 # promotion of a deployment can lag behind the event, so the script waits (up to 5 minutes) until the domain serves the
 # commit before it judges anything.
 #
-# The domain is the repository variable SMOKE_BASE_URL (Settings, Secrets and variables, Actions, Variables), set once
-# from the repository folder with
-#   gh variable set SMOKE_BASE_URL --body https://<your-domain>
-# It is not in this file, so that a copy of the repository tests its own site. It decides where the secret below is
-# sent, so only someone with write access to the repository can change it. Without it every run fails, and the issue
-# that it opens says to set it.
+# The domain is the variable SMOKE_BASE_URL of the environment "smoke" (Settings, Environments), set once from the
+# repository folder with
+#   gh variable set SMOKE_BASE_URL --env smoke --body https://<your-domain>
+# It is not in this file, so that a copy of the repository tests its own site. It decides where the secret below is sent,
+# so it lives in an environment and not among the repository variables: GitHub lets any collaborator of a personal
+# repository change a repository variable, but only the owner (an admin in an organization) change an environment's, and
+# an environment variable wins over a repository variable of the same name. The jobs use the environment with
+# `deployment: false`, so it adds no deployment to the repository (and no deployment_status event). It has no branch rule
+# on purpose: the run of a deployment_status event has the deployed SHA as its ref, not a branch, so a rule could refuse
+# the smoke test itself. Without the variable every run fails, and the issue that it opens says to set it.
 #
 # Why `issues: write`, and where: only the jobs that open an issue have it (report-smoke and failed-deploy), and they check
 # out nothing and run no code of the repository: they only call the `gh` CLI that GitHub's runners have. The smoke job, which
@@ -47,6 +51,10 @@ jobs:
     # that Vercel reports: gh api repos/<owner>/<repo>/deployments --jq '.[].environment'. A deployment that failed has
     # nothing to test (Vercel keeps serving the previous one): the job failed-deploy below reports it instead.
     if: github.event.deployment_status.state == 'success' && startsWith(github.event.deployment.environment, 'Production')
+    # For SMOKE_BASE_URL (see the top of this file). No deployment: the environment is only where the variable lives.
+    environment:
+      name: smoke
+      deployment: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Read only: this job runs the deployed commit's code. Opening the issue is the job report-smoke below.
@@ -83,6 +91,10 @@ jobs:
     timeout-minutes: 5
     permissions:
       issues: write
+    # To see whether SMOKE_BASE_URL is set (only that, never its value). No deployment, as in the smoke job.
+    environment:
+      name: smoke
+      deployment: false
     steps:
       # Each paragraph of the issue is one line: GitHub shows a line break inside an issue as a break.
       - name: Open an issue
@@ -98,12 +110,12 @@ jobs:
           short="${DEPLOYED_SHA:0:7}"
           if [ "$ADDRESS_SET" != "true" ]; then
             cat > "$RUNNER_TEMP/issue.md" <<EOF
-          The smoke test after each production deployment did not run: the repository variable SMOKE_BASE_URL, the address of the production domain, is not set.
+          The smoke test after each production deployment did not run: the variable SMOKE_BASE_URL of the environment "smoke", the address of the production domain, is not set.
 
           - Run: $RUN_URL
           - Commit: $DEPLOYED_SHA
 
-          Set it from the repository folder with \`gh variable set SMOKE_BASE_URL --body https://<your-domain>\`, then re-run the failed jobs of the run above. This says nothing about the deployment itself. See [deploy-and-rollback.md]($REPO_URL/blob/$DEPLOYED_SHA/docs/runbooks/deploy-and-rollback.md). Close this issue by hand when a run passes.
+          Set it from the repository folder with \`gh variable set SMOKE_BASE_URL --env smoke --body https://<your-domain>\`, then re-run the failed jobs of the run above. This says nothing about the deployment itself. See [deploy-and-rollback.md]($REPO_URL/blob/$DEPLOYED_SHA/docs/runbooks/deploy-and-rollback.md). Close this issue by hand when a run passes.
           EOF
             gh issue create --title "Smoke test is not set up: SMOKE_BASE_URL is missing" --label bug --body-file "$RUNNER_TEMP/issue.md"
             exit 0
