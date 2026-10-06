@@ -1,8 +1,8 @@
 # OpenSSF Scorecard: an automated check of the repository's security habits (pinned actions, branch protection, a
 # security policy, dependency updates, signed releases and so on). It is based on the workflow in the Scorecard
 # project's own repository.
-# It runs after a merge to master and once a week, not on pull requests, so it never blocks a change: it reports on the
-# state of the repository, it does not gate it.
+# It runs after a merge to the default branch (master here, often main in a copy) and once a week, not on pull requests,
+# so it never blocks a change: it reports on the state of the repository, it does not gate it.
 # The results go to two places: the Security tab of the repository (code scanning, as SARIF) and, because
 # publish_results is on, the public Scorecard page and the badge in README.md.
 # Every third-party action is pinned to a full commit SHA (the tag is in the comment), like in ci.yml.
@@ -13,7 +13,7 @@ name: Scorecard
 
 on:
   push:
-    branches: [master]
+    branches: [master, main]
   schedule:
     - cron: "30 1 * * 6" # Saturday, 01:30 UTC
 
