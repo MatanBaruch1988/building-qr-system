@@ -31,6 +31,8 @@ What personal data the app keeps, for how long, and who can see it: [docs/privac
 its shape is `APP_BUILD_RE` in `shared/contract.js`. The server's own commit is the `commit` of `GET /api/health`, so a phone
 that shows another id than the server is running an older app.
 
+**Versions and releases:** the version of the project as a whole is its tag (`v2.1.0`), and every release has notes that say what changed and what an installer must do: [docs/releases.md](docs/releases.md).
+
 **The location policy ("soft GPS")**: a scan is refused when there is an accurate position that is clearly far from the
 point. With no signal or with a weak position the attendance is recorded and flagged `location_unverified`, except at a
 point that is set to `required`: there a scan without a position is refused. Every point can be set to `required` /
