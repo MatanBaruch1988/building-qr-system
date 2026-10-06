@@ -14,8 +14,9 @@ right.
 The texts below were written for the first installation, and two of their values belong to it. They are written as
 placeholders, and you replace both before you hand a text to anyone:
 
-- `<your-domain>`: the address of your installation, as the Agent tab shows it. The first installation's is
-  `https://building-qr-system.vercel.app`.
+- `<your-domain>`: the host name of your installation only, with no `https://` and no path (the texts add both). The
+  Agent tab shows the whole base address, `https://<your-domain>/api/agent/v1`: take the part between `https://` and
+  the next `/`. The first installation's is `building-qr-system.vercel.app`.
 - `<first day of data>`: the day that your database started operating, written DD/MM/YYYY. The first installation's is
   01/10/2026.
 

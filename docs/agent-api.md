@@ -135,8 +135,8 @@ A provider (`/providers`):
     or not believable; then `checked_in_at` is the server time of the upload, so the real day of the visit is not known.
   - `demo`: the demo account (hidden unless `include_demo=true`).
   - `legacy_import`: imported from the old Firebase system on 01/10/2026; its location and device details are not known.
-    Only the first installation has such rows: the flag is written by the one-time import `npm run db:import-firestore` and
-    by nothing else, so a copy that never ran it never sees the flag.
+    The flag is written by the one-time import of an old Firebase system's data (`npm run db:import-firestore`) and by
+    nothing else: the first installation ran it, and a copy that never ran it never sees the flag.
 - The same provider at the same point within 10 minutes is stored once.
 - Scans are kept. A committee member normally voids a scan (hidden unless `include_voided=true`); they can also delete a single row on purpose (test data), and then it is gone from the API.
 - Deleting a point does not delete its scans. An old scan can therefore carry a `point_id` that `/points` no longer lists: use `point_name` (the name at the time of the scan).
