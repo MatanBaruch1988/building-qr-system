@@ -1,6 +1,7 @@
 # Building attendance with QR
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/MatanBaruch1988/building-qr-system/badge)](https://scorecard.dev/viewer/?uri=github.com/MatanBaruch1988/building-qr-system)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15263/badge)](https://www.bestpractices.dev/projects/15263)
 
 Service providers (a cleaning company, a gardener) check in by scanning a QR sign in the building with their phone. The
 building committee sees who came, where and when, and the committee's own AI agent can read the same data. The app
