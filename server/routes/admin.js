@@ -288,16 +288,16 @@ route('PUT', '/admin/building', async ({ req, body }) => {
   const { admin } = await requireAdmin(req)
   const address = parseAddress(body.address)
   const name = parseName(body.name)
-  return { building: await tx(async (c) => {
+  const building = await tx(async (c) => {
     const { changed, before, after } = await saveBuilding(c, admin.id, { address, name })
-    if (changed) { // a save that changes neither text has nothing to record
-      await audit(c, adminActor(admin), 'building.update', {
-        entity: 'building',
-        detail: { changes: changesOf(before, after) },
-      })
-    }
+    if (!changed) return after // a save that changes neither text has nothing to record
+    await audit(c, adminActor(admin), 'building.update', {
+      entity: 'building',
+      detail: { changes: changesOf(before, after) },
+    })
     return after
-  }) }
+  })
+  return { building }
 })
 
 // ---------- points ----------
