@@ -102,8 +102,8 @@ changes can go back as pull requests.
    gate asks GitHub for it on every production build ([deploy-and-rollback.md](runbooks/deploy-and-rollback.md)). `master`
    and `main` are the two names that `vercel.json`, `ci.yml` and `scorecard.yml` already list; any other name needs
    edits in those three files.
-3. A fork of a public repository is public, and the migration check can read it without a token, so path A needs no
-   `MIGRATION_GITHUB_TOKEN` (a private copy does: section 4).
+3. A fork of a public repository stays public **(check in the trial install)**, and the migration check can read a public
+   repository without a token, so path A needs no `MIGRATION_GITHUB_TOKEN` (a private copy does: section 4).
 4. GitHub switches the Actions of a new fork off until you enable them **(check in the trial install)**. Leave them off
    for now: section 3.8 turns them on at the right moment.
 
