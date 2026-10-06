@@ -104,7 +104,7 @@ and it never adds a second member. The server reads it from its environment and 
 - **Set it.** In the Vercel project open Settings, Environment Variables, add `FIRST_ADMIN_EMAIL` for the **Production**
   environment only, with the address of the person who signs in first, and redeploy: a new value reaches only the deployments
   that are built after it is set. Then that person signs in at `/admin` with Google. The other way to add the first member,
-  `npm run db:create-admin` with the connection string of the deployment (README), stays for recovery.
+  `npm run db:create-admin` with the connection string of the deployment ([install.md](../install.md), section 3.6), stays for recovery.
 - **Remove it after the first sign-in.** Delete the variable in Vercel and redeploy. It is personal data, and it has nothing
   left to do. Do not leave it set "in case": if the committee list were ever emptied by hand in the database, the variable
   would add its address again at the next sign-in.

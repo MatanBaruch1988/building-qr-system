@@ -60,8 +60,10 @@ This is a volunteer project, so the times below are goals, not a contract.
 
 ## Rules for testing, in good faith
 
-The hosted instance holds real people's attendance, so please test against your own deployment. The README explains
-how to run one. Research that follows these rules is welcome and is treated as good faith.
+The hosted instance holds real people's attendance, so please test against your own deployment.
+[CONTRIBUTING.md](CONTRIBUTING.md) explains how to run the project on your own computer, and
+[docs/install.md](docs/install.md) explains how to host a copy. Research that follows these rules is welcome and is
+treated as good faith.
 
 - Do not read, change or delete other people's data.
 - If you reach personal data by accident, stop, do not copy or keep it, and tell us in your report.
