@@ -8,9 +8,10 @@ The single source of instructions for every coding agent that works in this repo
 A tool for a building committee. Service providers (a cleaning company, a gardener) scan a QR code at a point in the
 building with their phone. The committee manages points, providers and history at `/admin` (Google sign-in). The
 committee's own AI agent reads the data through a read-only API. The app records facts and does not analyse anything.
-It is a Vite + React PWA in four languages (he, en, ru, ar), a Vercel serverless API and Neon Postgres. Public
-repository (`MatanBaruch1988/building-qr-system`), MIT licence. The repository is written in English; the app's own
-interface is in four languages.
+It is a Vite + React PWA, a Vercel serverless API and Neon Postgres. The provider app is in four languages (he, en, ru,
+ar); the committee app is in Hebrew only for now (its translation is deferred). Public repository
+(`MatanBaruch1988/building-qr-system`), MIT licence, meant to be installed by any building committee that wants its own
+copy (one building per installation). The repository is written in English.
 
 Soft GPS policy: a scan is refused only for an accurate position that is clearly far from the point (or for no position on
 a `required` point); a weak or missing fix elsewhere is recorded with the flag `location_unverified`.
@@ -65,7 +66,8 @@ npm run icons                        # makes the PNG icons in public/ from publi
 ```
 
 `scripts/vercel-build.mjs` is the build command of Vercel (`vercel.json`). It builds the app and, for the production build
-of a merge to master, migrates the production database (ADR 0002). It is not run by hand.
+of a merge to the production branch (`master` here, see "Database and API changes"), migrates the production database
+(ADR 0002). It is not run by hand.
 
 ## Rules for every change
 
@@ -81,6 +83,10 @@ of a merge to master, migrates the production database (ADR 0002). It is not run
   the building's time), written only by `shared/datetime.js`: never a month name, a weekday, the browser's own date
   field or the device's locale. The API and the agent keep ISO dates on purpose (a machine must not guess day-month or
   month-day). `tests/dates.test.js` fails if another way of writing a date turns up in `src/`, `server/` or `shared/`.
+  The building's time zone is one constant that the phone and the server share, `BUILDING_TZ` in `shared/contract.js`
+  (Israel, `Asia/Jerusalem`). It is not a setting of an installation: `scans.local_date` is stored in it and installed
+  phones carry it in their JavaScript, so a change would split the stored days from the new ones. Changing it is the
+  owner's decision, with a plan for the stored dates.
 - Every tile and row of the committee app lists its actions in one order, from the title to the end of the row: the
   actions of that screen, then edit, then switch off / on, and last the red trash can (red is only for deleting).
   `e2e/admin.spec.js` measures it on every screen, so a new action goes in its place in that order.
@@ -150,8 +156,9 @@ migration, or of deleting, renaming away or skipping a test; they are heuristics
 diff. A test that really has to go is the owner's call: say why in the pull request (the label is `allow-test-removal`).
 
 `.github/workflows/smoke.yml` is not a merge check: it runs after each production deployment (`scripts/smoke-check.mjs`
-against the production domain) and opens an issue labelled `bug` when the deployment is broken
-(`docs/runbooks/deploy-and-rollback.md`).
+against the address in the repository variable `SMOKE_BASE_URL`, the production domain; a run without the variable fails
+and says so) and opens an issue labelled `bug` when the deployment is broken (`docs/runbooks/deploy-and-rollback.md`). The
+variable decides where the secret `SMOKE_AGENT_KEY` is sent, so only the owner changes it.
 
 Not automated, on purpose: Home Screen install, standalone mode, the status bar, offline use on a real iPhone, push.
 Check them by hand with `docs/manual-ios-checklist.md` before a release that touches the PWA files, the layout or the
@@ -159,7 +166,10 @@ location flow.
 
 ## Database and API changes
 
-Production is migrated only by the Vercel production build of a merge to `master` (`scripts/vercel-build.mjs`, ADR 0002).
+Production is migrated only by the Vercel production build of a merge to the production branch (`scripts/vercel-build.mjs`,
+ADR 0002). The production branch is `master`, or the branch that `PRODUCTION_BRANCH` names in the Vercel project of a copy
+whose repository uses another one (`main`); it is the branch that Vercel deploys to production and that the rulesets
+protect.
 `npm run db:migrate` refuses a production database, so a migration reaches production with the merge that contains it:
 there is no separate step before or after, and no way to run one by hand. A failed migration fails that deployment and the
 previous one keeps serving.
@@ -308,8 +318,11 @@ of the three is enough: the loop narrows all of them, and the strongest cut is t
   `PGOPTIONS`), so it cannot write. The dump never leaves the owner's machine (next point). Nothing else may read
   production.
 - Never run `vercel env pull` from Production and never run `vercel --prod` or `vercel deploy --prod`. Deploying is the
-  owner's step. Adding the first committee member to a deployment (`db:create-admin` with that deployment's connection
-  string) is the owner's step too.
+  owner's step. Adding the first committee member to a deployment is the deployer's step too, in one of two ways:
+  `FIRST_ADMIN_EMAIL` in that deployment's Vercel project (while `admins` holds no row at all, the first Google sign-in
+  with exactly that address, verified by Google, adds that member in the transaction of the sign-in, with its audit rows;
+  once any member exists the variable does nothing and should be removed), or `db:create-admin` with that deployment's
+  connection string, which stays for recovery. An agent sets neither.
 - Backups hold personal data: they stay on the owner's machine, never in the repository, a pull request, an issue or a log
   (`*.dump` is in `.gitignore`; `npm run db:backup` prints no connection string and its issue says nothing but "failed").
 - Personal data is kept only as long as `docs/privacy.md` says (owner decision of 04/10/2026). A daily job
@@ -393,8 +406,16 @@ reviewing agent should apply it too.
   session (`default_transaction_read_only=on` in `PGOPTIONS`), or that sends a dump or the connection string anywhere but
   the owner's backup folder. It is the one local tool that may read production, and only because it cannot write.
 - A change to `scripts/vercel-build.mjs` or `server/productionMigrate.js` that loosens the gate (the production build of
-  a commit on master from the Vercel Git integration, and a refusal of any build whose environment is unknown), drops the
-  check that every pending migration is byte-identical to the file on GitHub master, or migrates a database outside it.
+  a commit on the production branch from the Vercel Git integration, and a refusal of any build whose environment is
+  unknown), that takes the production branch from anywhere but `PRODUCTION_BRANCH` of the build environment (`master` when
+  it is missing or empty), that accepts more than one branch or a `PRODUCTION_BRANCH` that is not a plain branch name,
+  that drops the check that every pending migration is byte-identical to the file on the production branch on GitHub, or
+  that migrates a database outside it.
+- A change that lets `FIRST_ADMIN_EMAIL` add a committee member while `admins` holds any row (active or not), that
+  compares it with anything but the e-mail that Google marked verified (both trimmed and in lower case, otherwise equal),
+  that adds the member without the lock that makes two first sign-ins wait for each other, outside the transaction of the
+  sign-in, or without its `audit_log` rows (`admin.add` by the `system` actor, then `session.sign_in`), that reads it from
+  anywhere but the server's environment, or that logs or returns its value.
 - A GitHub Actions change that uses an action not pinned to a full commit SHA, widens `permissions`, adds
   `pull_request_target`, or sets `persist-credentials: true`.
 - An endpoint under `/api` without the right authorization check (committee member, service provider, agent key, or the
@@ -426,7 +447,8 @@ reviewing agent should apply it too.
 **Report as P2 when you are sure:**
 
 - An em dash.
-- UI text that is not taken from `src/i18n/*.js`, or that is missing in one of the four languages.
+- UI text of the provider app that is not taken from `src/i18n/*.js`, or that is missing in one of the four languages
+  (the committee app's Hebrew lives in `src/admin/` and `src/pages/AdminApp.jsx` for now).
 - A committee tile or row whose actions break the order (screen actions, edit, switch off / on, red trash can last).
 - A layout change made for only one of phone and computer.
 
