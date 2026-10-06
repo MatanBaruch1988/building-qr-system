@@ -36,13 +36,18 @@
 @media (min-width: 1024px) { .a-top { display: none; } }
 
 .a-tabbar {
-  position: fixed; inset-inline: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(5, 1fr);
+  position: fixed; inset-inline: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
   background: var(--w-surface); border-top: 1px solid var(--w-border); padding-bottom: env(safe-area-inset-bottom);
 }
+/* Five equal columns that may shrink below their content (minmax(0, ...) and min-width: 0), so a long label can never push the bar
+   wider than the screen; the label (`.a-nav-label`) stays on one line. */
 .a-tab {
-  min-height: 62px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  min-width: 0; min-height: 62px; padding-inline: 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   border: 0; background: none; color: var(--w-text-3); font-size: 0.8125rem; font-weight: var(--w-weight-medium); cursor: pointer;
 }
+/* The text of a tab button, in the tab bar and in the side rail: one line. The ellipsis is the last resort and should never show, because
+   the names are short (`nav` in TABS, src/pages/AdminApp.jsx). */
+.a-nav-label { max-width: 100%; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .a-tab[aria-current='page'] { color: var(--w-info); font-weight: var(--w-weight-semibold); }
 @media (min-width: 1024px) { .a-tabbar { display: none; } }
 

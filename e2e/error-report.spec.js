@@ -73,7 +73,7 @@ test('a committee member whose session the server ended is reported after the ne
   // The server ended the session: the next call of a screen is refused (here the one that the Providers tab makes), and the app answers
   // with the sign-in screen.
   sessionEnded = true
-  await page.getByRole('button', { name: 'נותני שירות' }).first().click()
+  await page.getByRole('button', { name: 'ספקים', exact: true }).first().click()
   await expect(page.getByRole('heading', { name: 'ניהול נוכחות הבניין' })).toBeVisible()
   await expect(page.getByText('פג תוקף ההתחברות. היכנסו שוב.')).toBeVisible()
   // Several calls may find the session gone at once, and it is one sign-out.
