@@ -60,7 +60,7 @@ describe('the phrase of every action', () => {
   // Each action of the table at the top of server/audit.js, and the Hebrew that the screen says for it.
   const PHRASES = {
     'admin.add': 'הוספת חבר ועד', 'admin.enable': 'הפעלת חבר ועד', 'admin.disable': 'השבתת חבר ועד', 'admin.delete': 'מחיקת חבר ועד',
-    'building.update': 'עדכון כתובת הבניין',
+    'building.update': 'עדכון פרטי הבניין',
     'point.create': 'יצירת נקודה', 'point.update': 'עדכון נקודה', 'point.delete': 'מחיקת נקודה', 'point.regenerate_qr': 'החלפת קוד QR',
     'provider.create': 'הוספת נותן שירות', 'provider.update': 'עדכון נותן שירות', 'provider.delete': 'מחיקת נותן שירות', 'provider.revoke_devices': 'ניתוק מכשירים',
     'scan.void': 'ביטול נוכחות', 'scan.unvoid': 'שחזור נוכחות', 'scan.delete': 'מחיקת נוכחות',
@@ -196,13 +196,22 @@ describe('the detail of an update (`changes`)', () => {
   })
 
   it('shows the address change of the building, and an enable with its e-mail and what switched', async () => {
-    const building = await rowFor({ action: 'building.update', entity: 'building', entity_id: null, entity_name: null, detail: { changes: { address: { from: null, to: 'רחוב הדוגמה 1' } } } }, 'עדכון כתובת הבניין')
+    const building = await rowFor({ action: 'building.update', entity: 'building', entity_id: null, entity_name: null, detail: { changes: { address: { from: null, to: 'רחוב הדוגמה 1' } } } }, 'עדכון פרטי הבניין')
     expect(building.querySelector('.a-audit__detail').textContent).toBe('כתובת: ריק ← רחוב הדוגמה 1')
     expect(building.querySelector('.a-audit__subject')).toBeNull() // nothing for the building: it is the only one
     cleanup()
     const enable = await rowFor({ action: 'admin.enable', entity: 'admin', entity_id: YOSSI.id, entity_name: 'yossi@example.test', detail: { email: 'yossi@example.test', changes: { is_active: { from: false, to: true } } } }, 'הפעלת חבר ועד')
     expect(enable.textContent).toContain('פעיל: לא ← כן')
     expect(enable.textContent).not.toContain('אימייל') // the e-mail is the subject already
+  })
+
+  it('shows a change of the name of the building, alone and together with the address (the name first)', async () => {
+    const alone = await rowFor({ action: 'building.update', entity: 'building', entity_id: null, entity_name: null, detail: { changes: { name: { from: '', to: 'בניין הדוגמה' } } } }, 'עדכון פרטי הבניין')
+    expect([...alone.querySelectorAll('.a-audit__detail > div')].map((d) => d.textContent)).toEqual(['שם: ריק ← בניין הדוגמה'])
+    expect(alone.querySelector('.a-audit__subject')).toBeNull() // the name is a detail of the change, not what the entry is about
+    cleanup()
+    const both = await rowFor({ action: 'building.update', entity: 'building', entity_id: null, entity_name: null, detail: { changes: { address: { from: 'רחוב הדוגמה 1', to: 'רחוב הדוגמה 2' }, name: { from: 'בניין הדוגמה', to: '' } } } }, 'עדכון פרטי הבניין')
+    expect([...both.querySelectorAll('.a-audit__detail > div')].map((d) => d.textContent)).toEqual(['שם: בניין הדוגמה ← ריק', 'כתובת: רחוב הדוגמה 1 ← רחוב הדוגמה 2'])
   })
 
   it('cuts a long value and never lets it break the row', async () => {
@@ -319,7 +328,7 @@ describe('the older shapes of a detail (before #78)', () => {
   })
 
   it('reads the older building update (the address as it was saved), the older enable (no detail) and the older unvoid', async () => {
-    const building = await rowFor({ action: 'building.update', entity: 'building', entity_id: null, entity_name: null, detail: { address: 'רחוב הדוגמה 1' } }, 'עדכון כתובת הבניין')
+    const building = await rowFor({ action: 'building.update', entity: 'building', entity_id: null, entity_name: null, detail: { address: 'רחוב הדוגמה 1' } }, 'עדכון פרטי הבניין')
     expect(building.querySelector('.a-audit__detail').textContent).toBe('כתובת: רחוב הדוגמה 1')
     cleanup()
     const enable = await rowFor({ action: 'admin.enable', entity: 'admin', entity_id: YOSSI.id, entity_name: 'yossi@example.test', detail: null }, 'הפעלת חבר ועד')

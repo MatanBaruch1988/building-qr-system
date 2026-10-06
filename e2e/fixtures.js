@@ -36,6 +36,7 @@ export const PEOPLE = {
 }
 export const ADMIN_EMAIL = 'dev@example.test'
 export const BUILDING_ADDRESS = 'רחוב הדוגמה 1, עיר לדוגמה' // the invented address that scripts/dev-seed.mjs sets
+export const BUILDING_NAME = 'בניין הדוגמה' // the invented name that scripts/dev-seed.mjs sets
 export const FAR = { latitude: SAMPLE_FAR_POINT.lat, longitude: SAMPLE_FAR_POINT.lng, accuracy: 10 } // about 5.5 km from the sample points
 
 // ---- console guard ---------------------------------------------------------------------------------------------

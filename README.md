@@ -79,7 +79,7 @@ Coding agents (Claude Code, Codex) work by [AGENTS.md](AGENTS.md), and the decis
    ```
 
    The command prints which database it writes to (the address with its middle hidden and no password, and the database's marker if it has one): check that it is the address of the site's database and that it does not say `nonprod`. The connection string is a secret, so it does not go into any file in the repository, and it does not stay in the shell afterwards, also when the command is stopped with Ctrl-C: PowerShell runs the `finally` part even then, and in bash the string only ever exists inside the parentheses (a subshell that ends with the command). You add the others from the Committee tab ("ועד").
-6. Set the building's address, which the service providers' app shows at the top, in the committee app: the Committee tab ("ועד"), building details card ("פרטי הבניין"). It is stored in the site's own database and starts empty, and while it is empty that app shows no address line.
+6. Set the building's name and address in the committee app: the Committee tab ("ועד"), building details card ("פרטי הבניין"). The service providers' app shows them at the top (the name above the address) and puts the name in the window title; the committee app shows the name as its brand and in its window title. Both are stored in the site's own database and start empty: while the address is empty that app shows no address line, and while the name is empty both apps keep their plain titles. The installable app's own name (the Home Screen label) is fixed when the app is built, so it does not follow the building's name.
 
 ## The move from the old system (Firebase): done
 

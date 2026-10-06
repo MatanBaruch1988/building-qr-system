@@ -92,8 +92,10 @@ if (rows[0].n === 0) {
   await refusal(SCAN_ERROR_INVALID_ITEM, SOURCE_OFFLINE_SYNC, { id: ivan, company: 'Уборка', contact_name: 'Иван' }, null, 30)
   console.log('Seeded sample admin, 5 providers (one demo), 4 points, 4 refused visits.')
 }
-// An invented address, so that the header of the provider app shows a line in development and in the E2E tests (the
-// committee sets the real one in the committee app). Only when it is still empty: a value typed since is kept.
+// An invented address and an invented name, so that the header of the provider app shows two lines, and the committee app its
+// brand, in development and in the E2E tests (the committee sets the real ones in the committee app). Each only when it is still
+// empty: a value typed since is kept.
 await query("update building_settings set address = 'רחוב הדוגמה 1, עיר לדוגמה' where id = 1 and address = ''")
+await query("update building_settings set name = 'בניין הדוגמה' where id = 1 and name = ''")
 console.log(`Scratch schema "${schema}" is ready. Start the API with: node server/dev.mjs --schema=${schema}`)
 await getPool().end()

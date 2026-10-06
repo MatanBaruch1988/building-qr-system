@@ -12,6 +12,10 @@
   }
 }
 .a-brand { display: flex; align-items: center; gap: 12px; padding: 6px 12px 18px; font-weight: var(--w-weight-bold); font-size: 1.125rem; }
+/* The brand text is the building's name (typed by the committee, up to 80 characters, in any language) or the name of the app. It wraps
+   inside what is left beside the mark and stops at three lines in the side rail and two in the top bar, with an ellipsis: a long name can
+   never push the icons off a 360 px phone or make the rail taller than the screen. The whole name is in the page for a screen reader. */
+.a-brand__text { min-width: 0; line-height: 1.25; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; }
 .a-brand__mark { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: var(--w-info-bg); color: var(--w-info); flex: none; }
 .a-nav { display: flex; flex-direction: column; gap: 4px; }
 .a-nav__item {
@@ -32,7 +36,8 @@
   display: flex; align-items: center; justify-content: space-between; gap: 8px; position: sticky; top: 0; z-index: 10;
   padding: max(24px, calc(env(safe-area-inset-top) + 14px)) 20px 10px; background: var(--w-bg); border-bottom: 1px solid var(--w-border);
 }
-.a-top .a-brand { padding: 0; }
+.a-top .a-brand { padding: 0; min-width: 0; }
+.a-top .a-brand__text { -webkit-line-clamp: 2; line-clamp: 2; }
 @media (min-width: 1024px) { .a-top { display: none; } }
 
 .a-tabbar {
@@ -245,6 +250,8 @@ select.a-input {
 .a-login { position: relative; flex: 1; min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 20px; }
 .a-login__tools { position: absolute; inset-block-start: max(14px, env(safe-area-inset-top)); inset-inline-end: 20px; }
 .a-login__card { width: 100%; max-width: 440px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 16px; padding: 34px 24px 24px; background: var(--w-surface); border: 1px solid var(--w-border); border-radius: 28px; }
+/* The building's name under the title, in the committee's own words: it wraps inside the card, whatever its length. */
+.a-login__building { max-width: 100%; font-size: 1.25rem; line-height: 1.25; font-weight: var(--w-weight-semibold); overflow-wrap: anywhere; margin-block-start: -8px; }
 .a-login__mark { width: 72px; height: 72px; display: grid; place-items: center; border-radius: 24px; background: var(--w-info-bg); color: var(--w-info); }
 .a-login__google { min-height: 56px; display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%; }
 /* Google draws its button inside an iframe with a light colour scheme. When the page around an iframe is dark

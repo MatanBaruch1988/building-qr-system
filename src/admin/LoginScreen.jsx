@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { adminApi, errorText } from './api.js'
 import { IconAlert, IconLock, IconShield } from './icons.jsx'
 import ThemeSwitch, { HEBREW_THEME_LABELS } from '../ui/ThemeSwitch.jsx'
+import { useBuildingName } from './buildingName.jsx'
 
 const GIS_SRC = 'https://accounts.google.com/gsi/client'
 
@@ -51,6 +52,7 @@ function useGoogleButton(clientId, onCredential, container) {
 }
 
 export default function LoginScreen({ config, onSignedIn }) {
+  const { name: buildingName } = useBuildingName() // from the public route: '' until it answers, and for a building with no name
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [devEmail, setDevEmail] = useState('dev@example.test')
@@ -76,6 +78,8 @@ export default function LoginScreen({ config, onSignedIn }) {
       <div className="a-login__card">
         <span className="a-login__mark"><IconShield size={34} /></span>
         <h1 className="w-h1">ניהול נוכחות הבניין</h1>
+        {/* the building's own name, typed by the committee in any language: no line at all when there is none */}
+        {buildingName && <p className="a-login__building" dir="auto">{buildingName}</p>}
         <p className="w-lead">כניסה לוועד הבית בלבד. היכנסו עם חשבון Google שהוגדר ברשימת הוועד.</p>
 
         <div className="a-login__google">

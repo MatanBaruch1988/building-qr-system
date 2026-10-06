@@ -27,15 +27,21 @@ export function AdminLink() {
 }
 
 /**
- * `address` is the building's address as the committee typed it (any language: dir="auto" lays out Hebrew and Latin
- * alike). With none, there is no line at all: the two icons stay at the end of the bar by themselves.
+ * `name` and `address` are the building's name and address as the committee typed them (any language: dir="auto" lays out Hebrew and
+ * Latin alike). The name is a line of its own above the address. With neither there is no line at all: the two icons stay at the
+ * end of the bar by themselves.
  */
-export function TopBar({ address = '' }) {
+export function TopBar({ name = '', address = '' }) {
   const { t, lang, setLang, langs } = useI18n()
   const themeLabels = { label: t('theme.label'), system: t('theme.system'), light: t('theme.light'), dark: t('theme.dark') }
   return (
     <header className="w-topbar">
-      {address && <p className="w-brand" dir="auto">{address}</p>}
+      {(name || address) && (
+        <div className="w-brandbox">
+          {name && <p className="w-brand" dir="auto">{name}</p>}
+          {address && <p className={name ? 'w-brand w-brand--sub' : 'w-brand'} dir="auto">{address}</p>}
+        </div>
+      )}
       <div className="w-topbar__tools">
         <ThemeSwitch labels={themeLabels} />
         <label className="w-lang">

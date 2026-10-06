@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 import ar from '../src/i18n/ar.js'
 import { PROVIDER_TOKEN_PREFIX } from '../shared/contract.js'
 import {
-  test, expect, he, en, ru, POINTS, PEOPLE, FAR, ADMIN_EMAIL, adminSignIn, clearScans, allowConsoleErrors, expectNoA11yViolations,
+  test, expect, he, en, ru, POINTS, PEOPLE, FAR, ADMIN_EMAIL, BUILDING_NAME, adminSignIn, clearScans, allowConsoleErrors, expectNoA11yViolations,
 } from './fixtures.js'
 
 // No service worker: this spec answers some requests itself (page.route), and a page that a service worker controls
@@ -53,6 +53,7 @@ test.describe('provider app', () => {
 
     await page.goto(scanLink(UNKNOWN_CODE)) // no banner: nobody knows the point, and the list is the same as at "/"
     await expect(people).toHaveCount(5) // the five sample providers
+    await expect(page.getByRole('banner').getByText(BUILDING_NAME)).toBeVisible() // the header has its two lines: the name of the building above its address
     await scanBothThemes(page, 'provider he: sign-in list')
 
     await page.goto(scanLink(POINTS.lobby))
@@ -383,6 +384,7 @@ test.describe('committee app', () => {
   test('the sign-in screen, and the history when there are no visits', async ({ page }) => {
     await page.goto('/admin')
     await expect(page.getByRole('heading', { name: 'ניהול נוכחות הבניין' })).toBeVisible()
+    await expect(page.getByText(BUILDING_NAME)).toBeVisible() // the name of the building, under the title (the public route has answered)
     await scanBothThemes(page, 'committee: sign-in', { exclude: [GOOGLE_BUTTON] })
 
     await page.getByRole('button', { name: 'כניסת פיתוח' }).click()
@@ -443,6 +445,7 @@ test.describe('committee app with the sample data filled in', () => {
     await markPloniOutdated(page)
     await adminSignIn(page)
     await signedIn(page)
+    await expect(page.getByRole('banner')).toContainText(BUILDING_NAME) // the top bar says the name of the building, not the plain brand
     // (every screen is named by a plain string, so that tests/a11y-report.test.js can read the names from this file)
     await openTab(page, 'points', 'נקודות סריקה')
     await scanBothThemes(page, 'committee phone: points')
@@ -458,7 +461,15 @@ test.describe('committee app with the sample data filled in', () => {
     await openTab(page, 'agent', "גישה לאייג'נט")
     await scanBothThemes(page, 'committee phone: agent')
     await openTab(page, 'committee', 'חברי הוועד')
+    await expect(page.getByLabel('שם הבניין', { exact: true })).toHaveValue(BUILDING_NAME) // the card is loaded, with the name filled in
     await scanBothThemes(page, 'committee phone: committee')
+    // the name field with a refusal under it (a character that cannot be saved): the message is tied to the field
+    await page.getByLabel('שם הבניין', { exact: true }).fill('בניין\tהדוגמה')
+    await page.getByRole('button', { name: 'שמירה', exact: true }).click()
+    await expect(page.getByRole('alert').filter({ hasText: 'השם מכיל תווים שאי אפשר לשמור' })).toBeVisible()
+    await scanBothThemes(page, 'committee phone: committee, the name refused')
+    await page.getByLabel('שם הבניין', { exact: true }).fill(BUILDING_NAME)
+    await expect(page.getByRole('alert').filter({ hasText: 'השם מכיל תווים שאי אפשר לשמור' })).toHaveCount(0)
     // the audit log: a section at the foot of this tab that its button opens (the sample data above wrote its entries)
     await openAuditLog(page)
     await scanBothThemes(page, 'committee phone: audit log')
@@ -484,6 +495,7 @@ test.describe('committee app with the sample data filled in', () => {
     // them are enough to see the rail and the wider layout.
     await page.setViewportSize(COMPUTER)
     await openTab(page, 'points', 'נקודות סריקה')
+    await expect(page.getByRole('complementary')).toContainText(BUILDING_NAME) // the side rail says the name of the building too
     await scanBothThemes(page, 'committee computer: points')
     await openTab(page, 'providers', 'נותני שירות')
     await scanBothThemes(page, 'committee computer: providers')
