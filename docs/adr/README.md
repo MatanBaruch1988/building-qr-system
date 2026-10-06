@@ -2,7 +2,9 @@
 
 An ADR is one short file that records one decision that is hard to see from the code: what the situation was, what was
 decided, what it costs and what else was considered. Code shows what the project does. An ADR says why, so that a person
-or an agent that wants to change it knows what they are changing.
+or an agent that wants to change it knows what they are changing. The records name the first installation's own services
+(its Neon projects, its healthchecks.io checks, its UptimeRobot monitor, its Firebase history) as history: a copy reads them for
+the reasons and uses its own names.
 
 ## How to add one
 

@@ -9,6 +9,16 @@ no rules about who may scan where, no location rules and no list of holidays. Al
 discovers them on every run from the data itself. When this document and what the data returns disagree, the data is
 right.
 
+## Two values to fill in
+
+The texts below were written for the first installation, and two of their values belong to it. They are written as
+placeholders, and you replace both before you hand a text to anyone:
+
+- `<your-domain>`: the address of your installation, as the Agent tab shows it. The first installation's is
+  `https://building-qr-system.vercel.app`.
+- `<first day of data>`: the day that your database started operating, written DD/MM/YYYY. The first installation's is
+  01/10/2026.
+
 ## Connecting, in four steps
 
 1. In the admin screen, open the **Agent** tab ("אייג׳נט") and choose **New key** ("מפתח חדש"). Give it a name (for
@@ -50,11 +60,11 @@ A yom tov according to the Israeli calendar: Rosh Hashanah (two days), Yom Kippu
 On every run the agent decides whether today is a yom tov from a reliable calendar source and not from memory. For example Hebcal with the Israeli calendar: https://www.hebcal.com/hebcal?v=1&cfg=json&year=<year>&maj=on&min=off&mod=off&nx=off&mf=off&ss=off&c=off&geo=none&i=on, and the items with yomtov=true. If the source cannot be reached, it uses its own knowledge and notes in the report that it was not verified.
 
 ## The database
-- A read-only API, base address as of today: https://building-qr-system.vercel.app/api/agent/v1 (if it changes, I will update you). The header: Authorization: Bearer <a key that starts with qrk_>.
+- A read-only API, base address as of today: https://<your-domain>/api/agent/v1 (if it changes, I will update you). The header: Authorization: Bearer <a key that starts with qrk_>.
 - I will give you the key separately. Keep it as a secret (for example under the name QR_AGENT_KEY). It is not printed, not written to logs and not included in reports. If it is rejected (401), that is an error that is reported to me.
 - Endpoints (GET only): /health (includes server_time_local, Israel time), /schema (explains every field, flag and rule), /points, /providers, /scans. The agent reads /schema on every run and relies on it.
 - /scans filters by from and to (YYYY-MM-DD, an Israeli day, both ends included), point_id, provider_id, outcome (accepted by default, rejected or all), limit (up to 500), cursor (the value of next_cursor) and format=csv. The default hides voided scans and the demo account.
-- The database started operating on 01/10/2026, and there is no data before that. local_date and checked_in_local are Israel time.
+- The database started operating on <first day of data>, and there is no data before that. local_date and checked_in_local are Israel time.
 
 ## What the agent discovers on every run, and what is not assumed in advance
 - Who the service providers are: from /providers (active or not, and there is a demo account that is ignored). The number and the names can change.
@@ -107,7 +117,7 @@ This is an automatic daily run that checks the attendance of the service provide
 
 ## 2. Connecting
 - The key is available to you as a secret. If it is missing, report "Error: access key missing" and stop. Do not print it and do not include it in the report.
-- Base address as of today: https://building-qr-system.vercel.app/api/agent/v1 with the header Authorization: Bearer <the key>. If you were given other settings, use them.
+- Base address as of today: https://<your-domain>/api/agent/v1 with the header Authorization: Bearer <the key>. If you were given other settings, use them.
 - Use your HTTP tool. GET calls only.
 
 ## 3. What to read
@@ -141,11 +151,11 @@ You are read-only. You cannot change data and you do not try to.
 
 ## The data
 Every QR scan of a service provider at a point in the building is recorded as one row. The app only collects facts and signals, and the analysis and the conclusions are yours.
-The database started operating on 01/10/2026, and there is no data before that. "No data" before that date is not an absence.
+The database started operating on <first day of data>, and there is no data before that. "No data" before that date is not an absence.
 Do not assume who the service providers are, how many points there are, who may scan where or what the rules are. All of these come from the database and they change.
 
 ## Connecting
-- Base address as of today: https://building-qr-system.vercel.app/api/agent/v1. If you were given other settings, use them.
+- Base address as of today: https://<your-domain>/api/agent/v1. If you were given other settings, use them.
 - The header: Authorization: Bearer <the key that was given to you as a secret>. Do not print it, do not store it and do not include it in answers.
 - Endpoints: GET /health, GET /schema, GET /points, GET /providers, GET /scans.
 
