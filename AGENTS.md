@@ -167,9 +167,9 @@ location flow.
 ## Database and API changes
 
 Production is migrated only by the Vercel production build of a merge to the production branch (`scripts/vercel-build.mjs`,
-ADR 0002). The production branch is `master`, or the branch that `PRODUCTION_BRANCH` names in the Vercel project of a copy
-whose repository uses another one (`main`); it is the branch that Vercel deploys to production and that the rulesets
-protect.
+ADR 0002). The production branch is the repository's default branch as GitHub reports it during the build (`master` here,
+often `main` in a copy), never a value from the build environment; it is the branch that Vercel deploys to production and
+that the rulesets protect, and the migrations are checked against it.
 `npm run db:migrate` refuses a production database, so a migration reaches production with the merge that contains it:
 there is no separate step before or after, and no way to run one by hand. A failed migration fails that deployment and the
 previous one keeps serving.
@@ -407,10 +407,10 @@ reviewing agent should apply it too.
   the owner's backup folder. It is the one local tool that may read production, and only because it cannot write.
 - A change to `scripts/vercel-build.mjs` or `server/productionMigrate.js` that loosens the gate (the production build of
   a commit on the production branch from the Vercel Git integration, and a refusal of any build whose environment is
-  unknown), that takes the production branch from anywhere but `PRODUCTION_BRANCH` of the build environment (`master` when
-  it is missing or empty), that accepts more than one branch or a `PRODUCTION_BRANCH` that is not a plain branch name,
-  that drops the check that every pending migration is byte-identical to the file on the production branch on GitHub, or
-  that migrates a database outside it.
+  unknown), that takes the production branch from anything but the repository's default branch as GitHub reports it
+  during the build (an environment variable, a file of the build, a branch name written in the code), that checks the
+  migration files against any other branch, that drops the check that every pending migration is byte-identical to the
+  file on that branch on GitHub, or that migrates a database outside it.
 - A change that lets `FIRST_ADMIN_EMAIL` add a committee member while `admins` holds any row (active or not), that
   compares it with anything but the e-mail that Google marked verified (both trimmed and in lower case, otherwise equal),
   that adds the member without the lock that makes two first sign-ins wait for each other, outside the transaction of the
