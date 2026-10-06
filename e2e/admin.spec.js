@@ -66,6 +66,34 @@ test('every committee screen fits the width, on a phone and on a computer', asyn
   }
 })
 
+// The tab bar of the phone is five equal columns, so on the narrowest phone that is still in use (360 px) each label has about 70 px.
+// "נותני שירות" wrapped onto two lines there, which made the bar taller and set its icon higher than the other four; the
+// button now says "ספקים" (`nav` in TABS, src/pages/AdminApp.jsx) while the top bar, the heading and the title keep the long name.
+// The two E2E devices are 412 and 390 px wide, so nothing else measures 360.
+test('the tab bar of the phone fits a 360 px screen: each label on one line and not cut, every button the same height', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 740 })
+  await adminSignIn(page)
+  const bar = page.getByRole('navigation', { name: 'ניווט ראשי (טלפון)' })
+  const labels = ['נקודות', 'ספקים', 'היסטוריה', 'אייג׳נט', 'ועד'] // the buttons, left to right in the order of TABS
+  await expect(bar.getByRole('button')).toHaveCount(labels.length)
+  const heights = []
+  for (const [index, label] of labels.entries()) {
+    const button = bar.getByRole('button').nth(index)
+    await expect(button, `the name of tab ${index + 1} is its visible label`).toHaveAccessibleName(label)
+    const text = button.getByText(label, { exact: true })
+    const { lines, scrollWidth, clientWidth } = await text.evaluate((span) => {
+      const range = document.createRange()
+      range.selectNodeContents(span)
+      return { lines: range.getClientRects().length, scrollWidth: span.scrollWidth, clientWidth: span.clientWidth }
+    })
+    expect(scrollWidth, `${label} is not cut (its text is wider than its box)`).toBeLessThanOrEqual(clientWidth)
+    expect(lines, `${label} is on one line`).toBe(1)
+    heights.push((await button.boundingBox()).height)
+  }
+  expect(Math.max(...heights) - Math.min(...heights), `the heights of the five buttons: ${heights.join(', ')}`).toBeLessThan(0.5)
+  expect(await noHorizontalScroll(page), 'the page does not scroll sideways at 360 px').toBe(true)
+})
+
 // The tab is kept in the address. A link to a tab that is opened in the moment after signing in (the shell has just appeared)
 // used to be lost: the app read the address once and attached its listener a little later, so it stayed on the first tab.
 // Nothing here waits for the title or for anything else of the shell, the way a person who pastes a link does not. A fresh
