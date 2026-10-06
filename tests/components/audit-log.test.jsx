@@ -150,6 +150,15 @@ describe('who did it', () => {
     expect(within(row).getByText('סקריפט התקנה')).toBeTruthy()
   })
 
+  it('is "המערכת" for the first member of a deployment, added by the first sign-in (admin.add by the system), and names the member', async () => {
+    const row = await rowFor({ action: 'admin.add', entity: 'admin', entity_id: DANA.id, entity_name: 'dana@example.test', actor_type: 'system', actor_id: null, actor_name: null, detail: { email: 'dana@example.test' } }, 'הוספת חבר ועד')
+    expect(within(row).getByText('המערכת')).toBeTruthy()
+    expect(row.querySelector('.a-audit__who').textContent).toBe('על ידי המערכת')
+    expect(row.querySelector('.a-audit__subject').textContent).toBe('dana@example.test')
+    expect(row.textContent).not.toContain('סקריפט התקנה')
+    expect(row.querySelectorAll('.a-audit__detail > div')).toHaveLength(0) // the e-mail is the subject already, not said twice
+  })
+
   it('is "חבר ועד" when a member has no name at all, and shows an e-mail used as a name as it is', async () => {
     const row = await rowFor({ actor_name: null }, 'עדכון נקודה')
     expect(within(row).getByText('חבר ועד')).toBeTruthy()
