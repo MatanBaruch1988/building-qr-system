@@ -47,7 +47,9 @@ Production migration failed: This production build is of the branch <built>, but
 
 The deployment fails and the current one keeps serving. The usual cause is a project whose Vercel production branch is not
 the default branch of the repository: make them the same (change the Vercel setting, or the default branch on GitHub).
-If the default branch was renamed, the next production build uses the new name by itself: nothing in the repository holds it.
+If the default branch was renamed, the gate follows the new name by itself, but Vercel deploys it only when its name is in
+`git.deploymentEnabled` in `vercel.json` (`master` and `main` are there): a branch with another name must be added there,
+and made the production branch in the settings of the Vercel project, before its merges deploy (see the deploy steps above).
 
 If GitHub cannot say what the default branch is, the build is refused the same way and never guesses:
 
