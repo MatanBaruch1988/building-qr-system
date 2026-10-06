@@ -2,119 +2,119 @@
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/MatanBaruch1988/building-qr-system/badge)](https://scorecard.dev/viewer/?uri=github.com/MatanBaruch1988/building-qr-system)
 
-The service providers' app is available in Hebrew, English, Russian and Arabic. The committee app is in Hebrew only for
-now (its translation is planned). The repository itself (code, documents, issues and pull requests) is written in
-English.
+Service providers (a cleaning company, a gardener) check in by scanning a QR sign in the building with their phone. The
+building committee sees who came, where and when, and the committee's own AI agent can read the same data. The app
+records facts and analyses nothing.
 
-A tool for a building committee and the service providers it hires (a cleaning company, a gardener):
+It is free and open source (MIT). Any building committee can install its own copy: **[install guide](docs/install.md)**.
 
-1. **The committee** defines points in the building and prints a sign with a QR code for each one.
-2. **The service provider** scans the QR code with the phone camera. After a one-time sign-in with a personal password,
-   every scan is a single tap.
-3. Every scan is stored as one row in a clean database. **The app analyses nothing**: an AI agent reads the data through
-   a read-only API ([docs/agent-api.md](docs/agent-api.md)).
+| Provider app: pick your name (first time on a phone) | Provider app: the check-in is recorded | Committee app on a phone: the points |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/provider-phone-sign-in.png" width="220" alt="The provider app on a phone, opened by a scan. A list of five names to choose from, in Hebrew."> | <img src="docs/screenshots/provider-phone-check-in.png" width="220" alt="The provider app after signing in. A green check mark and a message that the attendance was recorded, with the point, the time and the provider."> | <img src="docs/screenshots/committee-phone-points.png" width="220" alt="The committee app on a phone, the Points tab. A list of scan points, each with its QR, edit, switch off and delete buttons."> |
 
-What personal data the app keeps, for how long, and who can see it: [docs/privacy.md](docs/privacy.md).
+<p align="center">
+  <img src="docs/screenshots/committee-computer-history.png" width="720" alt="The committee app on a computer, the History tab. Filters on top, and the visits grouped by day, each with its point, provider and time.">
+  <br>
+  <em>Committee app on a computer: the history of visits.</em>
+</p>
+
+The committee app is in Hebrew. Every screen above shows invented sample data. More pictures are in
+[docs/screenshots](docs/screenshots/README.md).
+
+## How it works
+
+1. **The committee** adds points in the building (the lobby, the garage) and prints a QR sign for each one.
+2. **The service provider** scans the sign with the phone camera. The first time on a phone they choose their name and
+   enter a personal password. After that every scan is one tap.
+3. **The visit is stored** as one row in the database: who, where and when. The committee reads it in the committee app,
+   and the committee's AI agent reads it through a read-only API.
+
+## What you get
+
+- **A provider app in four languages:** Hebrew, English, Russian and Arabic. It installs to the Home Screen and works
+  without a signal: visits wait in a queue on the phone and upload by themselves.
+- **A committee app** at `/admin`: points and their printable QR signs, service providers (and the health of each
+  provider's phones), history (and the visits that were not counted), agent keys, the committee and its audit log, and a
+  help page. The committee names the building, and both apps show the name. Sign-in is with Google, only for people on
+  the committee list.
+- **A location check ("soft GPS").** A scan is refused only when the phone has an accurate position that is clearly far
+  from the point. With no signal or a weak position the visit is recorded and flagged `location_unverified`, except at a
+  point set to `required`, where a scan without a position is refused. Each point is `required`, `optional` or `none`
+  (for a basement).
+- **A read-only API for the committee's own AI agent:** [docs/agent-api.md](docs/agent-api.md), with a ready-made prompt
+  in [docs/agent-prompt.md](docs/agent-prompt.md).
+- **Daily jobs.** One deletes personal data when its retention period ends. One sends a short health summary, if you set
+  that up.
+- **A smoke test after every deploy** that checks the live site and opens an issue if it is broken.
+- **Releases with notes for installers:** what changed, and what you must do when you update.
+
+## What it needs, and the limits
+
+You need free accounts at **GitHub** (your copy of the code), **Vercel** (hosting), **Neon** (the Postgres database) and
+**Google** (a Google Cloud project, for the committee's sign-in). You also need one technical volunteer, who knows
+their way around GitHub, a terminal and web consoles. They do not need to be a developer. Every service has a free plan
+that this app fits on. Plans change, so check each one's current limits.
+
+- **The committee app is in Hebrew only** for now. Its translation is planned. The provider app has four languages.
+- **The building must be in Israel.** The time zone is fixed in the code, and dates are always DD/MM/YYYY.
+- **One building per installation.** A second building is a second installation.
+- **Only a public copy is supported:** a public fork of this repository.
+- **Vercel's Hobby plan is for non-commercial use.** Check that your committee fits its fair use guidelines. If it does
+  not, the paid plan is the answer.
+- **The address is printed in every QR code.** Choose it before you print a sign.
+
+The details are in [section 1 of the install guide](docs/install.md#1-what-you-get-and-the-limits).
+
+## Install your own copy
+
+**[docs/install.md](docs/install.md)** takes you from nothing to a working installation for one building: your own
+fork of this repository, a Vercel project, a Neon database, Google sign-in, the first committee member, and a first test
+scan. The deploy is done in the web consoles, and a few GitHub settings use the GitHub CLI. If something breaks later,
+start with [docs/runbooks/something-broke.md](docs/runbooks/something-broke.md).
+
+**Keeping a copy up to date.** A copy updates by releases, and every release has notes that say what changed and what an
+installer must do ([docs/releases.md](docs/releases.md)). A security fix is released the same day it merges, so watch the
+releases. The steps are in [section 5 of the install guide](docs/install.md#5-updating-a-copy).
+
+**Which version is a phone running?** Both apps show their build id, the first 7 characters of the commit that Vercel
+built (`dev` for a local build). It is at the foot of the home screen in the provider app, and at the foot of the
+Committee tab ("ועד") in the committee app. The server's own commit is the `commit` of `GET /api/health`, so a phone that
+shows another id than the server is running an older app.
 
 ## How it is built
 
+A Vite and React app (a PWA), one Vercel serverless function, and a Neon Postgres database.
+
 | Part | What |
 |---|---|
-| Service provider app | `/` and `/scan?code=…`. Hebrew / English / Russian / Arabic, and it works without a signal too (a local queue on the phone that uploads by itself). Code in `src/worker`, `src/i18n`, `src/pages/WorkerApp.jsx` |
-| Committee app | `/admin`, in Hebrew only for now. Sign-in **only with a Google account** that is on the committee list. Points, service providers, history, agent keys. Code in `src/admin` |
-| API | One Vercel function (`api/index.js`, to which `vercel.json` routes every `/api/*`) that runs `server/`. Postgres (Neon) through `pg`. The router checks who may call a route before any code of its handler runs: a route is protected by default, and only the `PUBLIC` list in `server/access.js` answers without credentials |
+| Provider app | `/` and `/scan?code=...`. Four languages, and it works without a signal (a local queue on the phone that uploads by itself). Code in `src/worker`, `src/i18n`, `src/pages/WorkerApp.jsx` |
+| Committee app | `/admin`, in Hebrew only for now. Sign-in only with a Google account that is on the committee list. Code in `src/admin`, `src/pages/AdminApp.jsx` |
+| API | One Vercel function (`api/index.js`, to which `vercel.json` routes every `/api/*`) that runs `server/`. Postgres through `pg`. The router checks who may call a route before any code of its handler runs: a route is protected by default, and only the `PUBLIC` list in `server/access.js` answers without credentials |
 | Database | `db/migrations/*.sql`. Scans are append-only: they can only be voided, and a single row can be deleted only from the committee screen. A point, a service provider, a committee member or an agent key can be deleted, and their history stays with the name that was recorded |
 
-**Which version is a phone running?** Both apps show their build id, the first 7 characters of the commit that Vercel built
-(`dev` for a local build): at the foot of the home screen in the service provider app, and at the foot of the Committee tab
-("ועד") in the committee app. `vite.config.js` writes it into the JavaScript (`VITE_APP_BUILD`) and `src/ui/build.js` reads it;
-its shape is `APP_BUILD_RE` in `shared/contract.js`. The server's own commit is the `commit` of `GET /api/health`, so a phone
-that shows another id than the server is running an older app.
+The folders are described in [CONTRIBUTING.md](CONTRIBUTING.md#structure), and the reasons behind the main decisions are in
+[docs/adr/](docs/adr/README.md).
 
-**Versions and releases:** the version of the project as a whole is its tag (`v2.1.0`), and every release has notes that say what changed and what an installer must do: [docs/releases.md](docs/releases.md).
+## Privacy and security
 
-**The location policy ("soft GPS")**: a scan is refused when there is an accurate position that is clearly far from the
-point. With no signal or with a weak position the attendance is recorded and flagged `location_unverified`, except at a
-point that is set to `required`: there a scan without a position is refused. Every point can be set to `required` /
-`optional` / `none` (for basements).
+- **Privacy:** [docs/privacy.md](docs/privacy.md) says what personal data the app keeps, for how long, and who can see it.
+- **Security:** report a problem privately, never in a public issue. See [SECURITY.md](SECURITY.md).
 
-## Local development
+## Contributing
 
-```bash
-npm install
-cp .env.example .env.local        # and fill in DATABASE_URL (see below)
-npm run db:seed-dev               # a separate dev schema (dev_ui) with sample data: it does not touch the real data
-npm run dev:api -- --schema=dev_ui   # the local API server (port 3001) + a dev-only admin sign-in that skips Google
-npm run dev                       # the app (port 3000, it forwards /api to 3001)
-npm run test:unit                 # vitest: logic, API, components (they create a temporary schema and drop it)
-npm run test:e2e                  # Playwright: a real browser, a Pixel (Chromium) and an iPhone (WebKit)
-npm test                          # both
-```
+A bug, an idea or code: see [CONTRIBUTING.md](CONTRIBUTING.md), which also explains how to run the project on your own
+computer and how a pull request is checked. Please write in English.
 
-The browser tests need a one-time install of the browsers: `npx playwright install chromium webkit`.
-What cannot be tested automatically (installing to the Home Screen on an iPhone and more) is listed in
-[docs/manual-ios-checklist.md](docs/manual-ios-checklist.md).
+**Coding agents** (Claude Code, Codex, any other) work by [AGENTS.md](AGENTS.md). It is the single source of instructions
+for this repository.
 
-The sample users are defined in `scripts/dev-seed.mjs` (development passwords only, they exist only in the `dev_ui`
-schema).
+## License and code of conduct
 
-Coding agents (Claude Code, Codex) work by [AGENTS.md](AGENTS.md), and the decisions behind the rules are documented in
-[docs/adr/](docs/adr/).
+The project is open under the MIT license ([LICENSE](LICENSE)). By taking part you agree to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
-## Setting up the site (once)
+## History
 
-1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → **Create credentials → OAuth client ID → Web application**.
-2. **Authorized JavaScript origins**: the address of the site (for example `https://building-qr-system.vercel.app`) and `http://localhost:3000` for development.
-3. If the consent screen is in Testing mode: add the committee's Gmail addresses under **Test users** (or publish the app).
-4. Copy the Client ID into `GOOGLE_CLIENT_ID` in Vercel (Production) and in `.env.local`.
-5. Add the first committee member of the site, in one of two ways.
-
-   **With `FIRST_ADMIN_EMAIL` (no access to the database).** In the Vercel project open Settings, Environment Variables, add `FIRST_ADMIN_EMAIL` for the **Production** environment with the Google e-mail address of the first member, and redeploy. Then that person signs in at `/admin` with that Google account: while the committee list has no member at all, the first sign-in with exactly that address (the one that Google says is verified, without regard to capitals or spaces) adds the member and signs them in, in one step that is written to the audit log. Then **delete the variable** and redeploy: it is personal data, and once the committee has a member it does nothing (`docs/runbooks/secrets.md`).
-
-   **With the command, which stays for recovery.** The command `npm run db:create-admin` writes to the database in `DATABASE_URL`, and in `.env.local` that is the development database (not Production), so without preparation it would add the member there and not to the site. To add the first committee member of the site, run it with the direct connection string of the site's database, which you give only to this command. Paste the string at the prompt, never into the command itself: the shell keeps every command you type in its history file (PowerShell's PSReadLine, bash and zsh), and what you type at a hidden prompt is not recorded:
-
-   ```powershell
-   try { $env:DATABASE_URL = [System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Connection string')).Password; npm run db:create-admin -- you@gmail.com "Your Name" } finally { Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue }
-   ```
-
-   ```bash
-   ( printf 'Connection string: '; read -rs DATABASE_URL; echo; export DATABASE_URL; npm run db:create-admin -- you@gmail.com "Your Name" )
-   ```
-
-   The command prints which database it writes to (the address with its middle hidden and no password, and the database's marker if it has one): check that it is the address of the site's database and that it does not say `nonprod`. The connection string is a secret, so it does not go into any file in the repository, and it does not stay in the shell afterwards, also when the command is stopped with Ctrl-C: PowerShell runs the `finally` part even then, and in bash the string only ever exists inside the parentheses (a subshell that ends with the command). You add the others from the Committee tab ("ועד").
-6. Set the building's name and address in the committee app: the Committee tab ("ועד"), building details card ("פרטי הבניין"). The service providers' app shows them at the top (the name above the address) and puts the name in the window title; the committee app shows the name as its brand and in its window title. Both are stored in the site's own database and start empty: while the address is empty that app shows no address line, and while the name is empty both apps keep their plain titles. The installable app's own name (the Home Screen label) is fixed when the app is built, so it does not follow the building's name.
-
-## The move from the old system (Firebase): done
-
-The move was completed on 01/10/2026. What is left of it:
-
-- **The data** was imported into Postgres (`npm run db:import-firestore -- <export folder>`: a dry run without writing first, then again with `--apply`). The printed QR codes were kept as they are. **Passwords were not migrated** (the old ones were unsalted SHA-256), so new passwords were set in the Service providers tab.
-- **The backup** of Firestore (JSON files) is kept outside git, in the folder `../backups/firestore-2026-10-01`. The export script and its dependencies were removed.
-- **The QR codes that are already printed** point to `building-qr-system.web.app`. The small redirect site in `legacy-redirect/` forwards them to the new address (and clears the old PWA from the phones). If the public address changes, update `NEW_ORIGIN` in `legacy-redirect/public/index.html` and deploy again: `cd legacy-redirect && firebase deploy --only hosting`.
-- **Firestore is locked** (`legacy-redirect/firestore.rules`: deny everything) and the old data stays in it as a backup. When you decide the backup is no longer needed, you can delete the project in Firebase, after the printed QR codes have been replaced or the redirect site is no longer needed.
-- **The Firebase Vercel variables** were deleted.
-
-## Structure
-
-```
-api/index.js           the Vercel entry point (every /api/* is routed to it in vercel.json)
-server/                the API: routes/, access (who may call what, enforced by the router), auth, scans (the rules), google (verification), db, migrate
-shared/                code that runs in both the browser and the server: shared/datetime.js writes every date and time a person sees, always DD/MM/YYYY and HH:MM; shared/contract.js holds the values that the phone and the server must agree on (the offline sync limits, the GPS limits, the words of a scan, the form limits, the QR token)
-db/migrations/         the DB schema
-scripts/               migration, creating an admin, the development seed, import from Firestore, the CI guards
-src/worker, src/i18n   the service provider app
-src/admin              the committee app
-src/ui                 what both apps share: the colour tokens, light and dark, and the screen that replaces a broken one (ErrorBoundary: a message with "Try again" and "Reload the app" instead of a blank page; it logs the error's name only)
-tests/                 vitest (logic, the API against a real Postgres in a temporary schema, i18n, import, tests/components for components)
-e2e/                   Playwright (PWA, the service provider app, the committee app, and an axe accessibility scan of both) on a Pixel and an iPhone
-legacy-redirect/       a redirect site for the old printed QR codes
-```
-
-## Open source
-
-The project is open under the MIT license ([LICENSE](LICENSE)): any building committee can install it and run it for
-itself.
-
-- **Contributing** (a bug, an idea or code): [CONTRIBUTING.md](CONTRIBUTING.md). Please write in English.
-- **A security problem**: report it privately, not in a public issue. The explanation is in [SECURITY.md](SECURITY.md).
-- **Code of conduct**: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+The project replaced an older Firebase app on 01/10/2026. What is left of that move, and the redirect site for the QR
+codes that were already printed, is in [legacy-redirect/README.md](legacy-redirect/README.md). A new installation does not
+use any of it.
