@@ -109,6 +109,6 @@ A workflow that is run by hand, with the token of the run, a draft, and no commi
 - **v2.0.0**, now, on the current state of the default branch, made after the fact: the first release. The notes say
   that it is the first tagged release and that the earlier changes are in the history. "What installers must do" says
   where a new installation starts (the README, "Setting up the site").
-- **v2.1.0**, at the end of the install work, when a copy of the repository can be installed by another building. From
-  then on a release is made when the owner decides there is something to install, and its number follows the table
-  above.
+- **v2.1.0**, at the end of the install work, when a copy of the repository can be installed by another building. The
+  install guide, [install.md](install.md), is part of that work and exists now. From then on a release is made when the
+  owner decides there is something to install, and its number follows the table above.
