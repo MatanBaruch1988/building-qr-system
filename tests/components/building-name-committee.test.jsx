@@ -339,6 +339,38 @@ describe('the brand of the committee app', () => {
     expect(document.title).toBe('ועד · שם עדכני')
   })
 
+  it('keeps a saved name when a read of the committee\'s route that started before the save answers after it', async () => {
+    answerLikeTheServer()
+    const answer = api.getMockImplementation()
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    let reads = 0
+    api.mockImplementation(async (path, options) => {
+      // The Committee tab's own read answers at once; the shell's (the second read) is slow, and says what the server had
+      // when it was asked, the name from before the save.
+      if (path === '/admin/building' && !options?.method && ++reads === 2) {
+        const asked = { ...server.stored }
+        await gate
+        return { building: asked }
+      }
+      return answer(path, options)
+    })
+    start()
+    const c = await card()
+    await waitFor(() => expect(nameField(c).value).toBe(NAME))
+    type(nameField(c), 'מגדל הבדיקה')
+    save(c)
+    expect(await screen.findByText('שם הבניין נשמר')).toBeTruthy()
+    release() // the slow read comes back now, with the old name
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(reads).toBe(2)
+    for (const place of await brands()) {
+      expect(place.queryByText(NAME)).toBeNull()
+      expect(place.getByText('מגדל הבדיקה')).toBeTruthy()
+    }
+    expect(document.title).toBe('ועד · מגדל הבדיקה')
+  })
+
   it('stays as it is when a route fails: the public name if only the committee\'s route fails, the plain brand if both do', async () => {
     answerLikeTheServer()
     server.adminBuildingFails = true
@@ -411,5 +443,23 @@ describe('the sign-in screen of the committee app', () => {
     await heading()
     await screen.findByText(NAME)
     expect(calls('/admin/building', 'GET')).toHaveLength(0)
+  })
+
+  it('writes the name of the building in the title of the window, before the name of the app', async () => {
+    answerLikeTheServer()
+    server.signedIn = false
+    start()
+    await heading()
+    await waitFor(() => expect(document.title).toBe(`${NAME} · ${APP}`))
+  })
+
+  it('writes only the name of the app in the title of the window when the building has no name', async () => {
+    answerLikeTheServer()
+    server.signedIn = false
+    server.publicName = ''
+    start()
+    await heading()
+    await waitFor(() => expect(calls('/public/building', 'GET')).toHaveLength(1))
+    await waitFor(() => expect(document.title).toBe(APP))
   })
 })

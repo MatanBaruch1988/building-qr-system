@@ -65,7 +65,7 @@ function Brand({ name }) {
 
 function Shell({ admin, onSignedOut }) {
   const toast = useToast()
-  const { name: buildingName, setName: setBuildingName } = useBuildingName()
+  const { name: buildingName, loadName: loadBuildingName } = useBuildingName()
   const [tab, goTo] = useTab(TAB_KEYS)
   setPlace(`committee:${tab}`) // the screen for an error report (src/ui/errorReport.js), told while rendering so that a first draw that breaks is on this tab
   const { View, label } = TABS.find((t) => t.key === tab)
@@ -74,18 +74,16 @@ function Shell({ admin, onSignedOut }) {
   const first = useRef(true)
 
   // The building's name, from the committee's own route, as soon as somebody is signed in. Until it answers (or when it cannot) the
-  // brand shows what the public route said, or the plain name of the app. The Committee tab tells the same state when it saves.
+  // brand shows what the public route said, or the plain name of the app. The Committee tab tells the same state when it saves, and
+  // a save that comes before this answer wins over it (loadName drops an answer that is older than a save).
   useEffect(() => {
     let cancelled = false
-    adminApi('/building')
-      .then((res) => {
-        if (!cancelled && typeof res?.building?.name === 'string') setBuildingName(res.building.name)
-      })
+    loadBuildingName(() => adminApi('/building').then((res) => (cancelled ? undefined : res?.building?.name)))
       .catch(() => {}) // the brand stays as it is; a session that ended is announced by adminApi
     return () => {
       cancelled = true
     }
-  }, [setBuildingName])
+  }, [loadBuildingName])
 
   // The title of the window: the page, then the building (or the app). A new name changes the title and nothing else.
   useEffect(() => {

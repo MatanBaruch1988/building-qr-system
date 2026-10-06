@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { adminApi, errorText } from './api.js'
 import { IconAlert, IconLock, IconShield } from './icons.jsx'
 import ThemeSwitch, { HEBREW_THEME_LABELS } from '../ui/ThemeSwitch.jsx'
-import { useBuildingName } from './buildingName.jsx'
+import { useBuildingName, APP_NAME } from './buildingName.jsx'
 
 const GIS_SRC = 'https://accounts.google.com/gsi/client'
 
@@ -57,6 +57,12 @@ export default function LoginScreen({ config, onSignedIn }) {
   const [busy, setBusy] = useState(false)
   const [devEmail, setDevEmail] = useState('dev@example.test')
   const buttonBox = useRef(null)
+
+  // The title of the window before sign-in: the building, then the app, as in the provider app (after sign-in the shell writes the
+  // page first). It is written here too so that a session that ends does not leave the last page of the shell in the title.
+  useEffect(() => {
+    document.title = buildingName ? `${buildingName} · ${APP_NAME}` : APP_NAME
+  }, [buildingName])
 
   const signIn = async (path, body) => {
     setBusy(true)
