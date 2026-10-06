@@ -1,4 +1,4 @@
-<!-- The title must be a Conventional Commit, for example "fix: refuse a scan from too far away". Squash merge makes it the commit on master. -->
+<!-- The title must be a Conventional Commit, for example "fix: refuse a scan from too far away". Squash merge makes it the commit on the default branch. -->
 
 ## What and why
 
@@ -27,6 +27,6 @@ Closes #
 - [ ] It is backward compatible: the API and the offline sync payload still accept old clients, because installed apps keep running old code for days.
 - [ ] A migration is a new file only (expand first, contract later), and destructive SQL has a `-- contract: <reason>` line. Or: there is no migration.
 - [ ] Dates and times that a person sees go only through `shared/datetime.js`.
-- [ ] UI text is in all four languages (`src/i18n/*.js`).
+- [ ] UI text of the service providers' app is in all four languages (`src/i18n/*.js`); the committee app's is Hebrew for now.
 - [ ] There is no em dash anywhere.
 - [ ] There are no secrets and no real personal data in the code, the tests, the screenshots or the logs.
