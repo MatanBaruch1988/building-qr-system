@@ -1,5 +1,8 @@
 // The two choices a person makes on their own phone: language and light/dark. Both are remembered.
-import { test, expect, he, ru, PEOPLE, signIn } from './fixtures.js'
+import ar from '../src/i18n/ar.js'
+import { test, expect, he, en, ru, PEOPLE, signIn } from './fixtures.js'
+
+const noHorizontalScroll = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
 
 test.describe('language', () => {
   // The device says English, and the app still opens in Hebrew: the language is the person's choice, not the browser's.
@@ -28,6 +31,31 @@ test.describe('language', () => {
     await expect(page.locator('html')).toHaveAttribute('dir', 'ltr')
     await expect(page.getByRole('heading', { name: 'Выберите своё имя' })).toBeVisible()
   })
+
+  // The two pickers in the header are invisible <select>s over an icon, each in a 44 px box. WebKit lays the text of the chosen option
+  // out in a block of its own inside the select and, before the box clipped it (src/ui/ui.css), that block widened the page: by 30 px
+  // in Russian, where the label of "match the device" is the longest, and at the end of the line on the left or the right alike.
+  for (const [phone, size] of [['the phone of the project', null], ['a 360 px phone', { width: 360, height: 740 }]]) {
+    test(`the header of the provider app fits ${phone} in every language and every look, and the two pickers stay a 44 px target`, async ({ page }) => {
+      if (size) await page.setViewportSize(size)
+      await page.goto('/')
+      let words = he
+      for (const [code, next] of [['he', he], ['en', en], ['ru', ru], ['ar', ar]]) {
+        if (code !== 'he') await page.getByLabel(words['lang.label']).selectOption(code)
+        words = next
+        await expect(page.getByRole('heading', { name: words['login.title'] })).toBeVisible()
+        for (const look of ['system', 'light', 'dark']) {
+          await page.getByLabel(words['theme.label']).selectOption(look)
+          expect(await noHorizontalScroll(page), `the page does not scroll sideways in ${code}, look ${look}`).toBe(true)
+          for (const label of [words['theme.label'], words['lang.label']]) {
+            const box = await page.getByLabel(label).boundingBox()
+            expect(box.width, `${code}: the picker "${label}" is a 44 px target`).toBeGreaterThanOrEqual(44)
+            expect(box.height, `${code}: the picker "${label}" is a 44 px target`).toBeGreaterThanOrEqual(44)
+          }
+        }
+      }
+    })
+  }
 })
 
 test.describe('light and dark', () => {

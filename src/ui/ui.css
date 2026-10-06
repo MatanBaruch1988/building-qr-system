@@ -121,9 +121,15 @@
 
 /* The appearance picker (src/ui/ThemeSwitch.jsx) and the language picker (TopBar) are just an icon: no edge, no fill,
    a 44px touch target. A real <select> lies invisibly over the icon, so the phone's own picker opens. Only the icon
-   changes, to the palette blue, on hover, while pressed and on keyboard focus. */
-.w-theme, .w-lang { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; color: var(--w-text-2); cursor: pointer; transition: color 0.12s; }
-.w-theme select, .w-lang select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; appearance: none; -webkit-appearance: none; }
+   changes, to the palette blue, on hover, while pressed and on keyboard focus.
+   The box clips what is inside it (overflow: hidden): WebKit lays the text of the chosen option out in a block of its own
+   inside the <select> (about 87px for the Hebrew label, wider for the Russian "match the device" one) and lets it run past
+   the 44px box even though the select is invisible. Next to the edge of the screen that block widened the whole page, by
+   23px on the sign-in screen of the committee and by 30px in the provider app in Russian, and the page could be dragged
+   sideways. The margin, padding and border that the browser gives a select are none of the picker's business, so they
+   are reset as well. */
+.w-theme, .w-lang { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; overflow: hidden; color: var(--w-text-2); cursor: pointer; transition: color 0.12s; }
+.w-theme select, .w-lang select { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; appearance: none; -webkit-appearance: none; }
 .w-theme--bare, .w-lang { width: 44px; height: 44px; border-radius: 12px; }
 @media (hover: hover) { .w-theme--bare:hover, .w-lang:hover { color: var(--w-info); } }
 .w-theme--bare:active, .w-lang:active { color: var(--w-info); }

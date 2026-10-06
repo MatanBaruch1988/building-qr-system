@@ -5,9 +5,12 @@ report is taken seriously. Thank you for taking the time to send one.
 
 ## Supported versions
 
-Only the latest commit of `master` is supported. The hosted instance (the first installation, run by the owner of this
-repository) is deployed from `master`. If you host a copy yourself, keep it on `master`: fixes land there first and
-nowhere else.
+Only the latest release is supported: the newest version on the
+[Releases page](https://github.com/MatanBaruch1988/building-qr-system/releases). A security fix is released the same day
+that it merges, so a copy gets it by updating to the new release. That release is usually a PATCH version (`v2.0.1`); its
+number follows everything that merged since the previous release, so it is a MINOR one when features merged in between,
+and a MAJOR one when installers must act. How versions work is in [docs/releases.md](docs/releases.md). The hosted instance (the first installation, run by the owner of this repository)
+is deployed from `master`, so it has a fix as soon as it merges.
 
 ## How to report a vulnerability
 

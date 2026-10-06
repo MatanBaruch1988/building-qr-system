@@ -29,6 +29,10 @@ Pull request titles are Conventional Commits (see [CONTRIBUTING.md](../CONTRIBUT
 the next version is a MAJOR one. The owner decides the number: the script only checks that it is greater than the
 previous one.
 
+A security fix is released the same day that it merges (`SECURITY.md`). A release holds everything that merged since the
+previous one, so its number follows all of it, as for any release: a PATCH when only fixes merged since, a MINOR when a
+feature merged in between, a MAJOR when installers must act.
+
 ## How to cut a release
 
 The owner does it, by hand, from the default branch, when something worth installing has merged. There is no schedule.
