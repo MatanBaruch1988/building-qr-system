@@ -12,7 +12,19 @@
       "Bash(vercel deploy --prod *)",
       "Bash(vercel env pull *)",
       "Bash(git push --force *)",
-      "Bash(git push -f *)"
+      "Bash(git push -f *)",
+      "Bash(gh release create *)",
+      "Bash(gh release edit *)",
+      "Bash(gh release delete *)",
+      "Bash(gh release upload *)",
+      "Bash(gh workflow run release.yml *)",
+      "Bash(gh workflow run Release *)",
+      "Bash(git tag *)",
+      "Bash(git push *--tags*)",
+      "Bash(git push *--follow-tags*)",
+      "Bash(git push * tag *)",
+      "Bash(git push *refs/tags/*)",
+      "Bash(git push origin v*)"
     ]
   },
   "hooks": {
