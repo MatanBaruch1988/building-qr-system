@@ -15,6 +15,7 @@ one. Dates are DD/MM/YYYY.
 | The production database credentials (`DATABASE_URL`, `DATABASE_URL_UNPOOLED`) | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local` | The owner, in Vercel | Never, until rotated | 03/10/2026 |
 | `CRON_SECRET` | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local`, never in the Preview or Development environments | The owner, in Vercel (a long random value, see below) | Never, until rotated | 05/10/2026 |
 | `HEALTH_HEARTBEAT_URL` | Vercel only: the Production environment, marked sensitive. Never in GitHub, never in `.env.local`, never in the Preview or Development environments. It is the ping address of the server's own check on healthchecks.io, named "building-qr server" (ADR 0007), used for the alert on the first server error of a day and for the daily summary of the last 24 hours (`GET /api/cron/daily-summary`, `server/summary.js`), and anybody who has it can say that the check is fine or failing. Without it the server sends nothing | The owner, in Vercel and in healthchecks.io. If it leaks: create a new check in healthchecks.io, put the new address in Vercel and redeploy, then delete the old check | Never, until rotated | 05/10/2026 |
+| `FIRST_ADMIN_EMAIL` | Not a secret: it is personal data, the e-mail address of the first committee member (`docs/privacy.md`). Vercel only: the Production environment. It is never put in a file of the repository, an issue, a pull request or a log. While `admins` holds no row, the first Google sign-in with exactly this address adds that member (`server/firstAdmin.js`); once any member exists it does nothing | The deployer, in Vercel. **Remove it after the first sign-in** | Never expires, and does nothing once the committee has a member, but it should not stay | Not applicable (set once, when the deployment is installed) |
 | `MIGRATION_GITHUB_TOKEN` | Not used. Only a private fork needs it, in its Vercel project, so that the build can read the default branch and the migrations from GitHub (`deploy-and-rollback.md`) | The owner of that fork | Set by the owner of the fork when the token is made | Not applicable |
 | `GOOGLE_CLIENT_ID` | Vercel (Production) and `.env.local`. It is public by nature: it is in the code that every browser loads | Nobody needs to rotate it: it identifies the app, it does not protect anything | Never | Not applicable |
 | Agent keys of the committee's own AI agent | The secrets vault of the agent platform that the committee uses, never in a chat (`docs/agent-prompt.md`) | The committee, in the Agent tab of `/admin` | Never, until revoked | Each key shows its own date in the Agent tab |
@@ -85,6 +86,25 @@ a user name or a password, the server sends nothing and nothing else changes.
   it), `rejected` (healthchecks.io answered, but not with a success status), `timeout` or `failed` (no answer). Then open the
   check: its newest event is from just now. That run is a real ping with the verdict of the last 24 hours, so a `/fail` is
   e-mailed like any other.
+
+## `FIRST_ADMIN_EMAIL`
+
+The e-mail address of the first committee member of a deployment. A new installation has an empty committee list, so nobody
+can sign in; with this variable set, the first Google sign-in with exactly this address (the address that Google marked
+verified, compared without capitals and without spaces around it) adds that person as a member, in the transaction of the
+sign-in, with its entries in the audit log (`admin.add` by the system, then `session.sign_in`). It works only while the
+committee list has no row at all (a member who is switched off counts): from the first member on, the variable does nothing,
+and it never adds a second member. The server reads it from its environment and never logs it or returns it.
+
+- **Set it.** In the Vercel project open Settings, Environment Variables, add `FIRST_ADMIN_EMAIL` for the **Production**
+  environment only, with the address of the person who signs in first, and redeploy: a new value reaches only the deployments
+  that are built after it is set. Then that person signs in at `/admin` with Google. The other way to add the first member,
+  `npm run db:create-admin` with the connection string of the deployment (README), stays for recovery.
+- **Remove it after the first sign-in.** Delete the variable in Vercel and redeploy. It is personal data, and it has nothing
+  left to do. Do not leave it set "in case": if the committee list were ever emptied by hand in the database, the variable
+  would add its address again at the next sign-in.
+- **A wrong address** (a typo, or a Google account that is not the one that signs in): nobody is added and the sign-in is
+  refused like any other stranger's. Fix the variable and redeploy.
 
 ## The production database credentials
 

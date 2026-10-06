@@ -16,12 +16,14 @@ import { applyUpdate, isUpdateReady, subscribeUpdate } from '../worker/update.js
 import ThemeSwitch, { HEBREW_THEME_LABELS as THEME_LABELS } from '../ui/ThemeSwitch.jsx'
 import { IconPin, IconUsers, IconList, IconKey, IconShield, IconLogout, IconQr, IconDevice, IconAlert, IconRefresh } from '../admin/icons.jsx'
 
+// `label` is the name of the tab as a page: the top bar, the h1 and the title of the document. `nav` is the name on its button in both
+// navigations (the tab bar of the phone and the side rail), and is short enough for one fifth of a 360 px screen.
 const TABS = [
-  { key: 'points', label: 'נקודות', icon: IconPin, View: PointsView },
-  { key: 'providers', label: 'נותני שירות', icon: IconUsers, View: ProvidersView },
-  { key: 'history', label: 'היסטוריה', icon: IconList, View: HistoryView },
-  { key: 'agent', label: 'אייג׳נט', icon: IconKey, View: AgentView },
-  { key: 'committee', label: 'ועד', icon: IconShield, View: CommitteeView },
+  { key: 'points', label: 'נקודות', nav: 'נקודות', icon: IconPin, View: PointsView },
+  { key: 'providers', label: 'נותני שירות', nav: 'ספקים', icon: IconUsers, View: ProvidersView },
+  { key: 'history', label: 'היסטוריה', nav: 'היסטוריה', icon: IconList, View: HistoryView },
+  { key: 'agent', label: 'אייג׳נט', nav: 'אייג׳נט', icon: IconKey, View: AgentView },
+  { key: 'committee', label: 'ועד', nav: 'ועד', icon: IconShield, View: CommitteeView },
 ]
 
 // The tab that is open lives in the address (#history), see src/admin/tab.js. The first tab is the one that opens by default.
@@ -32,7 +34,7 @@ const TAB_KEYS = TABS.map((t) => t.key)
 function NavItem({ tab, current, onGo, className, size }) {
   return (
     <button className={className} onClick={() => onGo(tab.key)} aria-current={current ? 'page' : undefined}>
-      <tab.icon size={size} />{tab.label}
+      <tab.icon size={size} /><span className="a-nav-label">{tab.nav}</span>
     </button>
   )
 }

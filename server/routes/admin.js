@@ -7,6 +7,7 @@ import {
 } from '../http.js'
 import { requireAdmin, isAdminToken, guardLogin } from '../auth.js'
 import { verifyGoogleCredential } from '../google.js'
+import { firstCommitteeMember } from '../firstAdmin.js'
 import { readAddress, saveAddress, parseAddress } from '../building.js'
 import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvRow } from '../scans.js'
 import { audit, adminActor, changesOf, idsChanged } from '../audit.js'
@@ -111,10 +112,15 @@ route('POST', '/admin/google', async ({ req, res, body }) => {
   // of the sign-in and the audit row (`session.sign_in`) written, all or none. A refused sign-in (not on the list, switched
   // off, another Google account) throws before any of that, so it writes no entry: `auth_attempts` already counts it. The
   // throttle (guardLogin above) has a transaction of its own on purpose: a refused attempt must stay counted.
+  //
+  // The one exception to "not on the list": a deployment whose committee list has no row at all can name its first member in
+  // FIRST_ADMIN_EMAIL (server/firstAdmin.js). Only when no active member has this e-mail, and in this same transaction, it either
+  // adds that member (with the `admin.add` entry of the `system` actor, before the `session.sign_in` below) and the sign-in goes on
+  // with them like any other, or says no, and the refusal is the one that is given to every stranger.
   const { row, token } = await tx(async (c) => {
     const found = await c.query('select * from admins where email = $1 and is_active for update', [google.email])
-    if (!found.rows.length) throw forbidden('not_an_admin', 'This Google account is not on the committee list')
-    const member = found.rows[0]
+    const member = found.rows[0] ?? (await firstCommitteeMember(c, google))
+    if (!member) throw forbidden('not_an_admin', 'This Google account is not on the committee list')
     if (member.google_sub && member.google_sub !== google.sub) {
       throw forbidden('google_account_mismatch', 'This e-mail is linked to a different Google account')
     }
