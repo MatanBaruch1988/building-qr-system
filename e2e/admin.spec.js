@@ -740,3 +740,86 @@ test('the audit log opens from the Committee tab, lists what was done and by who
     await page.request.delete(`/api/admin/points/${point.id}`, { data: {} })
   }
 })
+
+// ---- the help ------------------------------------------------------------------------------------------------------------
+// A short guide in a section of the Committee tab, opened by the button "איך עובדים עם המערכת" (src/admin/views/HelpSection.jsx),
+// built like the audit log's: closed at first, between the building card and the audit log. It is text only, so there is nothing
+// to measure but where it sits, that it opens and closes, and that it fits the width.
+
+const HELP = 'איך עובדים עם המערכת'
+const HELP_TOPICS = [
+  'נקודות ושלטי QR', 'נותני שירות והטלפונים שלהם', "היסטוריה ו'לא נקלטו'", "האייג'נט", 'יומן הפעולות', 'כשמגיעה התראה', 'כשטלפון תקוע',
+]
+
+test('the help opens and closes from the Committee tab, sits between the building card and the audit log, and fits the width, on a phone and on a computer', async ({ page }) => {
+  await adminSignIn(page)
+  for (const size of [null, COMPUTER]) {
+    if (size) await page.setViewportSize(size)
+    const where = size ? 'computer' : 'phone'
+    // from another tab, so that the Committee tab opens with its sections closed again
+    await page.goto('/admin#points')
+    await loaded(page, 'נקודות סריקה')
+    await page.goto('/admin#committee')
+    await loaded(page, 'חברי הוועד')
+
+    const opener = page.getByRole('button', { name: HELP, exact: true })
+    const help = page.getByRole('region', { name: HELP })
+    const topics = help.getByRole('heading', { level: 3 })
+    const auditOpener = page.getByRole('button', { name: 'יומן פעולות', exact: true })
+
+    // closed at first: a button, no topic
+    await expect(opener).toHaveAttribute('aria-expanded', 'false')
+    await expect(topics).toHaveCount(0)
+    await expect(page.getByLabel('כתובת הבניין')).toBeVisible() // the building card has finished loading, so nothing above the help changes height any more
+    // The places are measured from the top of the page (a box from `boundingBox` is measured in the window, which moves when the page scrolls).
+    const top = (locator) => locator.evaluate((el) => el.getBoundingClientRect().top + window.scrollY)
+    const bottom = (locator) => locator.evaluate((el) => el.getBoundingClientRect().bottom + window.scrollY)
+    const closedAt = await top(opener)
+
+    // opens: every topic is there, with its sentences
+    await opener.click()
+    await expect(opener).toHaveAttribute('aria-expanded', 'true')
+    await expect(topics).toHaveText(HELP_TOPICS)
+    for (const title of HELP_TOPICS) await expect(help.getByRole('heading', { level: 3, name: title, exact: true }), `${where}: ${title}`).toBeVisible()
+    await expect(help.locator('p')).toHaveCount(HELP_TOPICS.length)
+    for (const paragraph of await help.locator('p').all()) await expect(paragraph).not.toBeEmpty()
+
+    // read only: nothing to press in it but the button that closes it
+    await expect(help.getByRole('button')).toHaveCount(1)
+    await expect(help.getByRole('link')).toHaveCount(0)
+
+    // where it sits: under the building card, with the audit log below it (its panel does not run over the audit log's button)
+    const buildingEnd = await bottom(page.getByRole('region', { name: 'פרטי הבניין' }))
+    expect(await top(opener), `${where}: the help is under the building card`).toBeGreaterThan(buildingEnd)
+    expect(await top(opener), `${where}: the button does not move when it opens`).toBeCloseTo(closedAt, 0)
+    expect(await bottom(help), `${where}: the audit log is under the help`).toBeLessThanOrEqual((await top(auditOpener)) + 0.5)
+
+    // it fits: nothing of it is outside the screen, and the page does not scroll sideways
+    const outside = await help.evaluate((section) => [...section.querySelectorAll('*')].filter((el) => {
+      const r = el.getBoundingClientRect()
+      return r.width > 0 && (r.left < -0.5 || r.right > window.innerWidth + 0.5)
+    }).map((el) => el.tagName))
+    expect(outside, `${where}: elements of the help outside the screen`).toEqual([])
+    expect(await noHorizontalScroll(page), `the help at ${where} width`).toBe(true)
+
+    // the audit log is a section of its own: open together they do not disturb each other, and each closes by itself
+    await auditOpener.click()
+    await expect(auditOpener).toHaveAttribute('aria-expanded', 'true')
+    await expect(opener).toHaveAttribute('aria-expanded', 'true')
+    await auditOpener.click()
+    await expect(auditOpener).toHaveAttribute('aria-expanded', 'false')
+    await expect(topics).toHaveCount(HELP_TOPICS.length)
+
+    // closes with the same button, and the keyboard works it too
+    await opener.click()
+    await expect(opener).toHaveAttribute('aria-expanded', 'false')
+    await expect(topics).toHaveCount(0)
+    await opener.focus()
+    await page.keyboard.press('Enter')
+    await expect(opener).toHaveAttribute('aria-expanded', 'true')
+    await page.keyboard.press('Space')
+    await expect(opener).toHaveAttribute('aria-expanded', 'false')
+    await expect(topics).toHaveCount(0)
+    expect(await noHorizontalScroll(page), `the Committee tab at ${where} width`).toBe(true)
+  }
+})
