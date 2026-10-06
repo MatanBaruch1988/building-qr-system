@@ -1,0 +1,98 @@
+# Release. Run by hand, it makes a DRAFT GitHub release with notes written from the titles of the pull requests that were
+# merged since the previous release. Other buildings install their own copy of this repository, and a version with notes
+# that say what changed, and what an installer must do, is what they update by. The whole story is in docs/releases.md.
+#
+# Who runs it, and how: the owner, from the Actions tab (Release, Run workflow, on the default branch), or from the
+# repository folder with
+#   gh workflow run release.yml -f version=2.1.0
+#   gh workflow run release.yml -f version=2.1.0 -f previous=v2.0.0     (to compare with a tag that is not the newest one)
+# `version` is MAJOR.MINOR.PATCH without the v. `previous` is optional: empty means the newest v* tag that is an ancestor of
+# the commit, and none at all means that this is the first release. The job runs only on the default branch (a copy may
+# call it master or main), and on any other branch it is skipped, which shows as a skipped run and not as a failed one.
+#
+# What the owner does next: open the draft in the Releases page, check the notes, write the section "What installers must
+# do" (or "Nothing."), and publish. A draft makes no tag and tells nobody: the tag v<version> is created by the publishing,
+# at the commit that this run was started on (--target below), not at the tip of the branch on the day it is published.
+# A draft that is wrong is deleted and the workflow is run again.
+#
+# Why it is not release-please: that bot needs a long-lived token to open its pull requests (the default token cannot start
+# the CI checks on them), and it turns every release into a pull request whose merge deploys production. Here a release is
+# a label on a commit: nothing is committed, nothing is deployed, and the version in package.json does not move.
+#
+# What it may do: the token of the run reads the repository, and only the job below has `contents: write`, for the one
+# command that creates the draft. Nothing here is text that anyone can write except the two inputs, which only the owner can
+# type (a run needs write access), and they go in through env anyway and are validated by scripts/release-notes.mjs
+# (Node built-ins only, so there is no `npm ci`) before anything else happens. Every third-party action is pinned to a full
+# commit SHA (the tag is in the comment), like in ci.yml.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The new version without the v, for example 2.1.0'
+        required: true
+        type: string
+      previous:
+        description: 'The tag to compare with, for example v2.0.0. Empty: the newest v* tag before this commit, or none for the first release'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+# One release at a time: two runs started together could both find that the tag is free.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    # The default branch as GitHub reports it, not a name written here, so that a copy whose branch is main works too. A tag
+    # that has the same name as the branch is not the branch.
+    if: github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The only write of this workflow: creating the draft release.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the notes need the tags and the whole history
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # The inputs go in through env and are read by the shell as variables, never pasted into the script. The script refuses
+      # a version or a previous tag that is not of the form 2.1.0 and v2.0.0, a version that is not greater than the previous
+      # tag, a previous tag that does not exist, and a release with no change in it. GITHUB_SERVER_URL and GITHUB_REPOSITORY
+      # (set by the runner) give it the address for the links.
+      - name: Write the notes
+        env:
+          VERSION: ${{ inputs.version }}
+          PREVIOUS: ${{ inputs.previous }}
+        run: node scripts/release-notes.mjs --version "$VERSION" --previous "$PREVIOUS" --target "$GITHUB_SHA" --out "$RUNNER_TEMP/notes.md"
+
+      # Refuses to make a second release of a version. gh finds a published release and a draft by its tag name, and git
+      # finds a tag that has no release. A draft creates no tag until it is published, so --target says which commit the tag
+      # will be on: the one this run was started on.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$(git tag --list "v$VERSION")" ]; then
+            echo "The tag v$VERSION already exists." >&2
+            exit 1
+          fi
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "A release (or a draft) v$VERSION already exists." >&2
+            exit 1
+          fi
+          gh release create "v$VERSION" --draft --target "$GITHUB_SHA" --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"

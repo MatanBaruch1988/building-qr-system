@@ -96,6 +96,7 @@ new one builds, and installed apps keep running old code for days, so the databa
   A check refuses any other title.
 - Fill in the pull request template.
 - Pull requests are squash-merged, and the title becomes the commit on `master`. The maintainer reviews and merges.
+- The titles of the merged pull requests are the notes of the next release, so write one that a person who installs the project can read ([docs/releases.md](docs/releases.md)).
 - An automated Codex review may comment on your pull request. Its findings are advice to check, not orders: reply if
   you disagree.
 
