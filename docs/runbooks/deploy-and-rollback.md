@@ -1,31 +1,65 @@
 # Deploy and roll back
 
-A merge to `master` is the only way to reach production. Nobody runs a deploy, and nobody runs a migration by hand
-(ADR 0002, `AGENTS.md`). If something is already broken and you want the short version, read
-[something-broke.md](something-broke.md).
+A merge to the production branch is the only way to reach production. The production branch is the repository's default
+branch as GitHub reports it during the build (`master` here, often `main` in a copy; ADR 0002, addendum of 06/10/2026). It
+is never set by a variable or a file. Nobody runs a deploy, and nobody runs a migration by hand (ADR 0002, `AGENTS.md`). If
+something is already broken and you want the short version, read [something-broke.md](something-broke.md).
 
 ## How a merge reaches production
 
 1. The owner squash-merges a pull request on GitHub (the four CI checks are green).
-2. Vercel's Git integration sees the new commit on `master` and starts a production build.
+2. Vercel's Git integration sees the new commit on the production branch and starts a production build.
 3. Vercel runs the build command from `vercel.json`: `node scripts/vercel-build.mjs`.
 4. The script runs `vite build`. If the build fails, it stops: nothing is migrated.
 5. The script prints one gate line, and then acts on it:
-   - `Deploy gate: migrate (...)`: this is the production build of a commit on master. Before it applies anything, the
-     script checks that every pending migration file is byte-identical to the file on GitHub master (one line
-     `Migration NNN_name.sql: verified against GitHub master` per file; with nothing pending there is no check). Then it
-     migrates the production database (`DATABASE_URL_UNPOOLED`, a direct connection) and prints `Applied: ...` or
-     `Database is up to date.`
-   - `Deploy gate: refuse (...)`: a production build without the Git data of a commit on master, or a build whose
-     environment is unknown (no `VERCEL_ENV`). The build exits 1 and the deployment fails. If the reason says the
-     environment is unknown, open the Vercel project settings, Environment Variables, and switch on "Automatically expose
-     System Environment Variables".
+   - `Deploy gate: migrate (...)`: this is the production build of a commit that the Vercel Git integration built. Before it
+     connects to the database, the script asks GitHub for the default branch of the repository and prints
+     `Production branch: <name> (the default branch on GitHub)`. The commit must be on that branch (see "A build of another
+     branch" below). Then, before it applies anything, it checks that every pending migration file is byte-identical to the
+     file on that branch on GitHub (one line `Migration NNN_name.sql: verified against GitHub <branch>` per file; with
+     nothing pending no file is checked). Then it migrates the production database (`DATABASE_URL_UNPOOLED`, a direct
+     connection) and prints `Applied: ...` or `Database is up to date.`
+   - `Deploy gate: refuse (...)`: a production build without the Git data of a commit, or a build whose environment is
+     unknown (no `VERCEL_ENV`). The build exits 1 and the deployment fails. If the reason says the environment is unknown,
+     open the Vercel project settings, Environment Variables, and switch on "Automatically expose System Environment
+     Variables".
    - `Deploy gate: skip (...)`: a Vercel preview or development build. It builds and touches no database.
-     Branches other than master are not deployed by themselves (`git.deploymentEnabled` in `vercel.json`: `"**": false,
-     "master": true`), so a pull request gets no automatic preview: the checks run in CI, and the daily deployment quota of
-     the Hobby plan stays for production. A preview of one branch can still be made on purpose from the Vercel dashboard
-     (Deployments, Create Deployment, the branch); it is a preview build and never migrates.
+     Branches other than the production branch are not deployed by themselves (`git.deploymentEnabled` in `vercel.json`:
+     `"**": false, "master": true, "main": true`), so a pull request gets no automatic preview: the checks run in CI, and
+     the daily deployment quota of the Hobby plan stays for production. A preview of one branch can still be made on purpose
+     from the Vercel dashboard (Deployments, Create Deployment, the branch); it is a preview build and never migrates.
+     `vercel.json` lists `master` and `main` because those are the usual names of a default branch. JSON has no comments,
+     so this is where the reason is written: a copy whose default branch has another name must add that name to
+     `deploymentEnabled` (and make it the production branch in the settings of the Vercel project), or Vercel will not
+     build it by itself.
 6. If the script exits 0, Vercel promotes the deployment: production now serves the new code.
+
+### A build of another branch
+
+The production branch is read from GitHub in every production build, with git's own request for it
+(`https://github.com/<owner>/<repo>.git/info/refs?service=git-upload-pack`, the one `git ls-remote --symref` makes), not
+from the REST API, which allows too few requests for the shared addresses of Vercel's build servers. When the build is of
+any other branch than the default branch, the build exits 1 before it connects to the database:
+
+```
+Production migration failed: This production build is of the branch <built>, but the production branch of <owner>/<repo> is its default branch on GitHub, <default>. Production is deployed only from a merge to <default>: the production branch of the Vercel project and the default branch on GitHub must be the same
+```
+
+The deployment fails and the current one keeps serving. The usual cause is a project whose Vercel production branch is not
+the default branch of the repository: make them the same (change the Vercel setting, or the default branch on GitHub).
+If the default branch was renamed, the next production build uses the new name by itself: nothing in the repository holds it.
+
+If GitHub cannot say what the default branch is, the build is refused the same way and never guesses:
+
+- `The default branch of <owner>/<repo> could not be read from GitHub after N tries (HTTP 404)` (or `network error`, or
+  `timed out`): GitHub was unreachable, or the repository is private and `MIGRATION_GITHUB_TOKEN` is missing. The build
+  asked several times (about a minute). Redeploy when GitHub is back.
+- `GitHub refused to give the default branch of <owner>/<repo> (HTTP 401)`: a private repository needs
+  `MIGRATION_GITHUB_TOKEN`, a token that can read the contents of the repository, in the Vercel project; or the token that
+  is there was refused or has expired. A refused token is not asked for again.
+- `The default branch of <owner>/<repo> could not be read from GitHub: the answer ...`: GitHub answered, but not with a
+  default branch (an empty repository, or a default branch whose name is not a plain one: letters, digits and `._/-`, at
+  most 100 characters). Rename such a branch.
 
 The old deployment serves traffic during steps 2 to 6, which is why every migration must work for the old code and the new
 code at the same time (expand and contract, `AGENTS.md`, "Database and API changes").
@@ -113,12 +147,13 @@ issue or a pull request.
   rewrite the migration (in a new pull request) so that it takes shorter locks.
 - `57014 (query_canceled)` means a statement ran longer than the 5 minute limit of a migration. Rewrite the migration (in a
   new pull request) so that it does less in one statement.
-- `Migration NNN_name.sql differs from the file on GitHub master` means the build holds a migration that is not the merged
-  one (a deploy from a local checkout, or a file edited after the merge). Nothing was applied. Deploy by merging, and never
-  edit a merged migration.
-- `Migration NNN_name.sql could not be read from GitHub master` means the file was not found there after several tries
+- `Migration NNN_name.sql differs from the file on GitHub <branch>` (`master` here, the default branch in a copy) means the
+  build holds a migration that is not the merged one (a deploy from a local checkout, or a file edited after the merge).
+  Nothing was applied. Deploy by merging, and never edit a merged migration.
+- `Migration NNN_name.sql could not be read from GitHub <branch>` means the file was not found there after several tries
   (about a minute): it is not merged, or GitHub was unreachable. If it is merged, redeploy. A private fork needs
-  `MIGRATION_GITHUB_TOKEN` in the Vercel project (a token that can read the repository contents).
+  `MIGRATION_GITHUB_TOKEN` in the Vercel project (a token that can read the repository contents; the build uses it for the
+  files and to read the default branch).
 
 ## Roll back the code
 
@@ -142,7 +177,8 @@ lost or damaged, see `restore.md`.
 ## Never
 
 - Never `vercel --prod` or `vercel deploy --prod`, from anywhere. `AGENTS.md` and `.claude/settings.json` forbid it.
-  A production deployment from a checkout can pass the gate. It cannot apply a migration that is not on GitHub master,
+  A production deployment from a checkout can pass the gate. It cannot apply a migration that is not on the production
+  branch on GitHub,
   but it can ship app code that nobody reviewed (Vercel's Deployment Policies would block it, a Pro feature).
 - Never run `npm run db:migrate` against production: it refuses it, and the marker (`public.environment_marker`) must not
   be edited to get past that.
