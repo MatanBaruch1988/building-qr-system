@@ -44,7 +44,9 @@ The full list is in [`AGENTS.md`](AGENTS.md), under "Rules for every change". Th
   building's time). Never a month name, a weekday or the browser's own date field. The API and the agent keep ISO
   dates on purpose.
 - **Phone and computer:** the app is used on both. Change both layouts together and check both.
-- **UI text** comes from `src/i18n/*.js`, in all four languages: Hebrew, English, Russian and Arabic.
+- **UI text** of the service providers' app comes from `src/i18n/*.js`, in all four languages: Hebrew, English, Russian
+  and Arabic. The committee app is in Hebrew only for now: its text is in `src/admin/` and `src/pages/AdminApp.jsx`
+  until it moves to `src/i18n`.
 - **Everything is written in English:** code comments, commit messages, issues, pull requests and documents. Only the
   app's own interface text is in other languages (see the UI text rule above).
 - **The committee app lists the actions of every tile and row in one order:** the actions of that screen, then edit,

@@ -2,8 +2,9 @@
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/MatanBaruch1988/building-qr-system/badge)](https://scorecard.dev/viewer/?uri=github.com/MatanBaruch1988/building-qr-system)
 
-The app's interface is available in Hebrew, English, Russian and Arabic. The repository itself (code, documents, issues
-and pull requests) is written in English.
+The service providers' app is available in Hebrew, English, Russian and Arabic. The committee app is in Hebrew only for
+now (its translation is planned). The repository itself (code, documents, issues and pull requests) is written in
+English.
 
 A tool for a building committee and the service providers it hires (a cleaning company, a gardener):
 
@@ -20,7 +21,7 @@ What personal data the app keeps, for how long, and who can see it: [docs/privac
 | Part | What |
 |---|---|
 | Service provider app | `/` and `/scan?code=…`. Hebrew / English / Russian / Arabic, and it works without a signal too (a local queue on the phone that uploads by itself). Code in `src/worker`, `src/i18n`, `src/pages/WorkerApp.jsx` |
-| Committee app | `/admin`. Sign-in **only with a Google account** that is on the committee list. Points, service providers, history, agent keys. Code in `src/admin` |
+| Committee app | `/admin`, in Hebrew only for now. Sign-in **only with a Google account** that is on the committee list. Points, service providers, history, agent keys. Code in `src/admin` |
 | API | One Vercel function (`api/index.js`, to which `vercel.json` routes every `/api/*`) that runs `server/`. Postgres (Neon) through `pg`. The router checks who may call a route before any code of its handler runs: a route is protected by default, and only the `PUBLIC` list in `server/access.js` answers without credentials |
 | Database | `db/migrations/*.sql`. Scans are append-only: they can only be voided, and a single row can be deleted only from the committee screen. A point, a service provider, a committee member or an agent key can be deleted, and their history stays with the name that was recorded |
 
