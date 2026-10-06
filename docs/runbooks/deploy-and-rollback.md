@@ -3,7 +3,8 @@
 A merge to the production branch is the only way to reach production. The production branch is the repository's default
 branch as GitHub reports it during the build (`master` here, often `main` in a copy; ADR 0002, addendum of 06/10/2026). It
 is never set by a variable or a file. Nobody runs a deploy, and nobody runs a migration by hand (ADR 0002, `AGENTS.md`). If
-something is already broken and you want the short version, read [something-broke.md](something-broke.md).
+something is already broken and you want the short version, read [something-broke.md](something-broke.md). A new
+installation, with its first deploy, starts at [the install guide](../install.md).
 
 ## How a merge reaches production
 
