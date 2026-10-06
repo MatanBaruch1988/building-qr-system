@@ -6,7 +6,10 @@
 // What is NOT for people keeps its machine format on purpose: the API and the agent read ISO dates (2026-10-01,
 // 2026-10-01T18:00:00Z), which cannot be misread as day-month or month-day.
 
-export const BUILDING_TZ = 'Asia/Jerusalem'
+// The building's time zone is written once, in shared/contract.js (the server stores `scans.local_date` in the same zone).
+// It is re-exported here so that the code that imports it from this file keeps working.
+import { BUILDING_TZ } from './contract.js'
+export { BUILDING_TZ }
 
 // Only used to get the numbers (in the building's zone, 24 hours, Western digits): the text is put together by hand
 // below, so no locale can change its shape.

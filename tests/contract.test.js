@@ -6,7 +6,8 @@
 //   3. every number and list is PINNED, with the reason it matters: an installed phone keeps its own copy of the
 //      JavaScript for days or weeks, and the offline queue on a phone can hold check-ins that an old version wrote
 //      (AGENTS.md, "Database and API changes"), so a changed value is a decision about those phones, never a detail;
-//   4. src/ and server/ hold no copy of what moved (a static scan, like the flag-literal check of agent-docs.test.js);
+//   4. src/ and server/ hold no copy of what moved (a static scan, like the flag-literal check of agent-docs.test.js), and
+//      the building's time zone is written in no file but shared/contract.js;
 //   5. the client bundle holds no server-only code (it is built here and read).
 // When a test here fails because you changed a value on purpose, update the pinned number in the same pull request and say
 // in its description why the old phones are safe.
@@ -22,6 +23,7 @@ import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
 import * as contract from '../shared/contract.js'
 import { parseQrToken } from '../shared/qrToken.js'
 import * as config from '../server/config.js'
+import * as datetime from '../shared/datetime.js'
 import { parseQrToken as parseQrTokenFromServer, evaluateGps } from '../server/scanLogic.js'
 import { createQueue, flushQueue } from '../src/worker/scanQueue.js'
 import { getFix } from '../src/worker/geo.js'
@@ -542,6 +544,7 @@ const PINNED = [
   ['CLIENT_ERROR_CODE_RE (its flags)', contract.CLIENT_ERROR_CODE_RE.flags, '', 'A global or sticky flag makes test() remember where it stopped, and the next code that is checked fails.'],
   ['MAX_CLIENT_ERROR_EVENTS', contract.MAX_CLIENT_ERROR_EVENTS, 20, `The most events that the server takes from one report (it ignores the rest, and answers 200 as always). A lower value drops events that an installed app sends in one report. ${OLD_PHONES}`],
   ['CLIENT_ERROR_MAX_COUNT', contract.CLIENT_ERROR_MAX_COUNT, 1000, `The largest count of one event (a larger whole number is cut to it, and anything else is taken as 1). It is also the most that one call of recordEvent adds to a row. A lower value cuts the honest count of an app that was offline for a while. ${OLD_PHONES}`],
+  ['BUILDING_TZ', contract.BUILDING_TZ, 'Asia/Jerusalem', `The zone in which scans.local_date is stored (every stored day was computed in it) and in which every installed phone writes its dates and its "today" (shared/datetime.js). A different zone splits the stored days from the new ones, and an old phone would keep showing days in the old zone for as long as it is not updated. It is not a setting of an installation: changing it is the owner's decision, with a plan for the stored dates. ${OLD_PHONES}`],
 ]
 
 describe('the values of shared/contract.js are pinned: a change is a decision about the installed phones', () => {
@@ -647,6 +650,34 @@ describe('src/ and server/ hold no copy of a number or a pattern that moved to s
     const planted = ["const BATCH = 10", 'maxLength={120}', "radius_m: '50'", 'x.length < 8', "const t = 'BQR-abc'", "token.startsWith('qrp_')"]
     const hits = planted.filter((line) => COPIES.some(([, pattern]) => pattern.test(line)))
     expect(hits).toEqual(planted)
+  })
+})
+
+describe("the building's time zone is written once, in shared/contract.js", () => {
+  // Every string literal of the code that holds the zone's name. Comments may name it (and the docs and the SQL comments do).
+  const copiesOf = (file, text) =>
+    stringLiterals(text)
+      .filter(({ value }) => value.includes(contract.BUILDING_TZ))
+      .map(({ line }) => `${file}:${line} writes the building's time zone ("${contract.BUILDING_TZ}") as a string literal: import BUILDING_TZ from shared/contract.js (server code can also take TIMEZONE from server/config.js).`)
+
+  it('the server and the date writer re-export the same constant under their own names (one value, two names)', () => {
+    expect(config.TIMEZONE).toBe(contract.BUILDING_TZ)
+    expect(datetime.BUILDING_TZ).toBe(contract.BUILDING_TZ)
+  })
+
+  it('no file of src/, server/ or shared/ but shared/contract.js writes it', () => {
+    const problems = []
+    for (const { file, text } of codeFiles('src', 'server', 'shared')) {
+      if (file !== 'shared/contract.js') problems.push(...copiesOf(file, text))
+    }
+    report(problems)
+  })
+
+  it('the scan can see a copy (it flags a planted one, in each kind of string)', () => {
+    const zone = contract.BUILDING_TZ
+    const planted = [`const TZ = '${zone}'`, `const TZ = "${zone}"`, `const sql = \`at time zone '${zone}'\``]
+    expect(planted.map((text) => copiesOf('planted.js', text).length)).toEqual([1, 1, 1])
+    expect(copiesOf('planted.js', `// the zone is ${zone}`), 'a comment is not a copy').toEqual([])
   })
 })
 

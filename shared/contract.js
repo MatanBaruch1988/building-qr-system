@@ -258,3 +258,17 @@ export const MAX_CLIENT_ERROR_EVENTS = 20
  * is how many times the same error happened on the device since the last report.
  */
 export const CLIENT_ERROR_MAX_COUNT = 1000
+
+// ---- 10. The building's time zone --------------------------------------------------------------------------------
+// The building is in Israel, and every day that anybody reads is a day there, midnight to midnight.
+
+/**
+ * The building's time zone (an IANA name). The server writes `scans.local_date` in it (server/scans.js, server/config.js
+ * re-exports it as TIMEZONE), and the phone writes every date and time that a person sees in it (shared/datetime.js, which
+ * re-exports it as BUILDING_TZ), so the phone's "today" is the day that the server stored: two copies of the name could
+ * disagree, and a visit made just after midnight would be shown on one day and counted on the other. It is a constant and
+ * not a setting of an installation: the stored days were computed in this zone and installed phones carry it in their
+ * JavaScript for days or weeks, so a change would split the stored days from the new ones (AGENTS.md, "Rules for every
+ * change"). Changing it is the owner's decision, with a plan for the dates that are already stored.
+ */
+export const BUILDING_TZ = 'Asia/Jerusalem'

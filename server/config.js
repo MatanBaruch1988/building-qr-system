@@ -2,7 +2,8 @@
 //
 // A value that the phone must agree on is NOT written here but in shared/contract.js, and re-exported below so that the
 // server code keeps importing it from here: MAX_SYNC_BATCH, GPS_MAX_USABLE_ACCURACY_M, GPS_MAX_STALE_AGE_S,
-// PASSWORD_MIN_LENGTH, PROVIDER_TOKEN_PREFIX and MAX_TOKEN_LENGTH. This file holds what only the server uses.
+// PASSWORD_MIN_LENGTH, PROVIDER_TOKEN_PREFIX, MAX_TOKEN_LENGTH and the building's time zone (BUILDING_TZ, here TIMEZONE). This
+// file holds what only the server uses.
 export {
   MAX_SYNC_BATCH,
   GPS_MAX_USABLE_ACCURACY_M,
@@ -13,7 +14,9 @@ export {
 } from '../shared/contract.js'
 import { NAME_MAX_LENGTH } from '../shared/contract.js'
 
-export const TIMEZONE = 'Asia/Jerusalem'
+// The building's time zone: BUILDING_TZ in shared/contract.js (the phone writes every date in the same zone), kept under
+// its old name here so that the server code keeps importing it from this file.
+export { BUILDING_TZ as TIMEZONE } from '../shared/contract.js'
 
 // Same provider + same point within this window is treated as one visit, not two.
 export const SCAN_COOLDOWN_MINUTES = 10
