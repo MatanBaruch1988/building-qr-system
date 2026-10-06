@@ -11,7 +11,8 @@ committee's own AI agent reads the data through a read-only API. The app records
 It is a Vite + React PWA, a Vercel serverless API and Neon Postgres. The provider app is in four languages (he, en, ru,
 ar); the committee app is in Hebrew only for now (its translation is deferred). Public repository
 (`MatanBaruch1988/building-qr-system`), MIT licence, meant to be installed by any building committee that wants its own
-copy (one building per installation). The repository is written in English.
+copy (one building per installation, `docs/install.md`; a copy updates by releases, `docs/releases.md`). The repository
+is written in English.
 
 Soft GPS policy: a scan is refused only for an accurate position that is clearly far from the point (or for no position on
 a `required` point); a weak or missing fix elsewhere is recorded with the flag `location_unverified`.
@@ -27,8 +28,8 @@ Map of the repository:
 | `shared/` | Code that runs in the browser and on the server. `shared/datetime.js` writes every date and time a person sees; `shared/contract.js` holds the values the phone and the server must agree on (the sync limits, error codes, GPS limits, vocabularies), `shared/types.js` the JSDoc shapes they exchange |
 | `tests/` | Vitest: logic, the API against a real Postgres in a throwaway schema, i18n, contrast, typography, `tests/components` |
 | `e2e/` | Playwright on a Pixel 7 (Chromium) and an iPhone 14 (WebKit) |
-| `scripts/` | Migrations, `create-admin`, the dev seed, the CI guards (`check-*.mjs`), the text rules and the edit hook |
-| `docs/` | `agent-api.md` (the read-only agent API), `manual-ios-checklist.md`, `adr/` (decisions), `runbooks/` (deploy and roll back, restore, incident, secrets) |
+| `scripts/` | Migrations, `create-admin`, the dev seed, the CI guards (`check-*.mjs`), the text rules and the edit hook, the release notes (`release-notes.mjs`), the README's screenshots (`screenshots/`, with `playwright.screenshots.config.js` at the root) |
+| `docs/` | `install.md` (installing and updating a copy), `releases.md` (versions and releases), `privacy.md`, `agent-api.md` (the read-only agent API), `agent-prompt.md`, `manual-ios-checklist.md`, `screenshots/` (the README's images, made from the dev seed only), `adr/` (decisions), `runbooks/` (deploy and roll back, restore, incident, secrets) |
 | `legacy-redirect/` | A small Firebase site that redirects the old printed QR codes to the new address |
 
 Read `README.md` for the architecture and `docs/agent-api.md` for the agent API.
@@ -63,6 +64,7 @@ npm run db:migrate                   # applies the new migrations to the databas
 npm run db:create-admin -- <google-email> [name]   # adds a committee member to the database in DATABASE_URL, and prints which one
 npm run db:backup -- --out <dir> --neon-project <id>   # dumps the database to <dir> (kept 30 days, never in the repository), see docs/runbooks/restore.md
 npm run icons                        # makes the PNG icons in public/ from public/pwa-512x512.svg
+npm run screenshots                  # retakes docs/screenshots/ from the dev seed, local only (docs/screenshots/README.md)
 ```
 
 `scripts/vercel-build.mjs` is the build command of Vercel (`vercel.json`). It builds the app and, for the production build
@@ -156,9 +158,11 @@ migration, or of deleting, renaming away or skipping a test; they are heuristics
 diff. A test that really has to go is the owner's call: say why in the pull request (the label is `allow-test-removal`).
 
 `.github/workflows/smoke.yml` is not a merge check: it runs after each production deployment (`scripts/smoke-check.mjs`
-against the address in the repository variable `SMOKE_BASE_URL`, the production domain; a run without the variable fails
-and says so) and opens an issue labelled `bug` when the deployment is broken (`docs/runbooks/deploy-and-rollback.md`). The
-variable decides where the secret `SMOKE_AGENT_KEY` is sent, so only the owner changes it.
+against the address in the variable `SMOKE_BASE_URL` of the GitHub environment `smoke`, the production domain; a run
+without the variable fails and says so) and opens an issue labelled `bug` when the deployment is broken
+(`docs/runbooks/deploy-and-rollback.md`). The variable decides where the secret `SMOKE_AGENT_KEY` is sent, so it lives in
+an environment, whose variables only the owner of a personal repository (an admin of an organization's) can change, and
+never in a repository variable, which any collaborator can.
 
 Not automated, on purpose: Home Screen install, standalone mode, the status bar, offline use on a real iPhone, push.
 Check them by hand with `docs/manual-ios-checklist.md` before a release that touches the PWA files, the layout or the
@@ -235,6 +239,22 @@ runs; it looks nothing up and says nothing about the route.
   that the owner asked for and that says so at the top of its description, so that every rule change is reviewed and
   approved as a rule change. A feature pull request never changes them, whoever wrote it, and the agent loop never does
   (below). When a feature needs a new rule, the rule goes into a separate `docs(rules):` pull request that merges first.
+
+## Releases
+
+A release is a tag `vX.Y.Z` with notes, for the people who install a copy: a copy updates by releases, not by following
+`master` (`docs/releases.md`, `docs/install.md` section 5, `SECURITY.md`). The version is SemVer for installers: MAJOR
+means an installer must act (a new setting, a manual step), MINOR new features, PATCH fixes. A security fix is released
+the same day that it merges; its number follows everything that merged since the previous release, like any release. The
+`version` in `package.json` does not move: the tag is the version.
+
+The owner cuts every release. The manual workflow `.github/workflows/release.yml` (`scripts/release-notes.mjs`) makes a
+draft from the titles of the merged pull requests, the owner writes "What installers must do" and publishes, and publishing
+creates the tag. So a pull request title is a line of the next release notes: write it for an installer.
+
+Agents never run the Release workflow, never create, edit, publish or delete a release, and never create or push a tag,
+even when a release looks due: they say so to the owner. `.claude/settings.json` denies the usual commands for it
+(`CLAUDE.md`).
 
 ## The agent loop
 
@@ -443,6 +463,13 @@ reviewing agent should apply it too.
   raises the turn, time or branch limits, that turns on `show_full_output`, that weakens the `check` job (a path left out
   of its list, a branch it does not look at, a step that fails open) or adds the `pull_request_review_comment` trigger,
   or that gives the agent a production secret or any secret other than the Claude token.
+- A change to `.github/workflows/release.yml` or `scripts/release-notes.mjs` that widens what a release run may do
+  (`contents: write` beyond its one job, a write command other than creating the draft, a trigger other than
+  `workflow_dispatch`, a run from anything but the default branch), that publishes a release instead of making a draft,
+  that puts an input into a `run:` script instead of `env`, or that drops the check of the version and the previous tag;
+  or any change that lets an agent run the workflow, create a release or create or push a tag.
+- A change to `.github/workflows/smoke.yml` that reads `SMOKE_BASE_URL` from anywhere but the environment `smoke` (a
+  repository variable can be changed by any collaborator), or that sends `SMOKE_AGENT_KEY` anywhere but that address.
 
 **Report as P2 when you are sure:**
 
