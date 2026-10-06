@@ -24,9 +24,12 @@ for how long, is in [privacy.md](privacy.md).
 The limits, plainly:
 
 - **The committee app is in Hebrew only.** The service providers' app is in Hebrew, English, Russian and Arabic.
-- **The building's time zone is Israel.** `BUILDING_TZ` (`Asia/Jerusalem`, in `shared/contract.js`) is a constant, not a
-  setting: the stored days and the JavaScript on installed phones both depend on it, so this guide does not cover changing
-  it. Dates are always DD/MM/YYYY and HH:MM. The holiday rules in the agent prompt are Israeli too.
+- **The building must be in Israel.** The time zone is a constant in the code (`BUILDING_TZ`, `Asia/Jerusalem`, in
+  `shared/contract.js`), not a setting, and changing it is not supported. Dates are always DD/MM/YYYY and HH:MM. The
+  holiday rules in the agent prompt are Israeli too.
+- **Only a public copy is supported:** a public fork of this repository, which is path A. Path B and a private repository
+  with `MIGRATION_GITHUB_TOKEN` are possible, but they are not checked on every release, and there is no supported private
+  path.
 - **One building per installation.** A second building is a second installation: its own Neon database, Vercel project
   and Google client.
 - **It runs on GitHub, Vercel and Neon, and the committee signs in with Google.** Nothing else is required.
@@ -44,7 +47,7 @@ they change, so check each provider's current limits before you rely on them.
 
 | Service | Plan | What the limit means for you |
 |---|---|---|
-| GitHub | Free, a public fork | A fork of this public repository is public. A private copy on a free plan may not enforce the rulesets of section 3.8 and has a monthly allowance of Actions minutes **(check in the trial install)** |
+| GitHub | Free, a public fork | The checks of this repository and the rulesets of section 3.8 run on a public fork on the free plan **(check in the trial install)** |
 | Vercel | Hobby, free | Non-commercial use. Runtime logs last about 1 hour (so the app records its own errors, [incident.md](runbooks/incident.md)). Cron jobs run once a day, at some point within their hour (`vercel.json` has two). Each merge to the production branch is one deployment, and Hobby allows a limited number a day |
 | Neon | Free | Restoring is possible only to a point in the last 6 hours ([restore.md](runbooks/restore.md)), which is why section 3.9 offers a daily backup. A compute that has slept takes a few seconds to wake, so the first request after a quiet period is slow |
 | Google Cloud | An OAuth client | Signing in with Google needs no payment that this guide knows of **(check in the trial install)** |
@@ -103,7 +106,7 @@ changes can go back as pull requests.
    and `main` are the two names that `vercel.json`, `ci.yml` and `scorecard.yml` already list; any other name needs
    edits in those three files.
 3. A fork of a public repository stays public **(check in the trial install)**, and the migration check can read a public
-   repository without a token, so path A needs no `MIGRATION_GITHUB_TOKEN` (a private copy does: section 4).
+   repository without a token, so path A needs no `MIGRATION_GITHUB_TOKEN` (a private repository does: section 4).
 4. GitHub switches the Actions of a new fork off until you enable them **(check in the trial install)**. Leave them off
    for now: section 3.8 turns them on at the right moment.
 
@@ -191,7 +194,7 @@ nothing, and on a first deploy nothing was serving anyway. Each message, and wha
 [deploy-and-rollback.md](runbooks/deploy-and-rollback.md) ("How a merge reaches production", "A build of another branch",
 "A failed migration"). The usual ones: the environment is unknown (switch on the system variables, step 5), a database
 variable is missing or `DATABASE_URL_UNPOOLED` is a pooled host (fix the variable, **Redeploy**), and the default branch
-could not be read from GitHub (a private repository needs the token of section 4).
+could not be read from GitHub (a private repository would need the token of section 4).
 
 ### 3.5 The other variables, and the second deploy
 
@@ -208,7 +211,7 @@ for every environment: edit them to Production only and Sensitive **(check in th
 | `APP_BASE_URL` | Yes | `https://<your-domain>`, no trailing slash. The address printed inside new QR codes. Without it the app uses the address of the request, and the committee app warns when a QR code points at a local address |
 | `FIRST_ADMIN_EMAIL` | Yes, until the first sign-in | The Google e-mail of the first committee member. Section 3.6. Not a secret, but personal data: remove it afterwards |
 | `CRON_SECRET` | Yes | A long random value that you make: `openssl rand -hex 32` in Git Bash, or the random-password generator of your password manager (64 characters, no spaces or line breaks). Vercel Cron sends it to the daily jobs. Without it every daily job refuses with a 401: nothing is deleted and the retention job never runs |
-| `MIGRATION_GITHUB_TOKEN` | Only for a private repository | Section 4. It must be there **before** the first deploy |
+| `MIGRATION_GITHUB_TOKEN` | Only if the repository is private (possible, not supported: section 4) | Section 4. It must be there **before** the first deploy |
 | `HEALTH_HEARTBEAT_URL` | Optional | Section 3.9. Marked Sensitive |
 
 Then **Redeploy** (Deployments, the newest production deployment, its menu, Redeploy): a new value reaches only the
@@ -314,8 +317,7 @@ Do these in order. After step 5 every change to the default branch needs a pull 
    and up to date. `master-approval` adds one approval from a code owner (a second person). With one maintainer nobody
    else can approve, but the repository admin role may bypass it on a pull request, so you can still merge your own;
    applying only `master-gates` is also valid for a one-person copy. From now on a pull request needs a title in the
-   Conventional Commit form (`chore: ...`), which the `guards` check enforces. A private repository on a free plan may
-   not enforce rulesets at all **(check in the trial install)**.
+   Conventional Commit form (`chore: ...`), which the `guards` check enforces.
 6. **Dependabot.** In Settings, Code security, turn on Dependabot alerts and Dependabot security updates **(check in the
    trial install)**. `.github/dependabot.yml` asks for weekly version updates; whether they start in a fork without further
    settings is also **(check in the trial install)**. Each Dependabot pull request goes through the same four checks and
@@ -355,8 +357,9 @@ first-person wording. Edit those to your committee's wishes.
 
 ## 4. Path B: the Vercel Deploy button
 
-The quick path: Vercel clones this repository into a new repository of yours and creates the project in one flow. It does
-not make a GitHub fork: **the copy is not linked to this repository, so updates are manual** (section 5).
+The quick path: Vercel clones this repository into a new repository of yours and creates the project in one flow. It is
+possible, but it is not checked on every release (section 1). It does not make a GitHub fork: **the copy is not linked to
+this repository, so updates are manual** (section 5).
 
 1. Settle the address and the project name (section 2), make the Google client (section 3.3) and the Neon strings
    (section 3.2, by hand), and have the first member's e-mail and a `CRON_SECRET` ready (section 3.5).
@@ -381,10 +384,11 @@ not make a GitHub fork: **the copy is not linked to this repository, so updates 
 4. **A private repository needs a token before the first deploy.** Vercel's flow may create the new repository as private
    by default **(check in the trial install)**. The deploy gate then cannot read the default branch or the migration
    files from GitHub, and the first build fails with `HTTP 404` or `HTTP 401` after about a minute
-   ([deploy-and-rollback.md](runbooks/deploy-and-rollback.md)). Either make the repository public in the Vercel flow, or make a
-   token, add it as `MIGRATION_GITHUB_TOKEN` (Production, Sensitive) and **Redeploy**: a fine-grained token for that one
-   repository, with read access to its contents **(check in the trial install)**. Nothing is touched by that failed
-   build.
+   ([deploy-and-rollback.md](runbooks/deploy-and-rollback.md)). Make the repository public in the Vercel flow, which is the
+   supported choice. A private repository works only with a token added as `MIGRATION_GITHUB_TOKEN` (Production,
+   Sensitive) and a **Redeploy**: a fine-grained token for that one repository, with read access to its contents
+   **(check in the trial install)**. That is possible, not checked on every release, and not a supported setup. Nothing is
+   touched by the failed build.
 5. From the first deploy on, follow path A: "What the build log should say" in section 3.4, then section 3.5 (the
    variables are already set, so only tighten the two database ones, and check the daily jobs), then 3.6 to 3.9. A new
    repository (not a fork) should have its Actions on from the start **(check in the trial install)**, so a failed first
@@ -393,34 +397,38 @@ not make a GitHub fork: **the copy is not linked to this repository, so updates 
 
 ## 5. Updating a copy
 
-An update is a merge to the production branch, and every such merge is a production deployment. The migrations run in
-that build by themselves ([ADR 0002](adr/0002-production-migrations-in-the-vercel-build.md)): there is nothing to run by
-hand.
+A copy updates by releases: update to each new release, in order. The latest release is the supported version, and every
+security fix is released as a PATCH version on the day it merges, so a PATCH can be a security fix: take it soon. An update
+is a merge to the production branch, and every such merge is a production deployment. The migrations run in that build by
+themselves ([ADR 0002](adr/0002-production-migrations-in-the-vercel-build.md)): there is nothing to run by hand.
 
-1. **Read the release notes first.** Releases are tags (`v2.1.0`) with notes: [releases.md](releases.md) explains the numbers.
-   A MAJOR version always has something you must do (a new variable, a Google or Vercel setting, a command), written in the
-   section "What installers must do". A MINOR or PATCH version asks nothing of you. Update when a release comes out, not
-   on every commit.
-2. **Bring the changes in.**
-   - **Path A:** on your repository's page choose **Sync fork**, then **Update branch**. This takes the tip of the upstream
-     `master`, which can be newer than the last release. With the rulesets of section 3.8 in place, a direct update of the
-     default branch may be refused, because they require a pull request **(check in the trial install)**. If so, make
-     the update a pull request yourself: in a clone, `git remote add upstream https://github.com/MatanBaruch1988/building-qr-system.git`
+1. **Hear about releases.** Watch this repository's releases on GitHub (Watch, Custom, Releases)
+   **(check in the trial install)**.
+2. **Read the notes of the release.** Releases are tags (`v2.1.0`) with notes: [releases.md](releases.md) explains the
+   numbers. A MAJOR version always has something you must do (a new variable, a Google or Vercel setting, a command),
+   written in the section "What installers must do". A MINOR or PATCH version asks nothing of you, but read its notes all
+   the same.
+3. **Bring the release in.** The release, not the newest commit of `master`, is what you update to.
+   - **Path A:** on your repository's page, **Sync fork** then **Update branch** brings the upstream `master`, which can
+     hold commits after the latest release. Use it only when the Releases page shows no commit since that release
+     **(check in the trial install)**. With the rulesets of section 3.8 in place, a direct update of the default branch
+     may also be refused, because they require a pull request **(check in the trial install)**. When either is the case,
+     make the update a pull request yourself: in a clone, `git remote add upstream https://github.com/MatanBaruch1988/building-qr-system.git`
      (if `git remote -v` does not list it already), `git fetch --all --tags`, `git switch -c update-<version>
-     origin/master`, `git merge <the tag, for example v2.1.0>`, `git push -u origin update-<version>`, and open a pull
-     request titled `chore: update to <version>`. The checks run, and you merge it. Keep your own changes small (section 3.8,
-     step 3): each file you changed is a possible conflict.
+     origin/master`, `git merge <the tag of the release, for example v2.1.0>`, `git push -u origin update-<version>`, and
+     open a pull request titled `chore: update to <version>`. The checks run, and you merge it. Keep your own changes
+     small (section 3.8, step 3): each file you changed is a possible conflict.
    - **Path B:** the same commands, with the remote added by hand. The history of a Deploy-button copy may not be related to
      this repository's: then `git merge` stops with "refusing to merge unrelated histories", and you need
      `--allow-unrelated-histories` and a careful read of every conflict **(check in the trial install)**.
-3. **Watch the deploy.** The build log has the `Deploy gate:` line, and then `Applied: ...` with the new migrations. If a
+4. **Watch the deploy.** The build log has the `Deploy gate:` line, and then `Applied: ...` with the new migrations. If a
    migration fails, the previous deployment keeps serving: [deploy-and-rollback.md](runbooks/deploy-and-rollback.md), "A failed
    migration". The smoke test then checks the live site.
-4. **Phones keep working.** An installed app updates only when the person next opens it, so old apps call the API for days or
+5. **Phones keep working.** An installed app updates only when the person next opens it, so old apps call the API for days or
    weeks. That is why every change is made in three steps in separate releases (expand, migrate, contract: `AGENTS.md`,
    "Database and API changes"), and old clients are accepted until a later release removes what they used. You need to do
    nothing for this.
-5. **Which version am I on?** Both apps show their build id (the first 7 characters of the commit) at the foot of the home
+6. **Which version am I on?** Both apps show their build id (the first 7 characters of the commit) at the foot of the home
    screen and of the Committee tab, and `/api/health` shows it as `commit`. `git fetch --tags` and
    `git tag --contains <build id> --sort=version:refname | head -1` name the first release that has it
    ([releases.md](releases.md)).
@@ -455,7 +463,7 @@ Names only. Never write a value into a file of the repository, an issue, a pull 
 | `APP_BASE_URL` | You | Vercel, Production |
 | `CRON_SECRET` | Your computer or password manager | Vercel, Production, Sensitive. Nowhere else |
 | `FIRST_ADMIN_EMAIL` | You | Vercel, Production, only until the first sign-in: remove it |
-| `MIGRATION_GITHUB_TOKEN` | GitHub, only for a private repository | Vercel, Production, Sensitive |
+| `MIGRATION_GITHUB_TOKEN` | GitHub, only if the repository is private (not supported) | Vercel, Production, Sensitive |
 | The Vercel project, its name and its address | Vercel | Vercel |
 | The environment `smoke`, with the variable `SMOKE_BASE_URL` | GitHub, `gh variable set` | GitHub, Settings, Environments |
 | The agent key "smoke test", and the secret `SMOKE_AGENT_KEY` | The committee app, `gh secret set` | The key: the committee app (it can be revoked there). The secret: GitHub Actions |
