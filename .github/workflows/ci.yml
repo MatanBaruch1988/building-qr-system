@@ -8,14 +8,16 @@
 # The Postgres service image is pinned to a digest for the same reason.
 name: CI
 
+# master and main are the usual names of a default branch (master here, often main in a copy), like git.deploymentEnabled
+# in vercel.json. A copy whose default branch has another name adds it to both lists below.
 on:
   pull_request:
-    branches: [master]
+    branches: [master, main]
     # The default types plus the ones that change what the guards read, so that fixing the title or adding the
     # allow-test-removal label re-runs the checks (a plain re-run would still see the old title and labels).
     types: [opened, synchronize, reopened, edited, labeled, unlabeled]
   push:
-    branches: [master]
+    branches: [master, main]
   workflow_dispatch:
 
 permissions:
@@ -48,11 +50,12 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
           BEFORE_SHA: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           case "$EVENT_NAME" in
             pull_request) base="origin/$BASE_REF" ;;
             push) base="$BEFORE_SHA" ;;
-            *) base="origin/master" ;;
+            *) base="origin/$DEFAULT_BRANCH" ;;
           esac
           if [ "$base" = "0000000000000000000000000000000000000000" ] || ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
             echo "No base commit to compare with ($base): skipping the migration and test guards."
