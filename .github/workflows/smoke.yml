@@ -10,6 +10,13 @@
 # promotion of a deployment can lag behind the event, so the script waits (up to 5 minutes) until the domain serves the
 # commit before it judges anything.
 #
+# The domain is the repository variable SMOKE_BASE_URL (Settings, Secrets and variables, Actions, Variables), set once
+# from the repository folder with
+#   gh variable set SMOKE_BASE_URL --body https://<your-domain>
+# It is not in this file, so that a copy of the repository tests its own site. It decides where the secret below is
+# sent, so only someone with write access to the repository can change it. Without it every run fails, and the issue
+# that it opens says to set it.
+#
 # Why `issues: write`, and where: only the jobs that open an issue have it (report-smoke and failed-deploy), and they check
 # out nothing and run no code of the repository: they only call the `gh` CLI that GitHub's runners have. The smoke job, which
 # runs the deployed commit's script, has a read-only token.
@@ -62,6 +69,7 @@ jobs:
       - name: Smoke test the production domain
         env:
           EXPECTED_SHA: ${{ github.event.deployment.sha }}
+          SMOKE_BASE_URL: ${{ vars.SMOKE_BASE_URL }}
           SMOKE_AGENT_KEY: ${{ secrets.SMOKE_AGENT_KEY }}
         run: node scripts/smoke-check.mjs
 
@@ -84,8 +92,22 @@ jobs:
           DEPLOYED_SHA: ${{ github.event.deployment.sha }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Only whether the variable is set, never its value.
+          ADDRESS_SET: ${{ vars.SMOKE_BASE_URL != '' }}
         run: |
           short="${DEPLOYED_SHA:0:7}"
+          if [ "$ADDRESS_SET" != "true" ]; then
+            cat > "$RUNNER_TEMP/issue.md" <<EOF
+          The smoke test after each production deployment did not run: the repository variable SMOKE_BASE_URL, the address of the production domain, is not set.
+
+          - Run: $RUN_URL
+          - Commit: $DEPLOYED_SHA
+
+          Set it from the repository folder with \`gh variable set SMOKE_BASE_URL --body https://<your-domain>\`, then re-run the failed jobs of the run above. This says nothing about the deployment itself. See [deploy-and-rollback.md]($REPO_URL/blob/$DEPLOYED_SHA/docs/runbooks/deploy-and-rollback.md). Close this issue by hand when a run passes.
+          EOF
+            gh issue create --title "Smoke test is not set up: SMOKE_BASE_URL is missing" --label bug --body-file "$RUNNER_TEMP/issue.md"
+            exit 0
+          fi
           cat > "$RUNNER_TEMP/issue.md" <<EOF
           The smoke test that runs after each production deployment failed.
 

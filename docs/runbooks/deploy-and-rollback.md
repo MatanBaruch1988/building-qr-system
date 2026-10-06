@@ -47,7 +47,9 @@ Production migration failed: This production build is of the branch <built>, but
 
 The deployment fails and the current one keeps serving. The usual cause is a project whose Vercel production branch is not
 the default branch of the repository: make them the same (change the Vercel setting, or the default branch on GitHub).
-If the default branch was renamed, the next production build uses the new name by itself: nothing in the repository holds it.
+If the default branch was renamed, the gate follows the new name by itself, but Vercel deploys it only when its name is in
+`git.deploymentEnabled` in `vercel.json` (`master` and `main` are there): a branch with another name must be added there,
+and made the production branch in the settings of the Vercel project, before its merges deploy (see the deploy steps above).
 
 If GitHub cannot say what the default branch is, the build is refused the same way and never guesses:
 
@@ -81,6 +83,12 @@ Nobody has to remember the check above: after Vercel promotes a production deplo
 event and `.github/workflows/smoke.yml` runs `scripts/smoke-check.mjs` against the production domain (never the unique URL
 of the deployment, which Vercel Deployment Protection can hide). It is not a merge check: it runs after the merge, so it
 cannot block one. If it finds something wrong it opens an issue.
+
+The domain is the repository variable `SMOKE_BASE_URL`, set once from the repository folder:
+`gh variable set SMOKE_BASE_URL --body https://<your-domain>` (the address that people open, with no path). It is not
+written in the repository, so that a copy tests its own site. Without it every run fails, and the issue is titled
+"Smoke test is not set up: SMOKE_BASE_URL is missing": set the variable, then re-run the failed jobs of that run. The
+variable decides where the agent key below is sent, so only someone with write access to the repository changes it.
 
 A production deployment that fails (the build, the gate or a migration) opens an issue too, titled "Production
 deployment failed for <commit>", with the link to its build log on Vercel: nothing is down then, but the merge is not in
@@ -121,7 +129,7 @@ something, or did not take effect. It links to the run. Read the `FAIL` line the
   set the secret again. The site itself may be fine.
 
 Nothing closes the issue by itself: close it when it is fixed. The script only reads, so it can also be run by hand from a
-checkout of the deployed commit: `EXPECTED_SHA=<the full commit> node scripts/smoke-check.mjs`. For the database step put
+checkout of the deployed commit: `EXPECTED_SHA=<the full commit> SMOKE_BASE_URL=https://<your-domain> node scripts/smoke-check.mjs`. For the database step put
 `SMOKE_AGENT_KEY` in the environment from a file or a prompt, never on the command line and never in a chat.
 
 ## A failed migration

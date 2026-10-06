@@ -7,7 +7,6 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   DB_ATTEMPTS,
-  DEFAULT_BASE_URL,
   newestMigration,
   parseBaseUrl,
   printable,
@@ -16,6 +15,7 @@ import {
 } from '../scripts/smoke-check.mjs'
 
 const SHA = '0123456789abcdef0123456789abcdef01234567'
+const BASE = 'https://smoke.example.test' // what the repository variable SMOKE_BASE_URL holds in the workflow
 const SHORT = SHA.slice(0, 7)
 const OTHER = 'fedcba9'
 const KEY = 'qrk_TEST_0123456789_abcdefghijklmnopq' // 37 characters
@@ -46,7 +46,7 @@ async function run({ health, home = () => page(), db, env = {}, migrationsDir } 
     return handler(counts[name])
   }
   const result = await runSmoke({
-    env: { EXPECTED_SHA: SHA, ...env },
+    env: { EXPECTED_SHA: SHA, SMOKE_BASE_URL: BASE, ...env },
     fetch: stub,
     sleep: async (ms) => {
       sleeps.push(ms)
@@ -71,14 +71,14 @@ describe('a deployment that is fine', () => {
     expect(r.counts).toEqual({ health: 1, home: 1, db: 1 })
     expect(r.sleeps).toEqual([])
     expect(r.lines.filter((line) => /^ok {2} \d\/3 /.test(line))).toHaveLength(3)
-    expect(r.lines.at(-1)).toBe(`Smoke test passed for ${SHORT} on ${DEFAULT_BASE_URL}`)
+    expect(r.lines.at(-1)).toBe(`Smoke test passed for ${SHORT} on ${BASE}`)
     expect(r.output).toContain(`production serves ${SHORT}`)
     expect(r.output).toContain(`newest migration is ${LATEST}`)
   })
 
-  it('tests the production domain by default and the address of SMOKE_BASE_URL otherwise', async () => {
+  it('tests the origin of the address in SMOKE_BASE_URL, and only that one', async () => {
     const first = await run({ health: healthy })
-    expect(new Set(first.calls.map((c) => c.url.origin))).toEqual(new Set([DEFAULT_BASE_URL]))
+    expect(new Set(first.calls.map((c) => c.url.origin))).toEqual(new Set([BASE]))
     const other = await run({ health: healthy, env: { SMOKE_BASE_URL: 'https://example.test/some/path?x=1' } })
     expect(new Set(other.calls.map((c) => c.url.origin))).toEqual(new Set(['https://example.test']))
   })
@@ -137,7 +137,7 @@ describe('step 1: the domain must serve the new commit', () => {
     expect(r.counts.home).toBe(0)
     expect(r.counts.db).toBe(0)
     expect(r.output).toContain('skip 2/3 and 3/3')
-    expect(r.lines.at(-2)).toBe(`Smoke test FAILED for ${SHORT} on ${DEFAULT_BASE_URL}: 1 problem`)
+    expect(r.lines.at(-2)).toBe(`Smoke test FAILED for ${SHORT} on ${BASE}: 1 problem`)
   })
 
   it('says so when the last answer was no commit at all (a deployment from before the health route had one)', async () => {
@@ -327,7 +327,7 @@ describe('no key', () => {
       expect(r.counts.db).toBe(0)
       expect(r.output).toContain('warn 3/3')
       expect(r.output).toContain('gh secret set SMOKE_AGENT_KEY')
-      expect(r.lines.at(-1)).toBe(`Smoke test passed for ${SHORT} on ${DEFAULT_BASE_URL} (1 warning)`)
+      expect(r.lines.at(-1)).toBe(`Smoke test passed for ${SHORT} on ${BASE} (1 warning)`)
     }
   })
 
@@ -390,6 +390,8 @@ describe('a bad setup fails before any request', () => {
     ['no SHA', { EXPECTED_SHA: '' }, /EXPECTED_SHA is not set/],
     ['a short SHA', { EXPECTED_SHA: SHORT }, /not a full 40-character SHA/],
     ['a SHA with a letter that is not hex', { EXPECTED_SHA: `${SHA.slice(0, 39)}g` }, /not a full 40-character SHA/],
+    ['no base URL (the repository variable is not set)', { SMOKE_BASE_URL: '' }, /SMOKE_BASE_URL is not set/],
+    ['a base URL of white space only', { SMOKE_BASE_URL: '  \n' }, /SMOKE_BASE_URL is not set/],
     ['a base URL that is not an address', { SMOKE_BASE_URL: 'not a url' }, /not a web address/],
     ['a plain http base URL (the key would travel in the clear)', { SMOKE_BASE_URL: 'http://example.test' }, /must be an https address/],
     ['a key with a space inside', { SMOKE_AGENT_KEY: 'qrk_a b' }, /cannot be sent in a header/],
@@ -412,8 +414,8 @@ describe('a bad setup fails before any request', () => {
   })
 
   it('reads the defaults', () => {
-    const config = readConfig({ EXPECTED_SHA: SHA })
-    expect(config).toMatchObject({ baseUrl: DEFAULT_BASE_URL, sha: SHA, key: null, timeoutMs: 300_000, intervalMs: 10_000 })
+    const config = readConfig({ EXPECTED_SHA: SHA, SMOKE_BASE_URL: BASE })
+    expect(config).toMatchObject({ baseUrl: BASE, sha: SHA, key: null, timeoutMs: 300_000, intervalMs: 10_000 })
   })
 
   it('allows http for a copy on this machine, and drops the path and the user name of an address', () => {

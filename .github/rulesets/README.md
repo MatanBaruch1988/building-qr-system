@@ -1,8 +1,11 @@
-# Branch rulesets for master
+# Branch rulesets for the default branch
+
+Both rulesets apply to the repository's default branch (`~DEFAULT_BRANCH`: `master` here, often `main` in a copy), so a
+copy needs no edit to them. The file names keep `master` from this repository.
 
 `master-gates.json` protects the default branch for everybody, with no bypass: it cannot be deleted or force-pushed,
 every change arrives through a pull request that is squash-merged (no approval is needed, so you can merge your own),
-and the branch must be up to date with master with all four CI checks green: `guards`, `unit`, `e2e (android-chrome)`
+and the branch must be up to date with the default branch with all four CI checks green: `guards`, `unit`, `e2e (android-chrome)`
 and `e2e (iphone-webkit)` (the job names in `.github/workflows/ci.yml`). Each check is bound to GitHub Actions
 (`integration_id` 15368 is the GitHub Actions app), so nothing else can report a status under the same name.
 
@@ -18,8 +21,8 @@ it needs the approval like anybody else. The two rulesets add up, so the checks 
 The agent loop (`.github/workflows/claude.yml`, ADR 0006) works through the Claude GitHub App: it pushes branches
 named `claude/...` and comments, and the owner opens the pull request from the link in its comment. The app is not
 an admin and is not in `bypass_actors`, so a pull request of the agent needs the owner's approval like anybody else's,
-and the owner merges. The rulesets protect `master` only, so the app can push its own `claude/` branches, but never
-`master` itself.
+and the owner merges. The rulesets protect the default branch only, so the app can push its own `claude/` branches, but
+never the default branch itself.
 
 A pull request can change its own workflow and guard scripts, and the checks that run on it are the changed ones. So a
 change under `.github/` or to `scripts/check-*` needs the owner's careful look: green checks are not proof that the
@@ -27,12 +30,13 @@ checks themselves were not weakened.
 
 Both files are the exact request body of GitHub's "Create a repository ruleset" API; a ruleset is only enforced once it
 has been created that way (or in the repository settings). Apply each one once, from the repository root, and only after
-the four checks have run green once (a required check that has never run blocks every pull request):
+the four checks have run green once (a required check that has never run blocks every pull request). `gh` fills in
+`{owner}` and `{repo}` from the repository of the current folder:
 
 ```
-gh api --method POST repos/MatanBaruch1988/building-qr-system/rulesets --input .github/rulesets/master-gates.json
-gh api --method POST repos/MatanBaruch1988/building-qr-system/rulesets --input .github/rulesets/master-approval.json
+gh api --method POST repos/{owner}/{repo}/rulesets --input .github/rulesets/master-gates.json
+gh api --method POST repos/{owner}/{repo}/rulesets --input .github/rulesets/master-approval.json
 ```
 
-To change one later, send the edited file with `gh api --method PUT repos/MatanBaruch1988/building-qr-system/rulesets/<id> --input <file>`
-(the ids are listed by `gh api repos/MatanBaruch1988/building-qr-system/rulesets`).
+To change one later, send the edited file with `gh api --method PUT repos/{owner}/{repo}/rulesets/<id> --input <file>`
+(the ids are listed by `gh api repos/{owner}/{repo}/rulesets`).
