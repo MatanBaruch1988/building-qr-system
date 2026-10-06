@@ -10,8 +10,9 @@ your own GitHub, Vercel and Neon accounts, with Google sign-in for the committee
 > the trial, except where a step is marked **(check in the trial install)**. The trial did not reach these, so they are
 > still marked: `CRON_SECRET` and the Cron Jobs check (section 3.5), the `SMOKE_AGENT_KEY` secret, private vulnerability
 > reporting and Dependabot (section 3.8), all of section 3.9, the Google consent screen of a new Google Cloud project
-> (section 3.4: the trial used an existing project), the Neon integration route (section 3.2), Sync fork and watching
-> releases (section 5), and path B (section 4). Delete this note when they are done.
+> (section 3.4: the trial used an existing project), the Neon integration route (section 3.2), watching releases, a
+> second update after the first one, and conflicts in an update (section 5), and path B (section 4). Delete this note
+> when they are done.
 
 Contents: [1. What you get, and the limits](#1-what-you-get-and-the-limits) |
 [2. Before you start](#2-before-you-start) | [3. Path A: fork, then import into Vercel](#3-path-a-fork-then-import-into-vercel) |
@@ -101,8 +102,8 @@ which use the GitHub CLI.
 
 ## 3. Path A: fork, then import into Vercel
 
-This is the main path. A fork stays linked to this repository, so "Sync fork" brings its updates (section 5), and your
-changes can go back as pull requests.
+This is the main path. A fork shares this repository's history, so a release can be brought into your copy as a pull
+request (section 5), and your changes can go back as pull requests.
 
 ### 3.1 The fork
 
@@ -494,18 +495,52 @@ themselves ([ADR 0002](adr/0002-production-migrations-in-the-vercel-build.md)): 
    written in the section "What installers must do". A MINOR or PATCH version asks nothing of you, but read its notes all
    the same.
 3. **Bring the release in.** The release, not the newest commit of `master`, is what you update to.
-   - **Path A:** on your repository's page, **Sync fork** then **Update branch** brings the upstream `master`, which can
-     hold commits after the latest release. Use it only when the Releases page shows no commit since that release
-     **(check in the trial install)**. With the rulesets of section 3.8 in place, a direct update of the default branch
-     may also be refused, because they require a pull request **(check in the trial install)**. When either is the case,
-     make the update a pull request yourself: in a clone, `git remote add upstream https://github.com/MatanBaruch1988/building-qr-system.git`
+   - **Path A (a fork): a pull request from a branch of your own copy.** `<version>` below is the number without the "v",
+     for example `2.1.0`. You need no clone.
+
+     1. Make a branch in your copy at the commit of the release's tag. A fork shares this repository's objects, so the
+        commit is already there:
+
+        ```bash
+        gh api repos/MatanBaruch1988/building-qr-system/commits/v<version> --jq .sha
+        gh api -X POST repos/<owner>/<repo>/git/refs -f ref=refs/heads/update-<version> -f sha=<the commit that the first command printed>
+        ```
+     2. Open a pull request from `update-<version>` into `master`, titled `chore: update to v<version>`: on GitHub
+        (Pull requests, New pull request), or
+        `gh pr create --repo <owner>/<repo> --base master --head update-<version> --title "chore: update to v<version>" --body "Update to v<version>."`.
+        GitHub says that the branch is behind `master`: that is expected, because the branch has none of your own commits.
+     3. Choose **Update branch** on the pull request (or `gh pr update-branch <number> --repo <owner>/<repo>`). It
+        merges your copy's own commits (the `CODEOWNERS` and `SECURITY.md` edits of section 3.8, step 3, and any others)
+        into the branch, so that the branch is the release plus your changes. If GitHub reports a conflict, a file that
+        you changed is also a file that the release changed: resolve it in a clone of your repository (`git fetch origin`,
+        `git switch update-<version>`, `git merge origin/master`, fix the files, `git push`) **(check in the trial
+        install)**. Keep your own changes small (section 3.8, step 3) so that this is rare.
+     4. Wait for the four checks (about 5 minutes in the trial).
+     5. **Squash merge** the pull request. When `master-approval` is on and you are the only maintainer, the merge needs
+        the checkbox "Merge without waiting for requirements to be met" (the administrator's bypass of section 3.8,
+        step 5).
+     6. Vercel deploys the merge (step 4), and `https://<your-domain>/api/health` shows the new commit.
+
+     Afterwards GitHub shows your copy as "N ahead, N behind" this repository, although the content matches. That is
+     expected: a squash merge makes a new commit and breaks the shared history. Leave it, and do not "fix" it. The next
+     update goes the same way **(check in the trial install)**: the trial did only one update, so a second update after a
+     squash is not checked.
+
+     **Do not use "Sync fork" on your repository's page.** With the rulesets of section 3.8 on, it is refused: in the
+     trial the page said "1 commit ahead of, 1 commit behind", "Update branch" did nothing visible, and the API answered
+     "Repository rule violations found" (HTTP 422). **Never press "Discard N commits"** there: it deletes your copy's own
+     commits. Do not open the pull request the other way round either, with this repository's `master` as its head
+     (Pull requests, New, compare across forks): once your copy has commits of its own, that pull request can never merge.
+     It stays behind `master` (the rulesets want the head up to date with `master`, and you cannot update the other
+     repository's branch), and it gets a failing "Vercel" check, which is not a required one.
+   - **Path B (not a fork):** the route above does not work, because a Deploy-button copy does not share this repository's
+     objects. Use a clone: `git remote add upstream https://github.com/MatanBaruch1988/building-qr-system.git`
      (if `git remote -v` does not list it already), `git fetch --all --tags`, `git switch -c update-<version>
      origin/master`, `git merge <the tag of the release, for example v2.1.0>`, `git push -u origin update-<version>`, and
-     open a pull request titled `chore: update to <version>`. The checks run, and you merge it. Keep your own changes
-     small (section 3.8, step 3): each file you changed is a possible conflict.
-   - **Path B:** the same commands, with the remote added by hand. The history of a Deploy-button copy may not be related to
-     this repository's: then `git merge` stops with "refusing to merge unrelated histories", and you need
-     `--allow-unrelated-histories` and a careful read of every conflict **(check in the trial install)**.
+     open a pull request titled `chore: update to v<version>`. The checks run, and you merge it. The history of a
+     Deploy-button copy may not be related to this repository's: then `git merge` stops with "refusing to merge unrelated
+     histories", and you need `--allow-unrelated-histories` and a careful read of every conflict
+     **(check in the trial install)**.
 4. **Watch the deploy.** The build log has the `Deploy gate:` line, and then `Applied: ...` with the new migrations. If a
    migration fails, the previous deployment keeps serving: [deploy-and-rollback.md](runbooks/deploy-and-rollback.md), "A failed
    migration". The smoke test then checks the live site.
@@ -514,9 +549,12 @@ themselves ([ADR 0002](adr/0002-production-migrations-in-the-vercel-build.md)): 
    "Database and API changes"), and old clients are accepted until a later release removes what they used. You need to do
    nothing for this.
 6. **Which version am I on?** Both apps show their build id (the first 7 characters of the commit) at the foot of the home
-   screen and of the Committee tab, and `/api/health` shows it as `commit`. `git fetch --tags` and
+   screen and of the Committee tab, and `/api/health` shows it as `commit`. On this repository, `git fetch --tags` and
    `git tag --contains <build id> --sort=version:refname | head -1` name the first release that has it
-   ([releases.md](releases.md)).
+   ([releases.md](releases.md)). In your copy that does not work: the build id is a commit of your own repository, it has
+   commits of its own (section 3.8, step 3), and every update is a squash merge, so no release of this repository
+   contains that commit. Read the version from the title of the last merged update pull request instead,
+   `chore: update to v<version>` (`gh pr list --repo <owner>/<repo> --state merged --search "chore: update to"`).
 
 ## 6. When something breaks
 
