@@ -7,6 +7,7 @@ import { ADDRESS_MAX_LENGTH, BUILDING_NAME_MAX_LENGTH, NAME_MAX_LENGTH } from '.
 import { useBuildingName } from '../buildingName.jsx'
 import BuildLabel from '../../ui/BuildLabel.jsx'
 import AuditView from './AuditView.jsx'
+import HelpSection from './HelpSection.jsx'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -246,6 +247,8 @@ export default function CommitteeView({ admin }) {
       </div>
 
       <BuildingCard />
+
+      <HelpSection />
 
       {/* Which build this computer or phone runs. The one place that both layouts reach (the tab bar and the side rail). */}
       <BuildLabel label="גרסה" className="a-build" />

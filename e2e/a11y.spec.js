@@ -415,6 +415,22 @@ async function openAuditLog(page) {
   await expect(log.getByRole('listitem').filter({ hasText: 'הוספת חבר ועד' }).first()).toBeVisible() // the members that the sample data added
 }
 
+/**
+ * Opens the help, the section of the Committee tab above the audit log, and waits until its topics are drawn. It is scanned on its
+ * own and closed again (`closeHelp`), so that the scan of the audit log below it is of the audit log and not of both.
+ */
+async function openHelp(page) {
+  await page.getByRole('button', { name: 'איך עובדים עם המערכת', exact: true }).click()
+  const help = page.getByRole('region', { name: 'איך עובדים עם המערכת' })
+  await expect(help.getByRole('heading', { level: 3, name: 'נקודות ושלטי QR' })).toBeVisible()
+  await expect(help.getByRole('heading', { level: 3, name: 'כשטלפון תקוע' })).toBeVisible()
+}
+async function closeHelp(page) {
+  const opener = page.getByRole('button', { name: 'איך עובדים עם המערכת', exact: true })
+  await opener.click()
+  await expect(opener).toHaveAttribute('aria-expanded', 'false')
+}
+
 /** Filters the open log to the agent keys, and waits until the list has changed. */
 async function filterAuditLog(page) {
   const log = page.getByRole('region', { name: 'יומן פעולות' })
@@ -470,6 +486,10 @@ test.describe('committee app with the sample data filled in', () => {
     await scanBothThemes(page, 'committee phone: committee, the name refused')
     await page.getByLabel('שם הבניין', { exact: true }).fill(BUILDING_NAME)
     await expect(page.getByRole('alert').filter({ hasText: 'השם מכיל תווים שאי אפשר לשמור' })).toHaveCount(0)
+    // the help: a section of this tab that its button opens, above the audit log (text only)
+    await openHelp(page)
+    await scanBothThemes(page, 'committee phone: help')
+    await closeHelp(page)
     // the audit log: a section at the foot of this tab that its button opens (the sample data above wrote its entries)
     await openAuditLog(page)
     await scanBothThemes(page, 'committee phone: audit log')
@@ -512,6 +532,9 @@ test.describe('committee app with the sample data filled in', () => {
     await expect(page.getByText('מהתור בטלפון').first()).toBeVisible()
     await scanBothThemes(page, 'committee computer: history, visits not counted')
     await openTab(page, 'committee', 'חברי הוועד')
+    await openHelp(page)
+    await scanBothThemes(page, 'committee computer: help')
+    await closeHelp(page)
     await openAuditLog(page)
     await scanBothThemes(page, 'committee computer: audit log')
   })

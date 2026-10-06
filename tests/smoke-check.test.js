@@ -15,7 +15,7 @@ import {
 } from '../scripts/smoke-check.mjs'
 
 const SHA = '0123456789abcdef0123456789abcdef01234567'
-const BASE = 'https://smoke.example.test' // what the repository variable SMOKE_BASE_URL holds in the workflow
+const BASE = 'https://smoke.example.test' // what the variable SMOKE_BASE_URL of the environment smoke holds in the workflow
 const SHORT = SHA.slice(0, 7)
 const OTHER = 'fedcba9'
 const KEY = 'qrk_TEST_0123456789_abcdefghijklmnopq' // 37 characters
@@ -390,7 +390,7 @@ describe('a bad setup fails before any request', () => {
     ['no SHA', { EXPECTED_SHA: '' }, /EXPECTED_SHA is not set/],
     ['a short SHA', { EXPECTED_SHA: SHORT }, /not a full 40-character SHA/],
     ['a SHA with a letter that is not hex', { EXPECTED_SHA: `${SHA.slice(0, 39)}g` }, /not a full 40-character SHA/],
-    ['no base URL (the repository variable is not set)', { SMOKE_BASE_URL: '' }, /SMOKE_BASE_URL is not set/],
+    ['no base URL (the variable of the environment is not set)', { SMOKE_BASE_URL: '' }, /SMOKE_BASE_URL is not set/],
     ['a base URL of white space only', { SMOKE_BASE_URL: '  \n' }, /SMOKE_BASE_URL is not set/],
     ['a base URL that is not an address', { SMOKE_BASE_URL: 'not a url' }, /not a web address/],
     ['a plain http base URL (the key would travel in the clear)', { SMOKE_BASE_URL: 'http://example.test' }, /must be an https address/],
