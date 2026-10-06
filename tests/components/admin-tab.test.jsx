@@ -17,13 +17,14 @@ vi.mock('../../src/api/client.js', () => ({ api: vi.fn() }))
 const ADMIN = { id: '00000000-0000-4000-8000-0000000000a1', name: 'Sample Member', email: 'member@example.test' }
 const TITLE_SUFFIX = ' · נוכחות בבניין'
 
-// Each tab: its key in the address, the label on its button, and the heading that its screen draws.
+// Each tab: its key in the address, its name as a page (the first part of the title of the document), the short name on its button
+// (`nav`, in both navigations), and the heading that its screen draws.
 const TABS = [
-  { key: 'points', label: 'נקודות', heading: 'נקודות סריקה' },
-  { key: 'providers', label: 'נותני שירות', heading: 'נותני שירות' },
-  { key: 'history', label: 'היסטוריה', heading: 'היסטוריית נוכחות' },
-  { key: 'agent', label: 'אייג׳נט', heading: "גישה לאייג'נט" },
-  { key: 'committee', label: 'ועד', heading: 'חברי הוועד' },
+  { key: 'points', label: 'נקודות', nav: 'נקודות', heading: 'נקודות סריקה' },
+  { key: 'providers', label: 'נותני שירות', nav: 'ספקים', heading: 'נותני שירות' },
+  { key: 'history', label: 'היסטוריה', nav: 'היסטוריה', heading: 'היסטוריית נוכחות' },
+  { key: 'agent', label: 'אייג׳נט', nav: 'אייג׳נט', heading: "גישה לאייג'נט" },
+  { key: 'committee', label: 'ועד', nav: 'ועד', heading: 'חברי הוועד' },
 ]
 const byKey = Object.fromEntries(TABS.map((t) => [t.key, t]))
 
@@ -55,7 +56,7 @@ const heading = (tab) => screen.findByRole('heading', { level: 1, name: byKey[ta
 // The page that is shown now, by the headings of the five screens. At most one of them is there.
 const shown = () => TABS.filter((t) => screen.queryByRole('heading', { level: 1, name: t.heading })).map((t) => t.key)
 // Both navigations are in the page (the side rail and the tab bar of the phone: CSS hides one), so a button is found twice.
-const buttons = (tab) => screen.getAllByRole('button', { name: byKey[tab].label })
+const buttons = (tab) => screen.getAllByRole('button', { name: byKey[tab].nav })
 const current = (tab) => buttons(tab).map((b) => b.getAttribute('aria-current'))
 
 /** A person (or a test) opens another address of the same page: the address changes, and the browser says so. */
