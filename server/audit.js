@@ -27,7 +27,8 @@
 // there, and a field that holds a secret is never a key (changesOf refuses it): a password is `password_changed: true`.
 //
 //   action                    entity    entity_id   detail
-//   admin.add                 admin     member      { email }                                    a new member
+//   admin.add                 admin     member      { email }                                    a new member; the first one of a deployment can also be
+//                                                                                                  added by the `system` actor (FIRST_ADMIN_EMAIL, below)
 //   admin.enable              admin     member      { email, changes: { is_active } }            POST of the e-mail of a switched-off member
 //                                                   { changes: { is_active } }                   PATCH is_active: true
 //   admin.disable             admin     member      { changes: { is_active } }                   is_active goes from true to false
@@ -67,14 +68,19 @@
 // A member that the owner's command adds (`npm run db:create-admin`, scripts/create-admin.mjs) is written as `admin.add` or
 // `admin.enable`, with the same detail as the committee's own routes above and the `script` actor (no id, no name: the
 // command runs on the owner's machine and knows no signed-in member). A member who is on the list already writes no entry.
+//
+// The first member of a deployment can also be added by the first Google sign-in, when the deployer set FIRST_ADMIN_EMAIL
+// (server/firstAdmin.js): `admin.add` with the same detail (`{ email }`) and the `system` actor (no id, no name: nobody is signed in
+// yet), written in the transaction of that sign-in, just before the `session.sign_in` of the same member. It happens only while
+// `admins` has no row at all, so that member is the first one of the deployment's committee list.
 import pg from 'pg'
 import { AUDIT_ACTOR_NAME_MAX_LENGTH } from './config.js'
 
 /**
- * Who did it. `type` is `admin` (a committee member, built by adminActor), `system` (the daily retention job) or `script` (a
- * command run on the owner's machine). `id` is a plain text reference with no foreign key (the row must outlive the member),
- * and `name` is the snapshot of the person's name at the time, or null when there is none (the system actor is named by its
- * type).
+ * Who did it. `type` is `admin` (a committee member, built by adminActor), `system` (the daily retention job, and the first
+ * member that FIRST_ADMIN_EMAIL adds) or `script` (a command run on the owner's machine). `id` is a plain text reference with no
+ * foreign key (the row must outlive the member), and `name` is the snapshot of the person's name at the time, or null when there
+ * is none (the system actor is named by its type).
  * @typedef {object} AuditActor
  * @property {'admin' | 'system' | 'script'} type
  * @property {string | null} id
