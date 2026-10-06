@@ -1,6 +1,7 @@
 // Smoke test of a production deployment (see .github/workflows/smoke.yml, which runs it after every production deploy).
 //
-// Usage: EXPECTED_SHA=<the full SHA of the deployed commit> [SMOKE_AGENT_KEY=<read-only agent key>] node scripts/smoke-check.mjs
+// Usage: EXPECTED_SHA=<the full SHA of the deployed commit> SMOKE_BASE_URL=https://<your-domain>
+//        [SMOKE_AGENT_KEY=<read-only agent key>] node scripts/smoke-check.mjs
 //
 // Why this exists: a green build does not prove that the live site works. The build can pass while the domain still
 // serves the old deployment, while the app page is empty, or while the database is one migration behind the code (the
@@ -12,8 +13,10 @@
 //      db/migrations of the checked-out commit. Without a key this step is a warning, not a failure.
 // Steps 2 and 3 only run when step 1 passed, because otherwise they would test a different deployment.
 //
-// The environment: EXPECTED_SHA (required), SMOKE_BASE_URL (default: the production domain), SMOKE_AGENT_KEY (optional),
-// and for a quick local try SMOKE_TIMEOUT_MS and SMOKE_INTERVAL_MS (how long and how often step 1 polls).
+// The environment: EXPECTED_SHA and SMOKE_BASE_URL (both required; the address is the production domain of this copy, the
+// repository variable of the same name in the workflow), SMOKE_AGENT_KEY (optional), and for a quick local try
+// SMOKE_TIMEOUT_MS and SMOKE_INTERVAL_MS (how long and how often step 1 polls). There is no default address: a copy of
+// the repository would otherwise test the first installation's site.
 //
 // The key goes only into the Authorization header of one request, never into a log line, and the request does not follow
 // a redirect. Nothing the server answers is printed except the known fields of the two health routes, cleaned so that a
@@ -21,7 +24,6 @@
 import { migrationFiles, DEFAULT_DIR } from '../server/migrate.js'
 import { isMain } from './ci-git.mjs'
 
-export const DEFAULT_BASE_URL = 'https://building-qr-system.vercel.app'
 export const DEFAULT_TIMEOUT_MS = 5 * 60_000
 export const DEFAULT_INTERVAL_MS = 10_000
 // The database step asks up to this many times, this far apart, when the answer is a 5xx or no answer: a sleeping Neon
@@ -72,12 +74,18 @@ export function readConfig(env) {
   const sha = String(env.EXPECTED_SHA ?? '').trim().toLowerCase()
   if (!sha) throw new Error('EXPECTED_SHA is not set: it is the full 40-character SHA of the deployed commit')
   if (!FULL_SHA.test(sha)) throw new Error('EXPECTED_SHA is not a full 40-character SHA')
+  const base = String(env.SMOKE_BASE_URL ?? '').trim()
+  if (!base) {
+    throw new Error(
+      'SMOKE_BASE_URL is not set: it is the production domain, the repository variable of the same name (gh variable set SMOKE_BASE_URL --body https://<your-domain>)',
+    )
+  }
   const key = String(env.SMOKE_AGENT_KEY ?? '').trim() || null
   if (key && !/^[\x21-\x7e]+$/.test(key)) {
     throw new Error('SMOKE_AGENT_KEY holds a space or another character that cannot be sent in a header (a bad paste?)')
   }
   return {
-    baseUrl: parseBaseUrl(String(env.SMOKE_BASE_URL ?? '').trim() || DEFAULT_BASE_URL),
+    baseUrl: parseBaseUrl(base),
     sha,
     key,
     timeoutMs: wholeNumber('SMOKE_TIMEOUT_MS', env.SMOKE_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
