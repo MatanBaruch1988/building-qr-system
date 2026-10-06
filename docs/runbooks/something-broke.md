@@ -5,7 +5,9 @@ A short page for the owner, no programming needed. The details are in [incident.
 
 An issue on GitHub titled "Smoke test failed after deploying ..." means that a deploy broke something: follow the steps below.
 So does an alert from UptimeRobot (the site did not answer), and so does an e-mail from healthchecks.io about the check
-"building-qr server" (the server had an error: its text says which, so keep it for step 3).
+"building-qr server" (the server had an error: its text says which, so keep it for step 3). The first installation uses
+those two services and that check name. A copy uses them under its own names, or not at all (both are optional): see
+[incident.md](incident.md).
 
 1. **Check that the site is alive.** Open `https://<your-domain>/api/health` in a browser. If it shows `"ok":true`, the
    server is running. (The database check, `/api/health/db`, needs an agent key, so ask the agent to run it.) If the page
@@ -16,11 +18,12 @@ So does an alert from UptimeRobot (the site did not answer), and so does an e-ma
    what is needed.
 3. **Read what the app wrote down.** Vercel keeps its own log for only about an hour, so look here first, in this order, and
    copy what you find into your message to the agent:
-   1. **healthchecks.io.** Open the check "building-qr server" and read its list of events, newest first. "First server error
-      today" is the first error of that day (it names the route and the error's code). "Daily summary FAIL" is the morning
-      report of the last 24 hours, about 06:00 to 08:00, and its "Why:" line says why it failed. "Daily summary OK" means the
-      last 24 hours were fine. healthchecks.io e-mails you when a problem starts, but not again on the days after, so read
-      the list and not only the e-mails.
+   1. **healthchecks.io.** Open the check "building-qr server" (the first installation's name; a copy without
+      `HEALTH_HEARTBEAT_URL` has no such check, so go on to the next one) and read its list of events, newest first. "First
+      server error today" is the first error of that day (it names the route and the error's code). "Daily summary FAIL" is
+      the morning report of the last 24 hours, about 06:00 to 08:00, and its "Why:" line says why it failed. "Daily summary
+      OK" means the last 24 hours were fine. healthchecks.io e-mails you when a problem starts, but not again on the days
+      after, so read the list and not only the e-mails.
    2. **The committee app.** The ("נותני שירות") tab, then the button ("מכשירים") on the provider's card: which phone has
       visits waiting for a long time, runs an old version, or does not report. The ("היסטוריה") tab, then ("סוג") and
       ("לא נקלטו"): visits that the server refused. The ("ועד") tab, then ("יומן פעולות") at the bottom: who changed what,
@@ -38,4 +41,4 @@ So does an alert from UptimeRobot (the site did not answer), and so does an e-ma
 If it looks like data was deleted or damaged: stop and tell the agent at once. Neon keeps only **6 hours** of history to
 restore from, so time matters. See [restore.md](restore.md).
 
-Never run `vercel --prod`. A deploy happens only by merging to `master`.
+Never run `vercel --prod`. A deploy happens only by merging to the production branch (`master` here, often `main` in a copy).

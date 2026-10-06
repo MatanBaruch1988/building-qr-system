@@ -5,14 +5,19 @@ report is taken seriously. Thank you for taking the time to send one.
 
 ## Supported versions
 
-Only the latest commit of `master` is supported. The hosted instance is deployed from `master`. If you host a copy
-yourself, keep it on `master`: fixes land there first and nowhere else.
+Only the latest commit of `master` is supported. The hosted instance (the first installation, run by the owner of this
+repository) is deployed from `master`. If you host a copy yourself, keep it on `master`: fixes land there first and
+nowhere else.
 
 ## How to report a vulnerability
 
 Report it privately, through GitHub's private vulnerability reporting (it is enabled for this repository):
 
 https://github.com/MatanBaruch1988/building-qr-system/security/advisories/new
+
+That is the reporting route of this repository and of the first installation. A copy of the project has its own maintainer,
+who replaces this address with the one of the copy's repository (`https://github.com/<owner>/<repo>/security/advisories/new`)
+and says who answers there.
 
 Never report a vulnerability in a public issue, a pull request or a discussion, and do not share the details anywhere
 else before it is fixed. Please write in English.

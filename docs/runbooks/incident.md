@@ -1,5 +1,16 @@
 # Incident checklist
 
+## Reading these runbooks in a copy
+
+These runbooks were written for the first installation (the owner's own building), and every installation uses them. Plain
+text is for every installation, with a placeholder where a copy has its own value (`https://<your-domain>`, `<owner>/<repo>`;
+where the first installation's real value helps as an example, it is given once in parentheses). A note that begins "The first
+installation" describes a service, a setup or a dated record that only the first installation has (its healthchecks.io checks,
+its UptimeRobot monitor, the dated lines of its logs) and says in one clause what a copy does instead: the same service under
+its own names, an optional one, or none.
+
+## The checklist
+
 Use it when something is broken in production. Go in order, and write down the time of each step. The owner has a shorter
 page: [something-broke.md](something-broke.md).
 
@@ -14,8 +25,9 @@ Two entry points:
   `production does not serve <commit>` and `GET /` point to steps 2 and 4, and the two database lines (`the database is at
   ...` and `the database check failed`) to steps 3 to 6. Each line is explained in
   [deploy-and-rollback.md](deploy-and-rollback.md), "The smoke test after a deploy". Then go on from step 2 below.
-- An alert from healthchecks.io on the check "building-qr server": open its event list and read the text of the newest ping
-  (step 5, part a). The text says what happened. Then go on from step 5.
+- An alert from healthchecks.io on the server's own check (the first installation's is named "building-qr server"; a copy
+  has this check only if it set `HEALTH_HEARTBEAT_URL`, see `secrets.md`): open its event list and read the text of the
+  newest ping (step 5, part a). The text says what happened. Then go on from step 5.
 
 1. **What is broken?** Who sees it (providers, the committee, the agent), on which screen, since when. Is it everyone or one
    phone? A phone that shows old behaviour may simply run an old installed version of the app.
@@ -48,11 +60,13 @@ What the app records about an error (parts a, c and d) never holds a message, a 
 (`AGENTS.md`, Safety). It holds the route as it is written in the code (for example `/admin/points/:id`), the error's code
 or name, counts and times. Part b is the committee app itself, so it shows the names that the committee already sees.
 
-### a. healthchecks.io: the event list of the check "building-qr server"
+### a. healthchecks.io: the event list of the server's own check
 
-healthchecks.io has two checks of ours. The daily backup (`restore.md`) says only whether the owner's computer made its dump.
-**"building-qr server"** is the server's own check. Open it and read its list of events, newest first: each ping has its time
-and a short text. Read down to the last time the check was green. Its period is 1 day and its grace 3 hours (set on
+The first installation uses healthchecks.io for two checks. A copy that uses the same service gives its checks its own names;
+a copy that leaves `HEALTH_HEARTBEAT_URL` out has no server check and no list to read here, and the other parts still apply.
+The daily backup (`restore.md`) says only whether the owner's computer made its dump. **"building-qr server"** (the first
+installation's name for it) is the server's own check. Open it and read its list of events, newest first: each ping has its
+time and a short text. Read down to the last time the check was green. Its period is 1 day and its grace 3 hours (set on
 05/10/2026): the daily summary keeps it green, so if no ping arrives for 27 hours the check goes down by itself and alerts, which
 is how a server or a cron job that stopped altogether is noticed. The server sends two kinds of ping.
 
@@ -240,19 +254,20 @@ working sends `First server error today` as well, even on the same day: that is 
 
 ## UptimeRobot: what it sees and what it does not
 
-The owner has two monitors in UptimeRobot, each every 5 minutes: a Keyword monitor on `https://<your-domain>/api/health` that
-expects the text `"ok":true`, and an HTTP monitor on the home page. An alert goes by e-mail and to the UptimeRobot app on the
-iPhone. There is no public status page. An alert from either monitor means that the site or the function did not answer:
-start at step 2.
+The first installation uses UptimeRobot (nothing in the code needs it: a copy can use the same service, any other monitor of
+`/api/health`, or none). Its owner has two monitors in UptimeRobot, each every 5 minutes: a Keyword monitor on
+`https://<your-domain>/api/health` that expects the text `"ok":true`, and an HTTP monitor on the home page. An alert goes by
+e-mail and to the UptimeRobot app on the iPhone. There is no public status page. An alert from either monitor means that the
+site or the function did not answer: start at step 2.
 
 What it does **not** see, on purpose:
 
 - **The database.** `/api/health` never touches the database (the smoke test and `/api/health/db` are for that), and the home
   page is a static file. So UptimeRobot stays green while the database is down, while a route fails with a 500, while a phone
   is stuck, and while the daily jobs do not run.
-- A database outage therefore reaches the owner another way: through the first-error ping of healthchecks.io, whose in-memory
-  path ("Database unreachable" above) needs no database but does need a request that fails, so a night without traffic sends
-  nothing; and through the daily summary the next morning, which fails when it cannot read the database. A `503` from
-  `/api/health/db` sends no ping by itself.
+- A database outage therefore reaches the owner another way (where `HEALTH_HEARTBEAT_URL` is set): through the first-error
+  ping of healthchecks.io, whose in-memory path ("Database unreachable" above) needs no database but does need a request that
+  fails, so a night without traffic sends nothing; and through the daily summary the next morning, which fails when it cannot
+  read the database. A `503` from `/api/health/db` sends no ping by itself.
 - A `500` of a route, a stuck phone, a retention job that did not run and a spike of sign-ins reach him through healthchecks.io
   (parts a and b above), never through UptimeRobot.

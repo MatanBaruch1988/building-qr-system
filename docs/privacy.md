@@ -9,6 +9,9 @@ Retention periods were decided by the owner on 04/10/2026, and the periods of th
 05/10/2026. Three things have no period yet: the scans, the refused visits and the audit log wait for a legal decision, and
 until then they are kept (see the table).
 
+The dates of the owner's decisions above are the first installation's record: a copy writes the dates of its own decisions, or
+removes them. The periods themselves are the constants in `server/config.js`, which every installation gets with the code.
+
 ## What is kept, and for how long
 
 | Where | What it holds about a person | How long it is kept |
@@ -48,7 +51,8 @@ The server cuts every report to a fixed list of fields (`shared/contract.js`) an
 - **Where it is kept:** in `app_errors` (the table above, with the server's own errors), one row for each kind of report per
   hour with a count, deleted 90 days after the last time it happened.
 - **Who is told:** the first crash or uncaught error of a day (of the apps or of the server, whichever comes first) sends one
-  short line to the owner's check on healthchecks.io: the screen key, the error's name or code, the build and the time. A
+  short line to the owner's check on healthchecks.io: the screen key, the error's name or code, the build and the time. The
+  first installation has that check. A copy has it only if it set `HEALTH_HEARTBEAT_URL`, and without it nothing is sent. A
   session that the server ended is only counted.
 
 ## Who can see it
@@ -74,18 +78,20 @@ The server cuts every report to a fixed list of fields (`shared/contract.js`) an
   token.
 - **Whoever runs the services under the app**: the owner of the project and the services that host it (the database is a
   Neon project, the app runs on Vercel). The committee's sign-in goes through Google, which handles it under its own terms.
-  The owner's check on healthchecks.io gets one short line when the server has its first unexpected error of a day: the
-  route as it is written in the code, the method, the error's code and the time. When an app reports the first crash of a day
-  instead, the line has the screen key, the error's name or code, the build and the time. It holds no personal data. It also
-  gets one short summary of the last 24 hours each day (`server/summary.js`): counts, route patterns as they are written in
-  the code, error codes, screen keys, build versions and times, and nothing about a person (no name, e-mail address, QR code,
-  phone label or id).
+  The first installation's owner has a check on healthchecks.io (optional: a copy has it only if it set
+  `HEALTH_HEARTBEAT_URL`, and without it the server sends nothing). That check gets one short line when the server has its
+  first unexpected error of a day: the route as it is written in the code, the method, the error's code and the time. When an
+  app reports the first crash of a day instead, the line has the screen key, the error's name or code, the build and the time.
+  It holds no personal data. It also gets one short summary of the last 24 hours each day (`server/summary.js`): counts, route
+  patterns as they are written in the code, error codes, screen keys, build versions and times, and nothing about a person (no
+  name, e-mail address, QR code, phone label or id).
 
 ## Backups
 
-The owner keeps a daily backup of the database on his own computer, for 30 days, and never in the repository or in any
-online place (`docs/runbooks/restore.md`). A backup holds everything that was in the database on that day, so a row that the
-daily job deleted can still be in a backup, until the backup itself is removed after 30 days.
+The first installation's owner keeps a daily backup of the database on his own computer, for 30 days, and never in the
+repository or in any online place (`docs/runbooks/restore.md`, which also says how to set up the same task). A backup holds
+everything that was in the database on that day, so a row that the daily job deleted can still be in a backup, until the backup
+itself is removed after 30 days. A copy that does not set up the task has no such backup, and this section is changed to say so.
 
 ## Changing this
 
