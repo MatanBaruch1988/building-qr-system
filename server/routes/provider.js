@@ -18,7 +18,7 @@ import {
   SCAN_ERROR_UNKNOWN_CODE,
   SCAN_ERROR_INVALID_ITEM,
 } from '../../shared/contract.js'
-import { readAddress } from '../building.js'
+import { readBuilding } from '../building.js'
 
 /** @import { SyncItemResult } from '../../shared/types.js' */
 
@@ -39,11 +39,11 @@ route('GET', '/public/providers', async () => {
   return { providers: rows }
 })
 
-// The building's address for the header of the app: only that, nothing else about the building. One single-row select by
-// primary key. Every phone asks once per app start, so the CDN may keep the answer for a minute (the browser always
+// The building's address and name for the header of the app: only those two, nothing else about the building. One single-row
+// select by primary key. Every phone asks once per app start, so the CDN may keep the answer for a minute (the browser always
 // revalidates, max-age=0); a change by the committee shows up within that minute.
 route('GET', '/public/building', async () => ({
-  json: { building: { address: await readAddress() } },
+  json: { building: await readBuilding() },
   headers: { 'Cache-Control': 'public, max-age=0, s-maxage=60' },
 }))
 

@@ -30,7 +30,7 @@ export const PUBLIC = Object.freeze(
   [
     { method: 'GET', path: '/health', why: 'Uptime monitor liveness check; answers ok and the commit, never queries the database.' },
     { method: 'GET', path: '/public/providers', why: 'Names for the provider login tiles, shown before anyone has signed in (company, contact name, service type only).' },
-    { method: 'GET', path: '/public/building', why: 'The building address for the header of the provider app, shown before sign-in; only the address, nothing else about the building.' },
+    { method: 'GET', path: '/public/building', why: 'The building address and name for the header of the provider app, shown before sign-in; only those two, nothing else about the building.' },
     { method: 'GET', path: '/public/points/resolve', why: 'Lets the phone show the name of a point before sign-in; returns name, description, active flag and GPS mode, never the token or the coordinates.' },
     { method: 'POST', path: '/session', why: 'Provider sign-in: the password in the body is the credential, and attempts are throttled.' },
     { method: 'POST', path: '/admin/google', why: 'Committee sign-in: the Google ID token in the body is the credential, checked with Google and against the committee list.' },
