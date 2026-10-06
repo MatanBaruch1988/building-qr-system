@@ -121,6 +121,7 @@ export const KEY_NAME_MAX_LENGTH = 80 // an agent key
 export const DEVICE_LABEL_MAX_LENGTH = 80 // a phone, as the provider's app names it when it signs in
 export const EMAIL_MAX_LENGTH = 200 // a committee member
 export const ADDRESS_MAX_LENGTH = 200 // the building (also the limit of the column, see db/migrations/006_building_settings.sql)
+export const BUILDING_NAME_MAX_LENGTH = 80 // the building's name (also the limit of the column, see db/migrations/012_building_name.sql)
 
 // ---- 5. The QR token ---------------------------------------------------------------------------------------------
 

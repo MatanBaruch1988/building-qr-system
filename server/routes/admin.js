@@ -8,7 +8,7 @@ import {
 import { requireAdmin, isAdminToken, guardLogin } from '../auth.js'
 import { verifyGoogleCredential } from '../google.js'
 import { firstCommitteeMember } from '../firstAdmin.js'
-import { readAddress, saveAddress, parseAddress } from '../building.js'
+import { readBuilding, saveBuilding, parseAddress, parseName } from '../building.js'
 import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvRow } from '../scans.js'
 import { audit, adminActor, changesOf, idsChanged } from '../audit.js'
 import { commit } from '../health.js'
@@ -275,24 +275,29 @@ route('DELETE', '/admin/admins/:id', async ({ req, params }) => {
 
 // ---------- the building ----------
 
-// The address shown at the top of the service providers' app. It may be empty: then the app shows no address.
+// The building's address, which the service providers' app shows at the top, and its name. Either may be empty: then the app
+// shows nothing for it.
 route('GET', '/admin/building', async ({ req }) => {
   await requireAdmin(req)
-  return { building: { address: await readAddress() } }
+  return { building: await readBuilding() }
 })
 
+// The address is required (it can be empty). The name is optional: a screen that was installed before the name existed sends
+// the address only, and its save leaves the saved name as it is.
 route('PUT', '/admin/building', async ({ req, body }) => {
   const { admin } = await requireAdmin(req)
   const address = parseAddress(body.address)
-  await tx(async (c) => {
-    const { changed, before } = await saveAddress(c, admin.id, address)
-    if (!changed) return // the address that is already saved: nothing to record
-    await audit(c, adminActor(admin), 'building.update', {
-      entity: 'building',
-      detail: { changes: changesOf({ address: before }, { address }) },
-    })
-  })
-  return { building: { address } }
+  const name = parseName(body.name)
+  return { building: await tx(async (c) => {
+    const { changed, before, after } = await saveBuilding(c, admin.id, { address, name })
+    if (changed) { // a save that changes neither text has nothing to record
+      await audit(c, adminActor(admin), 'building.update', {
+        entity: 'building',
+        detail: { changes: changesOf(before, after) },
+      })
+    }
+    return after
+  }) }
 })
 
 // ---------- points ----------
