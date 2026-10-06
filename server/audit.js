@@ -35,7 +35,8 @@
 //   admin.delete              admin     member      { email, name }                              what the member was
 //   session.sign_in           admin     member      { method }                                   `google`, or `dev` (the local shortcut); the member is the actor
 //   session.sign_out          admin     member      null                                         ended by the member who owned the session (the actor)
-//   building.update           building  (null)      { changes: { address } }
+//   building.update           building  (null)      { changes: { address, name } }               only the field(s) that changed: a save of the address alone
+//                                                                                                  (a screen from before the name existed) leaves the name out
 //   point.create              point     point       { name, description?, service_type?, gps_mode?, lat?, lng?, radius_m?, is_active?,
 //                                                     provider_ids }   the fields that were sent, and the providers who may scan
 //                                                                      there (a list of ids: the real ones, never the demo account)

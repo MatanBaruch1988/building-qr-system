@@ -450,6 +450,10 @@ describe('the vocabularies and limits: the same as the database that stores them
     expect(migrations).toContain(`char_length(address) <= ${contract.ADDRESS_MAX_LENGTH}`)
   })
 
+  it('the building name limit is that of building_settings.name', () => {
+    expect(migrations).toContain(`char_length(name) <= ${contract.BUILDING_NAME_MAX_LENGTH}`)
+  })
+
   it('the default GPS mode is that of points.gps_mode', () => {
     expect(migrations).toMatch(new RegExp(`gps_mode\\s+text\\s+not null\\s+default\\s+'${contract.DEFAULT_GPS_MODE}'`, 'i'))
   })
@@ -526,6 +530,7 @@ const PINNED = [
   ['DEVICE_LABEL_MAX_LENGTH', contract.DEVICE_LABEL_MAX_LENGTH, 80, `The phone cuts its label to this when it signs in, and the server refuses a longer one (device_label is too long): a lower limit on the server would refuse the sign-in of an installed phone. ${OLD_PHONES}`],
   ['EMAIL_MAX_LENGTH', contract.EMAIL_MAX_LENGTH, 200, OLD_FORM],
   ['ADDRESS_MAX_LENGTH', contract.ADDRESS_MAX_LENGTH, 200, `${OLD_FORM} It is also the check constraint of building_settings.address.`],
+  ['BUILDING_NAME_MAX_LENGTH', contract.BUILDING_NAME_MAX_LENGTH, 80, `${OLD_FORM} It is also the check constraint of building_settings.name.`],
   ['QR_TOKEN_PREFIX', contract.QR_TOKEN_PREFIX, 'BQR-', 'Every QR code that was ever printed starts with it (the old system printed the same prefix). A different prefix stops them all.'],
   ['QR_TOKEN_RE (its source)', contract.QR_TOKEN_RE.source, '^BQR-[A-Za-z0-9-]{6,80}$', 'It has to accept every QR code that was ever printed, including the old system\'s, so it is never narrowed: a narrower pattern turns a printed code into "not one of ours".'],
   ['PROVIDER_TOKEN_PREFIX', contract.PROVIDER_TOKEN_PREFIX, 'qrp_', `Every device token that the server minted starts with it, and the phone drops a stored session whose token does not (src/worker/session.js), so a different prefix signs out every installed phone the next time it starts. The server also refuses a token without it. ${OLD_PHONES}`],

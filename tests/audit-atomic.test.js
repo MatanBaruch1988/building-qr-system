@@ -718,11 +718,52 @@ describe('a change that changes nothing writes no audit row, and the route answe
     expect((await put('/api/admin/building', { address })).status).toBe(200)
     const after = await lastAuditId()
     const before = await snapshot() // holds the time and the member of the last save too
+    const { name } = await one('select name from building_settings where id = 1') // the answer carries it since migration 012
     for (const typed of [address, `  ${address} `]) {
       const answer = await put('/api/admin/building', { address: typed })
-      expect([answer.status, answer.json]).toEqual([200, { building: { address } }])
+      expect([answer.status, answer.json]).toEqual([200, { building: { address, name } }])
     }
     await expectNothingWritten(after, before)
+  })
+
+  it('PUT /admin/building: the name that is saved already, alone or with the address, and a save with no name (also with spaces around)', async () => {
+    const address = uniq('Fake street')
+    const name = uniq('Fake building')
+    expect((await put('/api/admin/building', { address, name })).status).toBe(200)
+    const after = await lastAuditId()
+    const before = await snapshot()
+    for (const body of [{ address, name }, { address: ` ${address}`, name: `  ${name} ` }, { address }]) {
+      const answer = await put('/api/admin/building', body)
+      expect([answer.status, answer.json], JSON.stringify(body)).toEqual([200, { building: { address, name } }])
+    }
+    await expectNothingWritten(after, before)
+  })
+
+  it('PUT /admin/building: a name that is refused changes nothing, and writes no row', async () => {
+    const address = uniq('Fake street')
+    expect((await put('/api/admin/building', { address, name: 'Kept name' })).status).toBe(200)
+    const after = await lastAuditId()
+    const before = await snapshot()
+    const names = ['x'.repeat(81), 'two\nlines', 7, null]
+    for (const name of names) {
+      const answer = await put('/api/admin/building', { address: uniq('Other street'), name })
+      expect([answer.status, answer.json.error.code, answer.json.error.field], JSON.stringify(name)).toEqual([400, 'invalid_field', 'name'])
+    }
+    expect(await lastAuditId()).toBe(after)
+    // nothing but the record of each refusal itself (app_errors)
+    await expectOnlyTheRecordOfTheRefusals(before, names.map(() => ({ method: 'PUT', place: '/admin/building', status: 400, code: 'invalid_field' })))
+  })
+
+  it('PUT /admin/building: the name is as atomic as the address: refused audit row, nothing changed, then it works', async () => {
+    const name = uniq('Fake building')
+    const body = { address: uniq('Fake street'), name }
+    const before = await snapshot()
+    const { result: refused } = await quietly(() => refusingAudit('building.update', () => put('/api/admin/building', body)))
+    expect(refused.status, refused.text).toBe(500)
+    await expectOnlyTheRecordOfTheFailure(before, 'PUT /admin/building')
+    expect(await one('select name from building_settings where id = 1')).not.toEqual({ name })
+    const retry = await put('/api/admin/building', body)
+    expect([retry.status, retry.json]).toEqual([200, { building: body }])
   })
 
   it('PATCH /admin/points/:id: the values that are saved, and the providers who are listed (the demo account is not listed)', async () => {
@@ -876,6 +917,25 @@ describe('an update records `changes`: only the fields whose value changed, each
     expect(rows.map((r) => [r.action, r.entity, r.entity_id, r.detail])).toEqual([
       ['building.update', 'building', null, { changes: { address: { from: first, to: second } } }],
       ['building.update', 'building', null, { changes: { address: { from: second, to: '' } } }],
+    ])
+  })
+
+  it('PUT /admin/building: the name that it replaced, and an empty name as an empty text, next to the address when both changed', async () => {
+    const address = uniq('Fake street')
+    const other = uniq('Fake street')
+    const first = uniq('Fake building')
+    const second = uniq('Fake building')
+    expect((await put('/api/admin/building', { address })).status).toBe(200)
+    const { name: previous } = await one('select name from building_settings where id = 1')
+    const after = await lastAuditId()
+    expect((await put('/api/admin/building', { address, name: first })).status).toBe(200)
+    expect((await put('/api/admin/building', { address: other, name: second })).status).toBe(200)
+    expect((await put('/api/admin/building', { address: other, name: '' })).status).toBe(200)
+    const rows = await rowsAfter(after)
+    expect(rows.map((r) => [r.action, r.entity, r.entity_id, r.detail])).toEqual([
+      ['building.update', 'building', null, { changes: { name: { from: previous, to: first } } }],
+      ['building.update', 'building', null, { changes: { address: { from: address, to: other }, name: { from: first, to: second } } }],
+      ['building.update', 'building', null, { changes: { name: { from: second, to: '' } } }],
     ])
   })
 })
