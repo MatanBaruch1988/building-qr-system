@@ -1,6 +1,7 @@
 # Continuous integration. Four checks, and branch protection (.github/rulesets/) requires all of them to merge:
 #   guards                 migrations only move forward, tests are not removed, the PR title, ESLint, the type check,
-#                          a dependency audit
+#                          an audit of the production dependencies (and a warning, never a failure, for the
+#                          development ones)
 #   unit                   Vitest, against a Postgres 18 container (production runs Postgres 18 on Neon)
 #   e2e (android-chrome)   Playwright, Chromium as a Pixel 7
 #   e2e (iphone-webkit)    Playwright, WebKit as an iPhone 14
@@ -96,6 +97,17 @@ jobs:
 
       - name: Audit the production dependencies
         run: npm audit --omit=dev --audit-level=high
+
+      # The development dependencies (Vite, Vitest, Playwright, ESLint and the rest) build and test the app but never reach
+      # a phone or the server, so an advisory in one of them does not block a merge: it becomes a warning on the run, and
+      # Dependabot's security update proposes the fix. This step runs only after the one above passed, so a high or
+      # critical advisory that it finds is in a development dependency.
+      - name: Report the development dependencies' advisories
+        run: |
+          if ! npm audit --audit-level=high > "$RUNNER_TEMP/audit.txt"; then
+            cat "$RUNNER_TEMP/audit.txt"
+            echo "::warning title=Development dependency advisory::npm audit found a high or critical advisory in a development dependency (the log of this step lists it). It does not block the merge; update it, or merge the Dependabot pull request that fixes it."
+          fi
 
   unit:
     name: unit
