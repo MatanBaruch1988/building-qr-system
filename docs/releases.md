@@ -22,12 +22,16 @@ installs, so each number says what that person has to do:
 |---|---|---|
 | **MAJOR** (`v3.0.0`) | An installer must act: a new setting (an environment variable, a Google or Vercel setting), a manual step (a command to run, something to change by hand), or anything else that breaks an installation that just pulls the new code. | Reads "What installers must do" and does it. A major version always has something there. |
 | **MINOR** (`v2.1.0`) | New features. | Updates. Nothing else is needed. |
-| **PATCH** (`v2.0.1`) | Fixes only. A security fix is always released this way, the same day that it merges (`SECURITY.md`). | Updates. Nothing else is needed. |
+| **PATCH** (`v2.0.1`) | Fixes only. | Updates. Nothing else is needed. |
 
 Pull request titles are Conventional Commits (see [CONTRIBUTING.md](../CONTRIBUTING.md)), and the notes are made from them
 (below). A title with a `!` before the colon (`feat(api)!: ...`) is listed under **Breaking changes**, which is a sign that
 the next version is a MAJOR one. The owner decides the number: the script only checks that it is greater than the
 previous one.
+
+A security fix is released the same day that it merges (`SECURITY.md`). A release holds everything that merged since the
+previous one, so its number follows all of it, as for any release: a PATCH when only fixes merged since, a MINOR when a
+feature merged in between, a MAJOR when installers must act.
 
 ## How to cut a release
 
