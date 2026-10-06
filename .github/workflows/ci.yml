@@ -5,6 +5,8 @@
 #   unit                   Vitest, against a Postgres 18 container (production runs Postgres 18 on Neon)
 #   e2e (android-chrome)   Playwright, Chromium as a Pixel 7
 #   e2e (iphone-webkit)    Playwright, WebKit as an iPhone 14
+# They run on every pull request, on every push to the default branch and, once the repository has a merge queue, on each
+# merge group (see the trigger below).
 # Every third-party action is pinned to a full commit SHA (the tag is in the comment): a tag can be moved, a SHA cannot.
 # The Postgres service image is pinned to a digest for the same reason.
 name: CI
@@ -19,6 +21,11 @@ on:
     types: [opened, synchronize, reopened, edited, labeled, unlabeled]
   push:
     branches: [master, main]
+  # A merge queue (when the repository has one) tests each queued pull request on top of the default branch and of the
+  # pull requests ahead of it, and merges only what passes. It waits for the same four checks, so they must run here too:
+  # without this trigger a queued pull request would wait forever. Harmless when there is no queue: nothing sends it.
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -43,19 +50,23 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      # What to compare with: the target branch for a pull request, the previous tip for a push. A branch that is new
-      # (all-zero SHA) or a force-pushed one (the old tip is gone) has nothing to compare with: the diff guards skip.
+      # What to compare with: the target branch for a pull request, the previous tip for a push, and for a merge queue the
+      # commit that the queued pull request is merged onto (the default branch plus the pull requests ahead of it), so the
+      # diff is that pull request's own change. A branch that is new (all-zero SHA) or a force-pushed one (the old tip is
+      # gone) has nothing to compare with: the diff guards skip.
       - name: Find the base commit
         id: base
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
           BEFORE_SHA: ${{ github.event.before }}
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           case "$EVENT_NAME" in
             pull_request) base="origin/$BASE_REF" ;;
             push) base="$BEFORE_SHA" ;;
+            merge_group) base="$MERGE_GROUP_BASE" ;;
             *) base="origin/$DEFAULT_BRANCH" ;;
           esac
           if [ "$base" = "0000000000000000000000000000000000000000" ] || ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
@@ -73,8 +84,11 @@ jobs:
       # PR_LABELS lets a pull request that has to remove a test say so with the allow-test-removal label.
       # Titles and labels are text that anyone can write: they go in through env and are read from process.env, never
       # pasted into the script of a `run:` step.
+      # Not in a merge queue: a queue run has no pull request labels, so a removal that the owner allowed with the label
+      # would fail there for good. The same change was already checked, with its labels, by the pull request's own run,
+      # which a pull request needs green before it can join the queue (like the title check below).
       - name: Tests are not removed or switched off
-        if: steps.base.outputs.base != ''
+        if: steps.base.outputs.base != '' && github.event_name != 'merge_group'
         env:
           BASE: ${{ steps.base.outputs.base }}
           PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
