@@ -107,7 +107,7 @@ request (section 5), and your changes can go back as pull requests.
 
 ### 3.1 The fork
 
-1. Open `https://github.com/MatanBaruch1988/building-qr-system` and choose **Fork**. The Fork page has Owner, Repository
+1. Open `https://github.com/building-attendance/building-qr-system` and choose **Fork**. The Fork page has Owner, Repository
    name (it fills in `building-qr-system`, and the repository's name may stay), Description and "Copy the `master` branch
    only". Pick the owner (your account, or your organization), and leave "Copy the `master` branch only" ticked.
 2. The fork's default branch is `master`, and only `master` is copied. **Do not rename it.** The default branch is the
@@ -399,6 +399,11 @@ Do these in order. After step 5 every change to the default branch needs a pull 
    but the repository admin role may bypass it on a pull request, so you can still merge your own; applying only
    `master-gates` is also valid for a one-person copy. From now on a pull request needs a title in the Conventional Commit
    form (`chore: ...`), which the `guards` check enforces.
+
+   If your repository is owned by a GitHub organization (not a personal account), you may also apply
+   `master-merge-queue.json`: every pull request then merges through GitHub's merge queue, which runs the four checks on
+   top of the newest default branch, so nobody updates a pull request by hand. GitHub offers the queue only to
+   organizations; a personal copy skips it **(check in the trial install)**.
 6. **Dependabot.** In Settings, Code security, turn on Dependabot alerts and Dependabot security updates **(check in the
    trial install)**. `.github/dependabot.yml` asks for weekly version updates; whether they start in a fork without further
    settings is also **(check in the trial install)**. Each Dependabot pull request goes through the same four checks and
@@ -451,7 +456,7 @@ install)**. It does not make a GitHub fork: **the copy is not linked to this rep
    `repository-url`, `project-name`, `repository-name`, `env`, `envDescription` and `envLink`.
 
    ```
-   https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FMatanBaruch1988%2Fbuilding-qr-system&project-name=my-building-qr&repository-name=my-building-qr&env=DATABASE_URL,DATABASE_URL_UNPOOLED,GOOGLE_CLIENT_ID,APP_BASE_URL,FIRST_ADMIN_EMAIL,CRON_SECRET&envDescription=Neon%20connection%20strings%2C%20Google%20client%20id%2C%20your%20site%20address%2C%20first%20committee%20e-mail%2C%20random%20cron%20secret&envLink=https%3A%2F%2Fgithub.com%2FMatanBaruch1988%2Fbuilding-qr-system%2Fblob%2Fmaster%2Fdocs%2Finstall.md
+   https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fbuilding-attendance%2Fbuilding-qr-system&project-name=my-building-qr&repository-name=my-building-qr&env=DATABASE_URL,DATABASE_URL_UNPOOLED,GOOGLE_CLIENT_ID,APP_BASE_URL,FIRST_ADMIN_EMAIL,CRON_SECRET&envDescription=Neon%20connection%20strings%2C%20Google%20client%20id%2C%20your%20site%20address%2C%20first%20committee%20e-mail%2C%20random%20cron%20secret&envLink=https%3A%2F%2Fgithub.com%2Fbuilding-attendance%2Fbuilding-qr-system%2Fblob%2Fmaster%2Fdocs%2Finstall.md
    ```
 
    Vercel asks you to connect your GitHub account, name the new repository, and fill in the six variables (it cannot be
@@ -502,7 +507,7 @@ themselves ([ADR 0002](adr/0002-production-migrations-in-the-vercel-build.md)): 
         commit is already there:
 
         ```bash
-        gh api repos/MatanBaruch1988/building-qr-system/commits/v<version> --jq .sha
+        gh api repos/building-attendance/building-qr-system/commits/v<version> --jq .sha
         gh api -X POST repos/<owner>/<repo>/git/refs -f ref=refs/heads/update-<version> -f sha=<the commit that the first command printed>
         ```
      2. Open a pull request from `update-<version>` into `master`, titled `chore: update to v<version>`: on GitHub
@@ -534,7 +539,7 @@ themselves ([ADR 0002](adr/0002-production-migrations-in-the-vercel-build.md)): 
      It stays behind `master` (the rulesets want the head up to date with `master`, and you cannot update the other
      repository's branch), and it gets a failing "Vercel" check, which is not a required one.
    - **Path B (not a fork):** the route above does not work, because a Deploy-button copy does not share this repository's
-     objects. Use a clone: `git remote add upstream https://github.com/MatanBaruch1988/building-qr-system.git`
+     objects. Use a clone: `git remote add upstream https://github.com/building-attendance/building-qr-system.git`
      (if `git remote -v` does not list it already), `git fetch --all --tags`, `git switch -c update-<version>
      origin/master`, `git merge <the tag of the release, for example v2.1.0>`, `git push -u origin update-<version>`, and
      open a pull request titled `chore: update to v<version>`. The checks run, and you merge it. The history of a

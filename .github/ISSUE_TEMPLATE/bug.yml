@@ -11,7 +11,7 @@ body:
         connection strings or keys, not in the text and not in the screenshots.
 
         If you think you found a security problem, do not use this form. Report it privately:
-        https://github.com/MatanBaruch1988/building-qr-system/security/advisories/new
+        https://github.com/building-attendance/building-qr-system/security/advisories/new
   - type: dropdown
     id: part
     attributes:
