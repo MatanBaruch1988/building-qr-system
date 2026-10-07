@@ -400,12 +400,14 @@ Do these in order. After step 5 every change to the default branch needs a pull 
    `master-gates` is also valid for a one-person copy. From now on a pull request needs a title in the Conventional Commit
    form (`chore: ...`), which the `guards` check enforces.
 
-   If your repository is owned by a GitHub organization (not a personal account) and a second person approves every pull
-   request, you may also apply `master-merge-queue.json`: every pull request then merges through GitHub's merge queue,
-   which runs the four checks on top of the newest default branch, so nobody updates a pull request by hand. Skip it if
-   you are the only maintainer: a pull request joins the queue only with every requirement met, and GitHub does not count
-   your bypass of `master-approval` there, so nothing could merge (this repository tried it, see
-   [`.github/rulesets/README.md`](../.github/rulesets/README.md)). GitHub offers the queue only to organizations.
+   If your repository is owned by a GitHub organization (not a personal account), you may also apply
+   `master-merge-queue.json`: every pull request then merges through GitHub's merge queue, which runs the four checks on
+   top of the newest default branch, so nobody updates a pull request by hand. A pull request joins the queue only with
+   every requirement met, and GitHub does not count a bypass there. So with `master-approval` a second person must
+   approve every pull request: if you are the only maintainer and merge with your bypass of it, nothing could merge (this
+   repository tried it, see [`.github/rulesets/README.md`](../.github/rulesets/README.md)). A one-person copy that
+   applies only `master-gates` requires no approval, so it can use the queue **(check in the trial install)**. GitHub
+   offers the queue only to organizations.
 6. **Dependabot.** In Settings, Code security, turn on Dependabot alerts and Dependabot security updates **(check in the
    trial install)**. `.github/dependabot.yml` asks for weekly version updates; whether they start in a fork without further
    settings is also **(check in the trial install)**. Each Dependabot pull request goes through the same four checks and

@@ -41,7 +41,7 @@ gh api --method POST repos/{owner}/{repo}/rulesets --input .github/rulesets/mast
 To change one later, send the edited file with `gh api --method PUT repos/{owner}/{repo}/rulesets/<id> --input <file>`
 (the ids are listed by `gh api repos/{owner}/{repo}/rulesets`).
 
-## The merge queue (an organization's repository with a second person who approves)
+## The merge queue (an organization's repository, without a bypassed approval)
 
 `master-merge-queue.json` makes every pull request merge through GitHub's merge queue. A pull request is added with
 "Merge when ready"; the queue builds it on top of the default branch and of the pull requests ahead of it, runs the four
@@ -55,10 +55,12 @@ merges a pull request directly, but does not let it into the queue. So with `mas
 owner who approves each pull request and who is neither its author nor its last pusher. This repository has one
 maintainer, who opens and pushes every pull request and merges with that bypass, so it does not apply the file: on
 07/10/2026 it was applied, the merge box showed "Merging is blocked" with "Merge when ready" greyed out and no bypass, and
-the ruleset was removed the same day. The file stays for a copy that has a second person.
+the ruleset was removed the same day. The file stays for a copy where it works: one with a second person who approves,
+or one with a single maintainer that applies `master-gates` without `master-approval` (`master-gates` requires no
+approval, so there is nothing to bypass; not tried yet).
 
 GitHub offers a merge queue only to repositories owned by an organization; a copy in a personal account skips this file.
-A copy that meets both conditions applies it after the first two:
+An organization's copy where it works applies it after the other rulesets:
 
 ```
 gh api --method POST repos/{owner}/{repo}/rulesets --input .github/rulesets/master-merge-queue.json
