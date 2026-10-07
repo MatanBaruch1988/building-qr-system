@@ -10,9 +10,11 @@ building with their phone. The committee manages points, providers and history a
 committee's own AI agent reads the data through a read-only API. The app records facts and does not analyse anything.
 It is a Vite + React PWA, a Vercel serverless API and Neon Postgres. The provider app is in four languages (he, en, ru,
 ar); the committee app is in Hebrew only for now (its translation is deferred). Public repository
-(`MatanBaruch1988/building-qr-system`), MIT licence, meant to be installed by any building committee that wants its own
-copy (one building per installation, `docs/install.md`; a copy updates by releases, `docs/releases.md`). The repository
-is written in English.
+(`building-attendance/building-qr-system`, in the GitHub organization `building-attendance` since 07/10/2026; the old
+address `MatanBaruch1988/building-qr-system` redirects to it), MIT licence, meant to be installed by any building
+committee that wants its own copy (one building per installation, `docs/install.md`; a copy updates by releases,
+`docs/releases.md`). The repository is written in English. The production domain `building-qr-system.vercel.app` is
+printed in every QR sign, so it never changes, whatever the repository or the organization is called.
 
 Soft GPS policy: a scan is refused only for an accurate position that is clearly far from the point (or for no position on
 a `required` point); a weak or missing fix elsewhere is recorded with the flag `location_unverified`.
@@ -227,7 +229,11 @@ runs; it looks nothing up and says nothing about the route.
   `ci`, `style` and `revert`.
 - Pull requests are squash-merged, so the title becomes the commit on `master`.
 - `master` is protected by rulesets (`.github/rulesets/`, explained in `.github/rulesets/README.md`): a pull request,
-  the four CI checks green and up to date, and a code-owner approval.
+  the four CI checks green, a code-owner approval, and the merge queue. A pull request joins the queue ("Merge when
+  ready"), the queue runs the four checks again on top of the newest `master` and of the pull requests ahead of it
+  (`merge_group` in `ci.yml`), and only then merges it; so a pull request no longer has to be brought up to date by hand
+  before its merge, and agents stop running "update branch" on the next pull request in line. The owner adds a pull
+  request to the queue, like any merge.
 - Agents never merge a pull request, never approve one, never push to `master`, never force-push, never rewrite history
   and never delete a branch they did not create. The owner merges.
 - The reviewer is always from the other vendor: Codex reviews what Claude wrote and Claude reviews what Codex wrote
