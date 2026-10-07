@@ -195,7 +195,23 @@ jobs:
           cache: npm
       - run: npm ci
       # Only the browser this project needs. Playwright's own advice is not to cache the browsers, so they are downloaded.
-      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      # --with-deps runs apt-get on the runner, and a slow Ubuntu mirror has made it hang until the job's 30-minute limit
+      # (twice, on 06/10 and 07/10/2026). So each attempt gets 5 minutes and there are up to three: a hang costs minutes,
+      # not the job. Between attempts, whatever apt-get or dpkg left behind is stopped and finished, so that the next
+      # attempt does not wait for a lock.
+      - name: Install the browser and its system packages
+        timeout-minutes: 17
+        env:
+          BROWSER: ${{ matrix.browser }}
+        run: |
+          for attempt in 1 2 3; do
+            if timeout --kill-after=10 300 npx playwright install --with-deps "$BROWSER"; then exit 0; fi
+            echo "::warning::Installing $BROWSER failed or took more than 5 minutes (attempt $attempt of 3)"
+            sudo pkill -9 -x apt-get || true
+            sudo pkill -9 -x dpkg || true
+            sudo dpkg --configure -a || true
+          done
+          exit 1
       # playwright.config.js builds the app and starts the API (on a scratch schema of the container) and the preview.
       - run: npx playwright test --project=${{ matrix.project }}
       - name: Keep the report and the traces of a failed run

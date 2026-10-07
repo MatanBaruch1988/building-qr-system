@@ -229,11 +229,11 @@ runs; it looks nothing up and says nothing about the route.
   `ci`, `style` and `revert`.
 - Pull requests are squash-merged, so the title becomes the commit on `master`.
 - `master` is protected by rulesets (`.github/rulesets/`, explained in `.github/rulesets/README.md`): a pull request,
-  the four CI checks green, a code-owner approval, and the merge queue. A pull request joins the queue ("Merge when
-  ready"), the queue runs the four checks again on top of the newest `master` and of the pull requests ahead of it
-  (`merge_group` in `ci.yml`), and only then merges it; so a pull request no longer has to be brought up to date by hand
-  before its merge, and agents stop running "update branch" on the next pull request in line. The owner adds a pull
-  request to the queue, like any merge.
+  the four CI checks green and up to date, and a code-owner approval. The merge queue (`master-merge-queue.json`) is not
+  applied here: a pull request joins it only with every requirement met, GitHub does not count the owner's bypass of the
+  approval there, and with one maintainer nobody else approves, so nothing could merge (tried and removed on
+  07/10/2026). So after each merge the next pull request in line is brought up to date ("update branch") before it can
+  merge.
 - Agents never merge a pull request, never approve one, never push to `master`, never force-push, never rewrite history
   and never delete a branch they did not create. The owner merges.
 - The reviewer is always from the other vendor: Codex reviews what Claude wrote and Claude reviews what Codex wrote
