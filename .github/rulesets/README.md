@@ -1,6 +1,6 @@
 # Branch rulesets for the default branch
 
-Both rulesets apply to the repository's default branch (`~DEFAULT_BRANCH`: `master` here, often `main` in a copy), so a
+The rulesets apply to the repository's default branch (`~DEFAULT_BRANCH`: `master` here, often `main` in a copy), so a
 copy needs no edit to them. The file names keep `master` from this repository.
 
 `master-gates.json` protects the default branch for everybody, with no bypass: it cannot be deleted or force-pushed,
@@ -28,7 +28,7 @@ A pull request can change its own workflow and guard scripts, and the checks tha
 change under `.github/` or to `scripts/check-*` needs the owner's careful look: green checks are not proof that the
 checks themselves were not weakened.
 
-Both files are the exact request body of GitHub's "Create a repository ruleset" API; a ruleset is only enforced once it
+The files are the exact request body of GitHub's "Create a repository ruleset" API; a ruleset is only enforced once it
 has been created that way (or in the repository settings). Apply each one once, from the repository root, and only after
 the four checks have run green once (a required check that has never run blocks every pull request). `gh` fills in
 `{owner}` and `{repo}` from the repository of the current folder:
@@ -40,3 +40,20 @@ gh api --method POST repos/{owner}/{repo}/rulesets --input .github/rulesets/mast
 
 To change one later, send the edited file with `gh api --method PUT repos/{owner}/{repo}/rulesets/<id> --input <file>`
 (the ids are listed by `gh api repos/{owner}/{repo}/rulesets`).
+
+## The merge queue (a repository owned by an organization only)
+
+`master-merge-queue.json` makes every pull request merge through GitHub's merge queue. The owner adds a pull request with
+"Merge when ready"; the queue builds it on top of the default branch and of the pull requests ahead of it, runs the four
+checks there (the `merge_group` trigger in `ci.yml`), and squash-merges it only if they pass ("all green"; one pull request
+is enough to start, with no waiting). So nobody brings a pull request up to date by hand any more, and two pull requests
+that pass alone but fail together never reach the default branch. It has no bypass, so even the repository admin, who may
+skip the approval of `master-approval`, goes through the queue.
+
+GitHub offers a merge queue only to repositories owned by an organization. This repository is one
+(`building-attendance/building-qr-system`, since 07/10/2026); a copy in a personal account skips this file and keeps the
+first two. Apply it after the first two:
+
+```
+gh api --method POST repos/{owner}/{repo}/rulesets --input .github/rulesets/master-merge-queue.json
+```
