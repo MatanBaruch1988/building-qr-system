@@ -7,7 +7,9 @@ The single source of instructions for every coding agent that works in this repo
 
 A tool for a building committee. Service providers (a cleaning company, a gardener) scan a QR code at a point in the
 building with their phone. The committee manages points, providers and history at `/admin` (Google sign-in). The
-committee's own AI agent reads the data through a read-only API. The app records facts and does not analyse anything.
+committee's own AI agent reads the data through a read-only API. The app records facts and does not analyse anything;
+a count of those facts (how many visits per day, provider, point or service) is a fact too, and the analysis is the
+agent's.
 It is a Vite + React PWA, a Vercel serverless API and Neon Postgres. The provider app is in four languages (he, en, ru,
 ar); the committee app is in Hebrew only for now (its translation is deferred). Public repository
 (`building-attendance/building-qr-system`, in the GitHub organization `building-attendance` since 07/10/2026; the old
@@ -376,10 +378,21 @@ of the three is enough: the loop narrows all of them, and the strongest cut is t
   (`GET /api/cron/retention`, called by Vercel Cron with `CRON_SECRET`) deletes committee sessions 30 days after they
   expired or were revoked and login attempts after 1 day, and clears the label of a phone 90 days after it was revoked,
   together with the status that the phone reported. It also deletes the error records (`app_errors`) 90 days after
-  their last event and the days of the alert throttle (`alert_pings`) after 30 days (owner decision of 05/10/2026). The
+  their last event and the days of the alert throttle (`alert_pings`) after 30 days (owner decision of 05/10/2026), and
+  the usage counts of the agent keys (`api_key_usage`, no personal data) after 90 days (owner decision of 08/10/2026). The
   periods are constants in `server/config.js`. It never deletes or changes a scan, a refused upload (`scan_refusals`),
   the audit log, an active session or an active phone: their retention waits for a legal decision. The job logs counts
   only.
+- The committee's agent is its analyst (owner decision of 08/10/2026): the agent API (`/api/agent/v1/`, read-only) may
+  show everything that the committee app shows and manages, the audit log and the committee members' names and e-mails
+  included, and never a secret: a point's QR token or legacy id, a hash of a password, a token or a key, a key's prefix,
+  a phone's label or browser string (phone health goes out as numbers per provider, never a row per phone), an IP
+  address, `app_errors`, `alert_pings` or a Google subject. Every agent answer is built field by field (never
+  `select *` or a whole row), so a column added later does not reach the agent by itself, and a detail of the audit log
+  goes out only through an allow-list per action, with any string that looks like a secret removed. `docs/privacy.md`
+  says what the agent sees, and a pull request that shows it more changes that page too. The only writes of an agent
+  request are the guard's bookkeeping for its key: `last_used_at` (at most every 5 minutes) and its usage count, which
+  also limits how many requests a key may make (`429 rate_limited`, the limits are constants in `server/config.js`).
 - Every change that the committee makes writes its `audit_log` row in the same transaction as the change: `audit(c, ...)`
   in `server/audit.js` with the client of that transaction, never the module's `query()`, so there is no change without
   its row and no row without its change. `audit_log` and `scan_refusals` are append-only: triggers refuse an update, a
@@ -466,7 +479,12 @@ reviewing agent should apply it too.
 - A GitHub Actions change that uses an action not pinned to a full commit SHA, widens `permissions`, adds
   `pull_request_target`, or sets `persist-credentials: true`.
 - An endpoint under `/api` without the right authorization check (committee member, service provider, agent key, or the
-  cron secret for `/cron/`), or any write through the agent API (it is read-only).
+  cron secret for `/cron/`), or any write through the agent API (it is read-only) other than the guard's bookkeeping
+  for its key (`last_used_at` and the usage count).
+- An agent answer that can carry a secret (a QR token or legacy id, a hash, a key's prefix, a phone's label or browser
+  string, an IP address, a Google subject), one built from a whole row instead of field by field, an audit detail that
+  goes out without the allow-list of its action, or the per-key rate limit removed, raised or skipped on a route without
+  the owner's decision.
 - A change to the retention job that deletes or changes anything beyond what the Safety rules list (a scan, a refused
   upload, the audit log, an active session or phone), changes a retention period without the owner's decision, or answers
   a `/cron/` request without checking `CRON_SECRET` (a missing secret must refuse, never allow).
