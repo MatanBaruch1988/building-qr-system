@@ -123,6 +123,13 @@ describe('the Content-Security-Policy in vercel.json', () => {
     expect(headers['X-Frame-Options']).toBe('DENY')
     expect(headers['X-Content-Type-Options']).toBe('nosniff')
   })
+
+  it("keeps other sites' windows away from the app's window, but lets Google's sign-in popup answer", () => {
+    // A page that the app opens, or that opened the app, gets no handle on the app's window (no window.opener games):
+    // same-origin. "allow-popups" keeps the handle for a popup that the app itself opens, which is how Google's sign-in
+    // button answers the committee's sign-in (Google documents this value for it). "same-origin" alone would break it.
+    expect(headers['Cross-Origin-Opener-Policy']).toBe('same-origin-allow-popups')
+  })
 })
 
 describe('what the policy relies on in the page', () => {
