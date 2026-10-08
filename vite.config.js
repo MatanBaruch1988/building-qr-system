@@ -39,20 +39,16 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff,woff2}'],
+        // Every phone downloads the precache when the app is installed and again with each new version, so it holds only
+        // what the app shows. Heebo's "math" and "symbols" subsets (about 38 KB) cover characters that no screen needs to
+        // work offline: the browser still downloads one of them by itself if a page ever shows such a character (the
+        // arrow of the audit log, which needs the network anyway). The other subsets (Hebrew, Latin, Latin Extended) stay.
+        globIgnores: ['**/heebo-math-*', '**/heebo-symbols-*'],
         // API calls and CSV downloads must never be answered with the app shell.
         navigateFallbackDenylist: [/^\/api\//],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/unpkg\.com\/leaflet/,
-            handler: 'CacheFirst',
-            options: { cacheName: 'leaflet-cdn', expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 30 } },
-          },
-          {
-            urlPattern: /^https:\/\/.*tile\.openstreetmap\.org/,
-            handler: 'CacheFirst',
-            options: { cacheName: 'map-tiles', expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 7 } },
-          },
-        ],
+        // No runtime caching: the map's tiles are cross-origin images without CORS (opaque answers), which a CacheFirst
+        // rule never stores, so a rule for them only routed every tile through the service worker for nothing; Leaflet
+        // and its marker pictures come with the app.
       },
     }),
   ],
