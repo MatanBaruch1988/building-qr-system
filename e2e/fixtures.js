@@ -153,12 +153,17 @@ export async function expectNoA11yViolations(page, { context, exclude = [] }) {
   // just started: WebKit keeps showing the text of the light theme on the dark page until a frame has been drawn) would be
   // measured as it is at that moment. So every animation and transition is switched off first, which puts every element
   // at its end state at once, the way Playwright does for a screenshot.
+  //
+  // The rule goes in through the CSSOM (a constructed stylesheet that the document adopts), not as a style element: the
+  // page's Content-Security-Policy has no 'unsafe-inline' in style-src, and a style element that a script adds is an inline
+  // style, which the policy refuses. A stylesheet built in script is not subject to style-src, so this works under it. It
+  // is added once per document, and stays until the page is navigated away (as the style element did).
   await page.evaluate(() => {
-    if (!document.getElementById('a11y-settled')) {
-      const style = document.createElement('style')
-      style.id = 'a11y-settled'
-      style.textContent = '*, *::before, *::after { animation: none !important; transition: none !important; }'
-      document.head.append(style)
+    if (!window.__a11ySettled) {
+      const sheet = new CSSStyleSheet()
+      sheet.replaceSync('*, *::before, *::after { animation: none !important; transition: none !important; }')
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
+      window.__a11ySettled = sheet
     }
     void getComputedStyle(document.body).color // applies the style now
   })
