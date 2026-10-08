@@ -9,7 +9,19 @@ installation, with its first deploy, starts at [the install guide](../install.md
 ## How a merge reaches production
 
 1. The owner squash-merges a pull request on GitHub (the four CI checks are green).
-2. Vercel's Git integration sees the new commit on the production branch and starts a production build.
+2. Vercel's Git integration sees the new commit on the production branch. It first runs the Ignored Build Step from
+   `vercel.json`, `node scripts/vercel-ignore.mjs`, which prints one line:
+   - `vercel-ignore: skip, only documents, tests or CI changed (...)`: every file that changed since the commit that
+     production serves is on the script's list (documents, tests, CI and the other files that never reach the build).
+     The script learns that commit from production itself, its public `GET /api/health` on the production domain, so a
+     failed, a rolled-back or a preview deployment never counts. The commit is not built: Vercel shows the deployment as
+     canceled by the Ignored Build Step, production keeps serving the previous deployment (`/api/health` keeps showing
+     its commit), and there is no smoke test. This is on purpose: the build id in the JavaScript is the commit, so every
+     deployment is a new version that every phone downloads and announces. The next merge that changes the app is
+     compared with what production serves, not with its parent, so it deploys everything since.
+   - `vercel-ignore: build, <reason> (...)`: anything else, with the reason and the files that decided it. Any doubt
+     builds: production does not answer or names no commit, a commit that git cannot find, a git error, a build that is
+     not production. Vercel then starts a production build.
 3. Vercel runs the build command from `vercel.json`: `node scripts/vercel-build.mjs`.
 4. The script runs `vite build`. If the build fails, it stops: nothing is migrated.
 5. The script prints one gate line, and then acts on it:
