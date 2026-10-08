@@ -32,6 +32,10 @@ export default defineConfig({
       registerType: 'prompt',
       // The SVG is the favicon and the source of the PNGs (npm run icons); the PNGs are what iOS and the manifest use.
       includeAssets: ['pwa-192x192.svg', 'pwa-512x512.svg', 'apple-touch-icon.png'],
+      // By default the plugin adds every icon of the manifest to the precache by hand, and workbox's globIgnores (below)
+      // does not apply to what is added by hand, so the maskable icon would be precached whatever globIgnores says. The
+      // other two icons of the manifest (the 192 and 512 PNGs) are still precached, by globPatterns, as before.
+      includeManifestIcons: false,
       manifest: {
         name: 'נוכחות בבניין',
         short_name: 'נוכחות',
@@ -41,11 +45,18 @@ export default defineConfig({
         display: 'standalone',
         dir: 'rtl',
         lang: 'he',
+        // The identity of the installed app. Without an id a browser derives it from start_url, which is '/', so an
+        // explicit '/' is the same identity: copies that are already installed are not duplicated, and a later change of
+        // start_url (a new query string, say) cannot turn this app into another one.
+        id: '/',
         start_url: '/',
         scope: '/',
         icons: [
           { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
           { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          // Android crops a launcher icon to its own shape (a circle, a squircle) and shrinks an `any` icon onto a white
+          // disc instead. This one is a full square with the artwork inside the safe zone, made by `npm run icons`.
+          { src: 'pwa-maskable-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       workbox: {
@@ -54,7 +65,9 @@ export default defineConfig({
         // what the app shows. Heebo's "math" and "symbols" subsets (about 38 KB) cover characters that no screen needs to
         // work offline: the browser still downloads one of them by itself if a page ever shows such a character (the
         // arrow of the audit log, which needs the network anyway). The other subsets (Hebrew, Latin, Latin Extended) stay.
-        globIgnores: ['**/heebo-math-*', '**/heebo-symbols-*'],
+        // The maskable icon (about 4 KB) is left out for the same reason: the system fetches a launcher icon from the
+        // manifest when the app is installed, and no page ever shows it, so offline use does not need it.
+        globIgnores: ['**/heebo-math-*', '**/heebo-symbols-*', '**/pwa-maskable-*'],
         // API calls and CSV downloads must never be answered with the app shell.
         navigateFallbackDenylist: [/^\/api\//],
         // No runtime caching: the map's tiles are cross-origin images without CORS (opaque answers), which a CacheFirst

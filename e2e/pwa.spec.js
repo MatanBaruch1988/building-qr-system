@@ -15,6 +15,7 @@ test.describe('manifest', () => {
       name: 'נוכחות בבניין',
       short_name: 'נוכחות',
       display: 'standalone',
+      id: '/', // the identity of the installed app: the same one that the start URL gave before it was written down
       start_url: '/',
       scope: '/',
       lang: 'he',
@@ -30,6 +31,40 @@ test.describe('manifest', () => {
       expect(file.ok(), `icon ${icon.src} loads`).toBeTruthy()
       expect(file.headers()['content-type'], `icon ${icon.src} type`).toContain(icon.type)
     }
+  })
+
+  // Android crops a launcher icon to its own shape. An icon that is only `any` is shrunk onto a white disc instead, so the
+  // manifest also has a maskable one: a full square (no see-through pixel for the launcher to paint) in the brand blue.
+  test('lists a maskable 512x512 icon next to the "any" ones, and it loads as an opaque image', async ({ page }) => {
+    await page.goto('/')
+    const href = await page.locator('link[rel="manifest"]').getAttribute('href')
+    const manifest = await (await page.request.get(href)).json()
+
+    const sizesOf = (purpose) => manifest.icons.filter((icon) => icon.purpose === purpose).map((icon) => icon.sizes)
+    expect(sizesOf('any'), 'the "any" icons are still there').toEqual(['192x192', '512x512'])
+    expect(sizesOf('maskable'), 'one maskable icon').toEqual(['512x512'])
+    const maskable = manifest.icons.find((icon) => icon.purpose === 'maskable')
+    expect(maskable.type).toBe('image/png')
+
+    const url = new URL(maskable.src, new URL(href, page.url())).href
+    const response = await page.request.get(url)
+    expect(response.ok(), 'the maskable icon loads').toBeTruthy()
+    expect(response.headers()['content-type']).toContain('image/png')
+
+    // decode it the way a browser does, and look at the corners: they have to be the solid brand blue
+    const icon = await page.evaluate(async (src) => {
+      const bitmap = await createImageBitmap(await (await fetch(src)).blob())
+      const canvas = document.createElement('canvas')
+      canvas.width = bitmap.width
+      canvas.height = bitmap.height
+      const context = canvas.getContext('2d')
+      context.drawImage(bitmap, 0, 0)
+      const at = (x, y) => [...context.getImageData(x, y, 1, 1).data]
+      const last = bitmap.width - 1
+      return { width: bitmap.width, height: bitmap.height, corners: [at(0, 0), at(last, 0), at(0, last), at(last, last)] }
+    }, url)
+    expect([icon.width, icon.height]).toEqual([512, 512])
+    for (const pixel of icon.corners) expect(pixel, 'a corner is the brand blue, fully opaque').toEqual([0, 122, 255, 255])
   })
 
   // iOS shows this file as the Home Screen icon. It ignores an SVG (and then uses a screenshot of the page), wants
@@ -101,6 +136,10 @@ test.describe('service worker', () => {
     expect(cached.some((path) => path.endsWith('.js'))).toBe(true)
     expect(cached.some((path) => path.endsWith('.css'))).toBe(true)
     expect(cached.some((path) => path === '/index.html' || path === '/')).toBe(true)
+    // the icons that the manifest lists as "any" stay in it, but the maskable one does not: the system fetches a launcher
+    // icon when the app is installed and no page shows it, so every phone would only download it for nothing
+    expect(cached).toEqual(expect.arrayContaining(['/pwa-192x192.png', '/pwa-512x512.png']))
+    expect(cached.filter((path) => path.includes('maskable')), 'the maskable icon is not precached').toEqual([])
   })
 })
 
