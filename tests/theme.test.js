@@ -89,7 +89,7 @@ describe('index.html applies the same theme before the first paint', () => {
   // public/, loaded by a script tag of index.html. The comments are dropped first: a word in a comment must not satisfy a check.
   const html = withoutComments(fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8'))
   const script = fs.readFileSync(new URL('../public/theme-boot.js', import.meta.url), 'utf8').replace(/^\s*\/\/.*$/gm, '')
-  const tags = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)].map((match) => ({ attributes: match[1], body: match[2], at: match.index }))
+  const tags = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi)].map((match) => ({ attributes: match[1], body: match[2], at: match.index }))
   const bootTags = tags.filter((tag) => /\bsrc\s*=\s*["']?\/theme-boot\.js["']?/i.test(tag.attributes))
 
   it('has a script file that reads the same storage key and values', () => {
