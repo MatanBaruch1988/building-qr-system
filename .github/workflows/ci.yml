@@ -1,7 +1,7 @@
 # Continuous integration. Four checks, and branch protection (.github/rulesets/) requires all of them to merge:
 #   guards                 migrations only move forward, tests are not removed, the PR title, ESLint, the type check,
-#                          an audit of the production dependencies (and a warning, never a failure, for the
-#                          development ones)
+#                          the size budget of the built app, an audit of the production dependencies (and a warning,
+#                          never a failure, for the development ones)
 #   unit                   Vitest, against a Postgres 18 container (production runs Postgres 18 on Neon)
 #   e2e (android-chrome)   Playwright, Chromium as a Pixel 7
 #   e2e (iphone-webkit)    Playwright, WebKit as an iPhone 14
@@ -108,6 +108,11 @@ jobs:
 
       - name: Type-check
         run: npm run typecheck
+
+      # Builds the app and checks its size against scripts/check-bundle-size.json (the JavaScript and the CSS of each app and
+      # the precache that every phone downloads, brotli-compressed). It needs no secret and no environment variable.
+      - name: Build the app and check it against the size budget
+        run: npm run size
 
       - name: Audit the production dependencies
         run: npm audit --omit=dev --audit-level=high
