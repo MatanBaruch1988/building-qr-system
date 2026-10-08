@@ -25,6 +25,15 @@ const ADMIN_ERRORS = '/api/admin/client-errors'
 const OUTBOX = 'qr.errors.v1'
 const outboxOf = (page) => page.evaluate((key) => localStorage.getItem(key), OUTBOX)
 
+// WebKit refuses a request that starts while the page is being replaced, and logs it as "Fetch API cannot load ... due to access
+// control checks", which the page's console guard counts. A screen asks for its data from effects that run after it is drawn, so a
+// heading on the screen does not mean that its requests have started: before a test reloads or leaves that screen, it waits for their
+// answers. Each of these is called before the action that draws the screen.
+/** The provider's home screen after a sign-in: today's visits, and the phone's status report (src/worker/deviceStatus.js). */
+const homeLoaded = (page) => Promise.all([page.waitForResponse(VISITS_LIST), page.waitForResponse('**/api/my/device-status')])
+/** The committee's shell after a sign-in, on its first tab: the points and the providers of that tab, and the building's name. */
+const shellLoaded = (page) => Promise.all(['points', 'providers', 'building'].map((name) => page.waitForResponse(`**/api/admin/${name}`)))
+
 /** The lines that the app logs for a crash. The page's console guard fails the test on anything else. */
 function watchCrashLines(page) {
   allowConsoleErrors(page, /^Screen crash \(/)
@@ -49,8 +58,10 @@ async function expectTouchTargets(...buttons) {
 test('a broken screen of the provider app shows a message and two ways back, and each one works', async ({ page }) => {
   const crashes = watchCrashLines(page)
   await page.goto('/')
+  const loaded = homeLoaded(page)
   await signIn(page, PEOPLE.ploni)
   await expect(page.getByRole('heading', { name: HOME_HE })).toBeVisible()
+  await loaded
 
   await breakVisitsList(page)
   await page.reload()
@@ -97,8 +108,10 @@ test('the broken screen speaks the language and wears the theme that the person 
   await page.goto('/')
   await page.getByLabel(he['lang.label']).selectOption('en') // John reads English: he picks it himself
   await page.getByLabel(en['theme.label']).selectOption('light')
+  const loaded = homeLoaded(page)
   await signIn(page, PEOPLE.john, en)
   await expect(page.getByRole('heading', { name: HOME_EN })).toBeVisible()
+  await loaded
 
   await breakVisitsList(page)
   await page.reload()
@@ -121,7 +134,9 @@ test('the broken screen speaks the language and wears the theme that the person 
 test('a broken screen of the committee app is Hebrew, on a phone and on a computer, and Try again brings the app back', async ({ page }) => {
   allowConsoleErrors(page, /status of 401/) // the sign-in screen asks /api/admin/me before anyone is signed in
   const crashes = watchCrashLines(page)
+  const loaded = shellLoaded(page)
   await adminSignIn(page)
+  await loaded
 
   // The committee member's name arrives as an object: the shell cannot draw it.
   await page.route(ADMIN_ME, (route) => route.fulfill({ json: { admin: { name: { first: 'x' }, email: 'a@example.test' } } }))
