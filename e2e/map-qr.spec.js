@@ -10,18 +10,20 @@ import { test, expect, SAMPLE_POINT, POINTS, adminSignIn, allowConsoleErrors } f
 const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64')
 
 /**
- * Answers the images of the map locally, so that no test depends on a server outside this machine: the tiles come from
- * OpenStreetMap and the marker pictures from cdnjs (the URLs in MapPicker.jsx). Returns the list of URLs it answered.
+ * Answers the tiles of the map locally, so that no test depends on a server outside this machine: they come from
+ * OpenStreetMap's one address (the URL in MapPicker.jsx). The marker pictures come with the app (data: URLs), so there is
+ * nothing to answer for them. Returns the URLs of the tiles that it answered and the host of every request that the page
+ * made (a data: URL has none).
  */
 async function stubMapImages(page) {
-  const served = []
-  const answer = (route) => {
-    served.push(route.request().url())
+  const tiles = []
+  const hosts = []
+  page.on('request', (request) => hosts.push(new URL(request.url()).hostname))
+  await page.route('https://tile.openstreetmap.org/**', (route) => {
+    tiles.push(route.request().url())
     return route.fulfill({ contentType: 'image/png', body: PIXEL })
-  }
-  await page.route('https://*.tile.openstreetmap.org/**', answer)
-  await page.route('https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/**', answer)
-  return served
+  })
+  return { tiles, hosts }
 }
 
 test.beforeEach(async ({ page }) => {
@@ -33,7 +35,7 @@ test.beforeEach(async ({ page }) => {
 const lobbyTile = (page) => page.getByRole('article').filter({ hasText: 'לובי' })
 
 test('the point form shows the map with the marker and the circle at the point, and a click on the map moves them', async ({ page }) => {
-  const served = await stubMapImages(page)
+  const { tiles, hosts } = await stubMapImages(page)
   await adminSignIn(page)
   await lobbyTile(page).getByRole('button', { name: 'עריכה' }).click()
   const dialog = page.getByRole('dialog', { name: 'עריכת נקודה: לובי' })
@@ -48,8 +50,10 @@ test('the point form shows the map with the marker and the circle at the point, 
   // The marker is Leaflet's own: a button that the keyboard reaches, named by its alt text ("Marker").
   const marker = map.getByRole('button', { name: 'Marker' })
   await expect(marker).toHaveCount(1)
-  // its picture is the CDN copy that MapPicker points the default icon to (the retina one on a phone)
-  await expect(marker).toHaveAttribute('src', /^https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/leaflet\/1\.9\.4\/images\/marker-icon(-2x)?\.png$/)
+  // its picture comes with the app: a PNG inside the bundle (a data: URL), not a request to a server, and the browser decoded it
+  await expect(marker).toHaveAttribute('src', /^data:image\/png;base64,.{100,}/)
+  await expect.poll(() => marker.evaluate((img) => img.naturalWidth)).toBeGreaterThan(0)
+  await expect(map.locator('img.leaflet-marker-shadow')).toHaveAttribute('src', /^data:image\/png;base64,.{100,}/)
 
   // the form fields hold the coordinates of the point, the same ones the marker stands at
   const lat = dialog.getByLabel('קו רוחב')
@@ -69,9 +73,12 @@ test('the point form shows the map with the marker and the circle at the point, 
   await expect(marker).toHaveCount(1)
   await expect.poll(async () => (await marker.boundingBox()).x).not.toBe(before.x)
 
-  // every image of the map was answered here, none came from the internet
-  expect(served.some((url) => new URL(url).hostname.endsWith('.tile.openstreetmap.org')), 'tiles were requested').toBe(true)
-  expect(served.some((url) => url.includes('/images/marker-icon')), 'the marker picture was requested').toBe(true)
+  // the tiles were requested from OpenStreetMap's one address (answered here, none came from the internet), and the page
+  // loaded nothing from cdnjs: the marker pictures are not fetched from a CDN
+  expect(tiles.length, 'tiles were requested').toBeGreaterThan(0)
+  expect(tiles.every((url) => new URL(url).hostname === 'tile.openstreetmap.org'), 'every tile came from tile.openstreetmap.org').toBe(true)
+  expect(hosts, 'the tiles were requested from tile.openstreetmap.org').toContain('tile.openstreetmap.org')
+  expect(hosts, 'nothing was requested from cdnjs').not.toContain('cdnjs.cloudflare.com')
 
   // leave without saving: the other specs rely on the point staying where the seed put it
   await dialog.getByRole('button', { name: 'ביטול' }).click()
