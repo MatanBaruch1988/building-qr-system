@@ -8,7 +8,8 @@
 // case that ADR 0002 closes in the build and that this checks again from the outside). Three steps, each prints one line:
 //   1. GET /api/health until the production domain serves the expected commit (a promotion can lag behind the
 //      deployment event, and a CDN can answer from its cache for a moment, so it polls with a cache-busting query).
-//   2. GET / returns the app page with its root element.
+//   2. GET / returns the app page with its root element, and sends the Content-Security-Policy of vercel.json of the
+//      checked-out commit, exactly (enforcing or report-only, whichever vercel.json sets).
 //   3. GET /api/health/db with the agent key: the database answers, and its newest migration is the newest file in
 //      db/migrations of the checked-out commit. Without a key this step is a warning, not a failure.
 // Steps 2 and 3 only run when step 1 passed, because otherwise they would test a different deployment.
@@ -21,6 +22,8 @@
 // The key goes only into the Authorization header of one request, never into a log line, and the request does not follow
 // a redirect. Nothing the server answers is printed except the known fields of the two health routes, cleaned so that a
 // response cannot write a line or a workflow command into the log. Node built-ins and the global fetch only, no install.
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { migrationFiles, DEFAULT_DIR } from '../server/migrate.js'
 import { isMain } from './ci-git.mjs'
 
@@ -34,6 +37,19 @@ const REQUEST_TIMEOUT_MS = 20_000
 // The element that main.jsx mounts the app into (index.html).
 const ROOT_ELEMENT = /<div\b[^>]*\bid\s*=\s*["']?root["']?[\s>/]/i
 const FULL_SHA = /^[0-9a-f]{40}$/
+const VERCEL_JSON = fileURLToPath(new URL('../vercel.json', import.meta.url))
+export const POLICY_HEADERS = Object.freeze(['Content-Security-Policy', 'Content-Security-Policy-Report-Only'])
+
+/**
+ * The Content-Security-Policy that vercel.json sends on every page (the headers rule "/(.*)"): { name, value }, where the
+ * name says whether it is enforced or only reported. Null when vercel.json sets none.
+ */
+export function expectedPolicy(file = VERCEL_JSON) {
+  const config = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const rule = (config.headers ?? []).find((entry) => entry.source === '/(.*)')
+  const header = (rule?.headers ?? []).find((entry) => POLICY_HEADERS.includes(entry.key))
+  return header ? { name: header.key, value: header.value } : null
+}
 
 /** The newest migration file name of `dir` (the last by name, the same rule that migrate() uses), or null for none. */
 export function newestMigration(dir = DEFAULT_DIR) {
@@ -93,7 +109,7 @@ export function readConfig(env) {
   }
 }
 
-/** One GET. Always resolves: { status, text } or { problem } (no answer). The query makes a cached answer impossible. */
+/** One GET. Always resolves: { status, text, headers } or { problem } (no answer). The query makes a cached answer impossible. */
 async function get(fetchFn, now, baseUrl, pathname, { headers = {}, redirect = 'follow' } = {}) {
   try {
     const res = await fetchFn(`${baseUrl}${pathname}?smoke=${now()}`, {
@@ -101,7 +117,7 @@ async function get(fetchFn, now, baseUrl, pathname, { headers = {}, redirect = '
       redirect,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
-    return { status: res.status, text: await res.text() }
+    return { status: res.status, text: await res.text(), headers: res.headers }
   } catch (err) {
     return { problem: `no answer (${printable(err?.cause?.code ?? err?.name ?? 'error')})` }
   }
@@ -152,15 +168,23 @@ export async function waitForCommit({ baseUrl, sha, fetch: fetchFn, sleep, now, 
   }
 }
 
-/** Step 2. The app page. Returns { ok, line }. */
-export async function checkHome({ baseUrl, fetch: fetchFn, now }) {
+/**
+ * Step 2. The app page, and its Content-Security-Policy: `policy` is what vercel.json sets ({ name, value }, or null for
+ * none). The header must be there with exactly that name and value; what the server sent instead is never printed.
+ * Returns { ok, line }.
+ */
+export async function checkHome({ baseUrl, fetch: fetchFn, now, policy = null }) {
   const answer = await get(fetchFn, now, baseUrl, '/')
   if (answer.problem) return { ok: false, line: `GET / gave ${answer.problem}` }
   if (answer.status !== 200) return { ok: false, line: `GET / answered HTTP ${answer.status}` }
   if (!ROOT_ELEMENT.test(answer.text)) {
     return { ok: false, line: 'GET / answered HTTP 200 but the page has no root element, so the app cannot start' }
   }
-  return { ok: true, line: 'GET / returns the app page (HTTP 200, root element found)' }
+  if (!policy) return { ok: true, line: 'GET / returns the app page (HTTP 200, root element found)' }
+  const sent = answer.headers?.get(policy.name) ?? null
+  if (sent === null) return { ok: false, line: `GET / sends no ${policy.name} header, which vercel.json sets` }
+  if (sent !== policy.value) return { ok: false, line: `GET / sends a ${policy.name} that is not the one in vercel.json` }
+  return { ok: true, line: `GET / returns the app page (HTTP 200, root element found, ${policy.name} as in vercel.json)` }
 }
 
 /** Step 3. The database and its newest migration, with the agent key. Returns { ok, line }. */
@@ -218,6 +242,7 @@ export async function runSmoke({
   log: write = console.log,
   warn: writeWarning = write,
   migrationsDir = DEFAULT_DIR,
+  policy = expectedPolicy(),
 }) {
   // Whatever a line is made of, the key is cut out of it before it is written (the lines are cleaned already: this is a
   // second net, for example against a server that repeats the key in a field that is printed).
@@ -244,7 +269,7 @@ export async function runSmoke({
   report(served.ok ? 'ok  ' : 'FAIL', 1, served)
 
   if (served.ok) {
-    const home = await checkHome({ baseUrl, fetch: fetchFn, now })
+    const home = await checkHome({ baseUrl, fetch: fetchFn, now, policy })
     report(home.ok ? 'ok  ' : 'FAIL', 2, home)
 
     if (key) {
