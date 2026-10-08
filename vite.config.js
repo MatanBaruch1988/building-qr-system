@@ -7,8 +7,8 @@ import vercel from './vercel.json' with { type: 'json' }
 // The headers that Vercel puts on every page and file (the rule "/(.*)" of vercel.json, whatever else is there), as the
 // object that Vite wants: { name: value }. `vite preview` sends them below, so the E2E tests, which run on the preview of the
 // production build, run the app under the same headers as production (the Content-Security-Policy among them), and a page
-// that breaks the policy fails its test. The "/assets/(.*)" rule is not copied: it is a cache rule, and the preview sets its own cache headers.
-// tests/app-build.test.js pins that the two cannot drift.
+// that breaks the policy fails its test. The "/assets/(.*)" rule is not copied: it is a cache rule, and the preview sets
+// its own cache headers. tests/app-build.test.js pins that the two cannot drift.
 const everyPageRule = vercel.headers.find((rule) => rule.source === '/(.*)')
 if (!everyPageRule) throw new Error('vercel.json has no headers rule for "/(.*)": vite preview would send none of the production headers.')
 const productionHeaders = Object.fromEntries(everyPageRule.headers.map(({ key, value }) => [key, value]))
