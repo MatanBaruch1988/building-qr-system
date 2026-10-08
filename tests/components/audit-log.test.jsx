@@ -12,6 +12,7 @@ import { ToastProvider, ConfirmProvider } from '../../src/admin/ui.jsx'
 import { ACTION_LABELS, GROUP_OPTIONS } from '../../src/admin/auditLabels.js'
 import { describeEntry, looksSecret } from '../../src/admin/auditDescribe.js'
 import { api } from '../../src/api/client.js'
+import { clearLoadCache } from '../../src/admin/loadCache.js'
 
 vi.mock('../../src/api/client.js', () => ({ api: vi.fn() }))
 
@@ -44,6 +45,7 @@ const show = () => render(<ToastProvider><ConfirmProvider><AuditView /></Confirm
 const WAIT = { timeout: 4000 } // the pause before a query is 350 ms
 /** Shows one entry and returns its row. */
 async function rowFor(over, phrase) {
+  clearLoadCache() // every call stands for a new page load, which starts with nothing kept (tests/components/load-cache.test.jsx tests the cache itself)
   server({ audit: page([entry(over)]) })
   show()
   // by the class of the phrase: a word like "ניקוי אוטומטי" is also an option of the group filter

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { adminApi, auditLog, errorText } from '../api.js'
-import { useLoad } from '../hooks.js'
+import { useLoad, LOAD_KEY } from '../hooks.js'
+import { loadCacheEpoch, readLoadCache, writeLoadCache } from '../loadCache.js'
 import { Field, EmptyState, Spinner, IconButton, DateInput, useToast, useAction } from '../ui.jsx'
 import { IconClock, IconRefresh, IconAlert } from '../icons.jsx'
 import { formatDay, formatTime, isoDay } from '../../../shared/datetime.js'
@@ -30,6 +31,16 @@ function params(filters) {
     out[key] = value
   }
   return out
+}
+
+// The first page of each set of filters is kept for the session (src/admin/loadCache.js), so that opening the log again draws it at once
+// while the current one is asked for. The key is every filter that is set, so a filter never shows the entries of another. Only the first
+// page is kept: "load more" pages are not.
+const cacheKey = (filters) => `audit:${new URLSearchParams({ ...params(filters), limit: String(PAGE) }).toString()}`
+/** The first page that this screen showed for these filters before, as the state of the list; `null` when there is none. */
+function rememberedList(filters) {
+  const kept = readLoadCache(cacheKey(filters))
+  return kept ? { entries: kept.entries, cursor: kept.cursor, status: 'ready' } : null
 }
 
 /** One line of detail. The values are bidi-isolated: a name or a number inside Hebrew keeps its own direction. */
@@ -67,10 +78,11 @@ function EntryRow({ entry }) {
 
 export default function AuditView() {
   const toast = useToast()
-  const members = useLoad(() => adminApi('/admins')) // the same list as the Committee tab
+  const members = useLoad(() => adminApi('/admins'), [], { cacheKey: LOAD_KEY.admins }) // the same list as the Committee tab
   const [filters, setFilters] = useState(EMPTY_FILTERS) // what the inputs show
   const [applied, setApplied] = useState(filters) // what is actually queried (after a short pause in typing)
-  const [{ entries, cursor, status }, setList] = useState({ entries: [], cursor: null, status: 'loading' })
+  // The list starts with the page that was kept for the first filters, if there is one (the log was open before in this session).
+  const [{ entries, cursor, status }, setList] = useState(() => rememberedList(filters) ?? { entries: [], cursor: null, status: 'loading' })
   const [busy, run] = useAction(toast, errorText)
   const seq = useRef(0) // numbers the queries: an answer to an older one is ignored
 
@@ -79,19 +91,29 @@ export default function AuditView() {
     return () => clearTimeout(t)
   }, [filters])
 
-  const load = useCallback(async () => {
+  // Asks for the first page of the applied filters. `shown` is the page that was kept for them (see `rememberedList`): it stays on
+  // screen while the answer comes, and if the request fails it stays. Without it the list starts from the loading state and a failure
+  // empties it.
+  const fetchFirstPage = useCallback(async (shown) => {
     const mine = ++seq.current
-    setList({ entries: [], cursor: null, status: 'loading' }) // never show the old filter's rows under the new one
+    const key = cacheKey(applied)
+    const asked = loadCacheEpoch()
+    setList(shown ?? { entries: [], cursor: null, status: 'loading' }) // never show the old filter's rows under the new one
     try {
       const res = await auditLog({ ...params(applied), limit: PAGE })
-      if (mine === seq.current) setList({ entries: res.entries, cursor: res.next_cursor, status: 'ready' })
+      const page = { entries: res.entries, cursor: res.next_cursor }
+      writeLoadCache(key, page, asked) // for these filters, whatever the screen is doing by now
+      if (mine !== seq.current) return
+      setList({ ...page, status: 'ready' })
+      if (shown) seq.current += 1 // a "load more" that was asked for the page above belongs to a list that has just been replaced
     } catch (err) {
       if (mine !== seq.current) return
-      setList({ entries: [], cursor: null, status: 'error' })
+      if (!shown) setList({ entries: [], cursor: null, status: 'error' })
       toast.error(errorText(err))
     }
   }, [applied, toast])
-  useEffect(() => { load() }, [load])
+  const load = useCallback(() => fetchFirstPage(null), [fetchFirstPage]) // the refresh button and "try again": from the loading state, as ever
+  useEffect(() => { fetchFirstPage(rememberedList(applied)) }, [fetchFirstPage, applied])
 
   const more = async () => {
     const mine = seq.current

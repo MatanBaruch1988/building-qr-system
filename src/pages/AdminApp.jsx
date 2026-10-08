@@ -11,7 +11,7 @@ import AgentView from '../admin/views/AgentView.jsx'
 import CommitteeView from '../admin/views/CommitteeView.jsx'
 import { useTab } from '../admin/tab.js'
 import { BuildingNameProvider, useBuildingName, APP_NAME } from '../admin/buildingName.jsx'
-import { useErrorReport } from '../admin/hooks.js'
+import { useErrorReport, clearLoadCache } from '../admin/hooks.js'
 import { noteClientError, setPlace, currentPlace } from '../ui/errorReport.js'
 import { applyUpdate, isUpdateReady, subscribeUpdate } from '../worker/update.js'
 import ThemeSwitch, { HEBREW_THEME_LABELS as THEME_LABELS } from '../ui/ThemeSwitch.jsx'
@@ -182,6 +182,7 @@ export default function AdminApp() {
         signedIn.current = false
         noteClientError({ kind: 'signed_out', place: currentPlace(), code: 'admin_required' })
       }
+      clearLoadCache() // the member is gone: what the tabs showed is not for whoever signs in next
       setNotice('פג תוקף ההתחברות. היכנסו שוב.')
       setBoot((b) => (b.status === 'ready' ? { ...b, admin: null } : b))
     }
@@ -203,10 +204,10 @@ export default function AdminApp() {
     content = (
       <>
         {notice && <div className="w-banner w-banner--warn" role="status" style={{ margin: '16px auto 0', maxWidth: 440 }}><IconAlert /><div className="w-banner__body">{notice}</div></div>}
-        <LoginScreen config={boot.config} onSignedIn={(admin) => { setNotice(''); setBoot((b) => ({ ...b, admin })) }} />
+        <LoginScreen config={boot.config} onSignedIn={(admin) => { clearLoadCache(); setNotice(''); setBoot((b) => ({ ...b, admin })) }} />
       </>
     )
-  } else content = <Shell admin={boot.admin} onSignedOut={() => { setNotice(''); setBoot((b) => ({ ...b, admin: null })) }} />
+  } else content = <Shell admin={boot.admin} onSignedOut={() => { clearLoadCache(); setNotice(''); setBoot((b) => ({ ...b, admin: null })) }} />
 
   return (
     <div className="a-app">

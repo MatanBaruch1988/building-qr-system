@@ -1,6 +1,6 @@
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { adminApi, errorText } from '../api.js'
-import { useLoad, formatDateTime } from '../hooks.js'
+import { useLoad, setLoadCache, LOAD_KEY, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconBan, IconCheck, IconShield, IconAlert, IconTrash, IconClock, IconChevron } from '../icons.jsx'
 import { ADDRESS_MAX_LENGTH, BUILDING_NAME_MAX_LENGTH, NAME_MAX_LENGTH } from '../../../shared/contract.js'
@@ -27,6 +27,9 @@ function savedMessage({ addressChanged, nameChanged }, building) {
   return building.address ? 'כתובת הבניין נשמרה' : 'כתובת הבניין הוסרה'
 }
 
+/** The two fields of the card from a building as the server sends it (`null`: nothing yet). A server from before names existed sends no name. */
+const fieldsOf = (building) => ({ address: building?.address ?? '', name: building?.name ?? '' })
+
 /**
  * The building's name and address: shown at the top of the service providers' app (the name above the address) and, the name, in the
  * committee app too. Both are kept in the database of this committee and either can stay empty (the apps then show nothing for it).
@@ -38,24 +41,31 @@ function BuildingCard() {
   const toast = useToast()
   const { setName: showName } = useBuildingName()
   const [busy, run] = useAction(toast, errorText)
-  const [stored, setStored] = useState({ address: '', name: '' }) // as the server has it
-  const [addressText, setAddressText] = useState('') // what the fields say now
-  const [nameText, setNameText] = useState('')
-  const [errors, setErrors] = useState({ address: '', name: '' })
-
-  // Takes what the server has (a load, a save) into the fields and the brand. A server from before names existed sends no name.
-  const take = (building) => {
-    const next = { address: building.address, name: building.name ?? '' }
-    setStored(next)
-    setAddressText(next.address)
-    setNameText(next.name)
-    showName(next.name)
-  }
+  // When this card was open before in this session, `loaded.data` is the last answer of the server and the fields start with it (the
+  // brand is left alone: it shows the name that the shell, or a save, put there). The answer that follows comes through `take`.
   const loaded = useLoad(async () => {
     const { building } = await adminApi('/building')
-    take(building)
+    take(building, { keepEdits: true })
     return building
-  })
+  }, [], { cacheKey: LOAD_KEY.building })
+  const [stored, setStored] = useState(() => fieldsOf(loaded.data)) // as the server has it
+  const storedRef = useRef(stored)
+  const [addressText, setAddressText] = useState(stored.address) // what the fields say now
+  const [nameText, setNameText] = useState(stored.name)
+  const [errors, setErrors] = useState({ address: '', name: '' })
+
+  // Takes what the server has (a load, a save) into the fields and the brand. With `keepEdits` a field that the person has changed
+  // since the last answer keeps what they typed (an answer that arrives while a card drawn from the cache is already being edited);
+  // a save replaces both fields.
+  const take = (building, { keepEdits = false } = {}) => {
+    const before = storedRef.current
+    const next = fieldsOf(building)
+    storedRef.current = next
+    setStored(next)
+    setAddressText((text) => (keepEdits && text !== before.address ? text : next.address))
+    setNameText((text) => (keepEdits && text !== before.name ? text : next.name))
+    showName(next.name)
+  }
 
   const address = addressText.trim()
   const name = nameText.trim()
@@ -84,6 +94,7 @@ function BuildingCard() {
     })
     if (!res) return
     take(res.building)
+    setLoadCache(LOAD_KEY.building, res.building) // the next time this card opens it draws what was saved
     toast.ok(savedMessage({ addressChanged, nameChanged }, res.building))
   }
 
@@ -177,7 +188,7 @@ function AddDialog({ onClose, onAdded }) {
 export default function CommitteeView({ admin }) {
   const toast = useToast()
   const confirm = useConfirm()
-  const admins = useLoad(() => adminApi('/admins'))
+  const admins = useLoad(() => adminApi('/admins'), [], { cacheKey: LOAD_KEY.admins })
   const [adding, setAdding] = useState(false)
   const [busy, run] = useAction(toast, errorText)
   const list = admins.data?.admins ?? []
