@@ -30,7 +30,7 @@ test('a provider whose session the server ended is reported after the next sign-
   await page.goto('/')
   await signIn(page, PEOPLE.ploni)
   await expect(page.getByRole('heading', { name: /^שלום,/ })).toBeVisible()
-  await homeLoaded // nothing is on its way when the page is loaded again: WebKit reports a request that a reload cuts short as an uncaught error
+  await homeLoaded // the home screen's requests have started before the page is loaded again: WebKit reports one that starts during a reload as an uncaught error
 
   // The server ended the session: the app finds out when it asks at the next start.
   sessionEnded = true
