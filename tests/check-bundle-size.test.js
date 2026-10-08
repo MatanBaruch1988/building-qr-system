@@ -21,6 +21,7 @@ import {
   parseArgs,
   precacheUrls,
   sizeOfUrl,
+  withoutComments,
 } from '../scripts/check-bundle-size.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
@@ -551,5 +552,19 @@ describe('check-bundle-size: the guards job of CI', () => {
     const scripts = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).scripts
     expect(scripts.size).toBe('vite build && node scripts/check-bundle-size.mjs')
     expect(scripts.build).toBe('vite build')
+  })
+})
+
+describe('comments in the page', () => {
+  it('removes every comment, also one that appears when another is removed, and an unclosed one to the end', () => {
+    expect(withoutComments('a<!-- b -->c<!--d-->e')).toBe('ace')
+    expect(withoutComments('<!<!---->-- x -->y')).toBe('y') // removing the inner comment joins the outer one, which goes too
+    expect(withoutComments('a<!-- never closed <script src="/x.js">')).toBe('a')
+    expect(withoutComments('no comment')).toBe('no comment')
+  })
+
+  it('never counts a script or a stylesheet inside a comment, however the comment is built', () => {
+    const html = '<!<!---->-- <script type="module" src="/hidden.js"></script> --><script type="module" src="/a.js"></script><link rel="stylesheet" href="/a.css">'
+    expect(entryFiles(html)).toEqual({ js: ['/a.js'], css: ['/a.css'] })
   })
 })

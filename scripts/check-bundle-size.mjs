@@ -84,6 +84,23 @@ function attributesOf(tagText) {
  * Throws when the page loads no module script or no stylesheet at all: the guard would measure nothing.
  */
 export function entryFiles(html) {
+  return entryFilesOf(withoutComments(html))
+}
+
+/**
+ * The HTML without its comments; one that is not closed runs to the end, as in a browser. A loop and not one replace: a
+ * single pass of a regular expression can leave a "<!--" behind when removing one comment joins the pieces of another.
+ */
+export function withoutComments(html) {
+  let text = String(html)
+  for (let start = text.indexOf('<!--'); start !== -1; start = text.indexOf('<!--')) {
+    const end = text.indexOf('-->', start + 4)
+    text = end === -1 ? text.slice(0, start) : text.slice(0, start) + text.slice(end + 3)
+  }
+  return text
+}
+
+function entryFilesOf(html) {
   const js = []
   const css = []
   const external = []
@@ -91,7 +108,7 @@ export function entryFiles(html) {
     if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(url)) external.push(url)
     else if (!list.includes(url)) list.push(url)
   }
-  for (const tag of String(html).replace(/<!--[\s\S]*?-->/g, '').matchAll(/<(script|link)\b[^>]*>/gi)) {
+  for (const tag of html.matchAll(/<(script|link)\b[^>]*>/gi)) {
     const attributes = attributesOf(tag[0].slice(1))
     if (tag[1].toLowerCase() === 'script') {
       if (attributes.type?.trim().toLowerCase() === 'module' && attributes.src) add(js, attributes.src)
