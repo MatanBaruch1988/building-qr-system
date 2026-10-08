@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { adminApi, errorText, scanRefusals } from '../api.js'
-import { useLoad } from '../hooks.js'
+import { useLoad, LOAD_KEY } from '../hooks.js'
+import { dropLoadCache, loadCacheEpoch, readLoadCache, writeLoadCache } from '../loadCache.js'
 import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, DateInput, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconList, IconDownload, IconRefresh, IconBan, IconUndo, IconAlert, IconTrash } from '../icons.jsx'
 import { formatDay, formatDateTime, formatTime, isoDay } from '../../../shared/datetime.js'
@@ -68,6 +69,17 @@ function params(f, extra = {}) {
 }
 const query = (f, extra) => new URLSearchParams(params(f, extra)).toString()
 
+// The first page of each set of filters is kept for the session (src/admin/loadCache.js), so that coming back to this tab draws it at
+// once while the current one is asked for. The key says the kind of list and every filter that is set, so a filter never shows the rows
+// of another. Only the first page is kept: "load more" pages are not (they are asked for again when the person wants them).
+const CACHE_PREFIX = 'history:'
+const cacheKey = (f) => `${CACHE_PREFIX}${f.outcome === NOT_COUNTED ? 'refusals' : 'scans'}:${query(f, { limit: PAGE })}`
+/** The first page that this screen showed for these filters before, as the state of the list; `null` when there is none. */
+function rememberedList(f) {
+  const kept = readLoadCache(cacheKey(f))
+  return kept ? { rows: kept.rows, cursor: kept.cursor, status: 'ready', kind: kept.kind } : null
+}
+
 /** The refused visits for the same dates, point and provider (the other filters are about scans), one page. */
 function refusalsPage(f, extra) {
   const { from, to, point_id, provider_id, limit, cursor } = params(f, extra)
@@ -125,8 +137,8 @@ function VoidDialog({ scan, onClose, onDone }) {
 
 export default function HistoryView() {
   const toast = useToast()
-  const points = useLoad(() => adminApi('/points'))
-  const providers = useLoad(() => adminApi('/providers'))
+  const points = useLoad(() => adminApi('/points'), [], { cacheKey: LOAD_KEY.points })
+  const providers = useLoad(() => adminApi('/providers'), [], { cacheKey: LOAD_KEY.providers })
   const [filters, setFilters] = useState(DEFAULTS) // what the inputs show
   const [applied, setApplied] = useState(filters) // what is actually queried (after a short pause in typing)
   // A date field that is half typed shows something other than what is queried (the last good date). The list may stay,
@@ -134,7 +146,8 @@ export default function HistoryView() {
   const [unfinished, setUnfinished] = useState({ from: false, to: false })
   // `kind` says which list the rows are (scans or refusals), set when they arrive: the filter can already say another one
   // while the pause before a query runs, and rows are never drawn as the wrong kind.
-  const [{ rows, cursor, status, kind }, setList] = useState({ rows: [], cursor: null, status: 'loading', kind: 'scans' })
+  // The list starts with the page that was kept for the first filters, if there is one (the tab was open before in this session).
+  const [{ rows, cursor, status, kind }, setList] = useState(() => rememberedList(filters) ?? { rows: [], cursor: null, status: 'loading', kind: 'scans' })
   const [voiding, setVoiding] = useState(null)
   const confirm = useConfirm()
   const [busy, run] = useAction(toast, errorText)
@@ -145,21 +158,31 @@ export default function HistoryView() {
     return () => clearTimeout(t)
   }, [filters])
 
-  const load = useCallback(async () => {
+  // Asks for the first page of the applied filters. `shown` is the page that was kept for them (see `rememberedList`): it stays on
+  // screen while the answer comes, and if the request fails it stays. Without it the list starts from the loading state and a failure
+  // empties it.
+  const fetchFirstPage = useCallback(async (shown) => {
     const mine = ++seq.current
     const refused = applied.outcome === NOT_COUNTED
     const kind = refused ? 'refusals' : 'scans'
-    setList({ rows: [], cursor: null, status: 'loading', kind }) // never show the old filter's rows under the new one
+    const key = cacheKey(applied)
+    const asked = loadCacheEpoch()
+    setList(shown ?? { rows: [], cursor: null, status: 'loading', kind }) // never show the old filter's rows under the new one
     try {
       const res = refused ? await refusalsPage(applied, { limit: PAGE }) : await adminApi(`/scans?${query(applied, { limit: PAGE })}`)
-      if (mine === seq.current) setList({ rows: refused ? res.refusals : res.scans, cursor: res.next_cursor, status: 'ready', kind })
+      const page = { rows: refused ? res.refusals : res.scans, cursor: res.next_cursor, kind }
+      writeLoadCache(key, page, asked) // for these filters, whatever the screen is doing by now
+      if (mine !== seq.current) return
+      setList({ ...page, status: 'ready' })
+      if (shown) seq.current += 1 // a "load more" that was asked for the page above belongs to a list that has just been replaced
     } catch (err) {
       if (mine !== seq.current) return
-      setList({ rows: [], cursor: null, status: 'error', kind })
+      if (!shown) setList({ rows: [], cursor: null, status: 'error', kind })
       toast.error(errorText(err))
     }
   }, [applied, toast])
-  useEffect(() => { load() }, [load])
+  const load = useCallback(() => fetchFirstPage(null), [fetchFirstPage]) // the refresh button and "try again": from the loading state, as ever
+  useEffect(() => { fetchFirstPage(rememberedList(applied)) }, [fetchFirstPage, applied])
 
   const more = async () => {
     const mine = seq.current
@@ -174,11 +197,13 @@ export default function HistoryView() {
   }
 
   // Update the one row in place instead of reloading: the loaded pages and the scroll position stay.
-  const patch = (scan) =>
+  const patch = (scan) => {
+    dropLoadCache(CACHE_PREFIX) // the pages that were kept show this scan as it was
     setList((s) => ({
       ...s,
       rows: applied.include_voided ? s.rows.map((r) => (r.id === scan.id ? scan : r)) : s.rows.filter((r) => r.id !== scan.id),
     }))
+  }
   const restore = async (s) => {
     const res = await run(() => adminApi(`/scans/${s.id}/unvoid`, { method: 'POST', body: {} }), 'הנוכחות שוחזרה')
     if (res) patch(res.scan)
@@ -191,6 +216,7 @@ export default function HistoryView() {
       confirmLabel: 'מחיקה', danger: true,
     })
     if (ok && await run(() => adminApi(`/scans/${s.id}`, { method: 'DELETE' }), 'הנוכחות נמחקה')) {
+      dropLoadCache(CACHE_PREFIX)
       setList((st) => ({ ...st, rows: st.rows.filter((r) => r.id !== s.id) }))
     }
   }

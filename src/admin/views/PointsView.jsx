@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import { adminApi, errorText, copyText } from '../api.js'
-import { useLoad, SERVICE_TYPES, serviceLabel } from '../hooks.js'
+import { useLoad, LOAD_KEY, SERVICE_TYPES, serviceLabel } from '../hooks.js'
 import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { downloadDataUrl, safeFileName, useQrImage } from '../qr.js'
 import MapPicker from '../MapPicker.jsx'
@@ -236,8 +236,8 @@ function QrDialog({ point, onClose, onPrint, onChanged }) {
 
 export default function PointsView() {
   const toast = useToast()
-  const points = useLoad(() => adminApi('/points'))
-  const providers = useLoad(() => adminApi('/providers'))
+  const points = useLoad(() => adminApi('/points'), [], { cacheKey: LOAD_KEY.points })
+  const providers = useLoad(() => adminApi('/providers'), [], { cacheKey: LOAD_KEY.providers })
   const [editing, setEditing] = useState(null) // null | 'new' | point
   const [qrFor, setQrFor] = useState(null)
   const [printJob, setPrintJob] = useState(null)

@@ -2,6 +2,8 @@
 import { test, expect, he, en, POINTS, PEOPLE, FAR, OFFLINE_NOISE, skipOfflineOnWebKit, signIn, clearScans, allowConsoleErrors } from './fixtures.js'
 
 const scanLink = (code) => `/scan?code=${code}`
+const isCheckIn = (response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/scan'
+const isVisitsList = (request) => request.method() === 'GET' && new URL(request.url()).pathname === '/api/my/scans'
 
 test.beforeEach(async ({ request }) => {
   await clearScans(request)
@@ -40,8 +42,16 @@ test('signing in checks in at the point, names who signed in, and lists the visi
 
 test('scanning the same point again says it was already recorded', async ({ page }) => {
   await page.goto(scanLink(POINTS.lobby))
+  const checkedIn = page.waitForResponse(isCheckIn)
   await signIn(page, PEOPLE.ploni)
+  await checkedIn
+  // The answer of the check-in also makes the app ask for today's visits again, from an effect that can run after the success
+  // screen is drawn. A request that starts while WebKit is replacing the page is refused, and WebKit logs it as "Fetch API
+  // cannot load ... due to access control checks", so the next scan waits until that request has been made and answered.
+  // The list that sign-in asked for went out before the check-in's answer, so the next request for it is the one to wait for.
+  const listedAgain = page.waitForRequest(isVisitsList)
   await expect(page.getByRole('heading', { name: he['checkin.success.title'] })).toBeVisible()
+  await (await (await listedAgain).response())?.finished()
 
   await page.goto(scanLink(POINTS.lobby)) // still signed in on this phone
   await expect(page.getByRole('heading', { name: he['checkin.duplicate.title'] })).toBeVisible()

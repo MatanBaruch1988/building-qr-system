@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { adminApi, errorText, copyText } from '../api.js'
-import { useLoad, formatDateTime } from '../hooks.js'
+import { useLoad, LOAD_KEY, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconKey, IconCopy, IconBan, IconAlert, IconInfo, IconTrash } from '../icons.jsx'
 import { KEY_NAME_MAX_LENGTH } from '../../../shared/contract.js'
@@ -52,7 +52,7 @@ function NewKeyDialog({ onClose, onCreated }) {
 export default function AgentView() {
   const toast = useToast()
   const confirm = useConfirm()
-  const keys = useLoad(() => adminApi('/api-keys'))
+  const keys = useLoad(() => adminApi('/api-keys'), [], { cacheKey: LOAD_KEY.apiKeys })
   const [creating, setCreating] = useState(false)
   const [busy, run] = useAction(toast, errorText)
   const list = keys.data?.api_keys ?? []
