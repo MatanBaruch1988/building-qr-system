@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { adminApi, errorText, copyText, providerDevices } from '../api.js'
-import { useLoad, SERVICE_TYPES, serviceLabel, formatDateTime } from '../hooks.js'
+import { useLoad, LOAD_KEY, SERVICE_TYPES, serviceLabel, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, Switch, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconEdit, IconKey, IconDevice, IconBan, IconCheck, IconCopy, IconRefresh, IconUsers, IconAlert, IconTrash } from '../icons.jsx'
 import { generatePassword } from '../password.js'
@@ -199,7 +199,7 @@ function PhonesDialog({ provider, busy, onClose, onRevokeAll }) {
 export default function ProvidersView() {
   const toast = useToast()
   const confirm = useConfirm()
-  const providers = useLoad(() => adminApi('/providers'))
+  const providers = useLoad(() => adminApi('/providers'), [], { cacheKey: LOAD_KEY.providers })
   const [editing, setEditing] = useState(null)
   const [resetting, setResetting] = useState(null)
   const [handover, setHandover] = useState(null)

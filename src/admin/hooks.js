@@ -2,23 +2,51 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { adminApi } from './api.js'
 import { APP_COMMITTEE } from '../appKind.js'
 import { createErrorReporter } from '../ui/errorReport.js'
+import { loadCacheEpoch, readLoadCache, writeLoadCache } from './loadCache.js'
 
-/** Loads data once, then on demand. Keeps the previous data on screen while reloading. */
-export function useLoad(fn, deps = []) {
-  const [state, setState] = useState({ status: 'loading', data: null, error: null })
+// The in-memory cache of the last answers lives in loadCache.js; AdminApp empties it when the committee member changes.
+export { clearLoadCache, setLoadCache, LOAD_KEY } from './loadCache.js'
+
+/** The state of a load that has not answered yet: loading, or ready with the answer that was kept for `cacheKey` the last time. */
+function startState(cacheKey) {
+  const kept = cacheKey === undefined ? undefined : readLoadCache(cacheKey)
+  return kept === undefined
+    ? { cacheKey, status: 'loading', data: null, error: null }
+    : { cacheKey, status: 'ready', data: kept, error: null }
+}
+
+/**
+ * Loads data once, then on demand. Keeps the previous data on screen while reloading.
+ *
+ * With `cacheKey` the last good answer is kept in memory for the life of the page (src/admin/loadCache.js): a screen that opens again
+ * starts with it (`status: 'ready'`, no loading state), asks the server again at once, and takes the new answer when it comes. If that
+ * request fails the old data stays on screen and the state says `error`, as it does for a reload. `reload()` stores its answer too. A
+ * key that changes while the screen is open is another list: the old key's data is never shown under it. Without a key nothing is kept.
+ * @param {() => Promise<any>} fn
+ * @param {any[]} [deps]  the load runs again when these change
+ * @param {{ cacheKey?: string }} [options]
+ */
+export function useLoad(fn, deps = [], { cacheKey } = {}) {
+  const [state, setState] = useState(() => startState(cacheKey))
+  if (state.cacheKey !== cacheKey) setState(startState(cacheKey)) // the key changed: this is another list
   const fnRef = useRef(fn)
   fnRef.current = fn
+  const keyRef = useRef(cacheKey)
+  keyRef.current = cacheKey
   const load = useCallback(async () => {
+    const key = keyRef.current
+    const asked = loadCacheEpoch()
     try {
       const data = await fnRef.current()
-      setState({ status: 'ready', data, error: null })
+      if (key !== undefined) writeLoadCache(key, data, asked) // also when the screen has gone: the next one draws it
+      setState((s) => (s.cacheKey === key ? { cacheKey: key, status: 'ready', data, error: null } : s))
     } catch (error) {
-      setState((s) => ({ status: 'error', data: s.data, error }))
+      setState((s) => (s.cacheKey === key ? { cacheKey: key, status: 'error', data: s.data, error } : s))
     }
   }, [])
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- the caller's `deps` decide when to load again; `load` never changes
-  useEffect(() => { load() }, deps)
-  return { ...state, reload: load }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the caller's `deps` (and the key) decide when to load again; `load` never changes
+  useEffect(() => { load() }, [cacheKey, ...deps])
+  return { status: state.status, data: state.data, error: state.error, reload: load }
 }
 
 export const SERVICE_TYPES = [
