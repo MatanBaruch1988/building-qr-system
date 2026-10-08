@@ -243,12 +243,11 @@ test.describe('provider app', () => {
 
 // ---- the committee app -----------------------------------------------------------------------------------------------
 
-/** The map's pictures come from the internet (OpenStreetMap and cdnjs): answer them here, as map-qr.spec.js does. */
+/** The map's tiles come from the internet (OpenStreetMap): answer them here, as map-qr.spec.js does. The markers come with the app. */
 const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64')
 async function stubMapImages(page) {
   const answer = (route) => route.fulfill({ contentType: 'image/png', body: PIXEL })
-  await page.route('https://*.tile.openstreetmap.org/**', answer)
-  await page.route('https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/**', answer)
+  await page.route('https://tile.openstreetmap.org/**', answer)
 }
 
 /**

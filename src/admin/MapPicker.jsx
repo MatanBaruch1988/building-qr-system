@@ -1,14 +1,20 @@
 import { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css' // bundled with the committee app only (the provider app never loads it)
+import markerIconUrl from 'leaflet/dist/images/marker-icon.png'
+import markerIcon2xUrl from 'leaflet/dist/images/marker-icon-2x.png'
+import markerShadowUrl from 'leaflet/dist/images/marker-shadow.png'
 import { POINT_RADIUS_DEFAULT_M } from '../../shared/contract.js'
 
-// Leaflet's default marker images do not survive bundling: point them at the CDN copies.
+// Leaflet's default marker images do not survive bundling (it guesses their address from the stylesheet's URL), so point
+// them at the PNGs of the leaflet package: Vite bundles them (each is under 4 KB, so they are inlined as data: URLs in
+// the committee chunk). The markers work offline, the page loads nothing from cdnjs, and a Content-Security-Policy later
+// needs no entry for it.
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+  iconRetinaUrl: markerIcon2xUrl,
+  iconUrl: markerIconUrl,
+  shadowUrl: markerShadowUrl,
 })
 
 const FALLBACK_CENTER = [32.0853, 34.7818]
@@ -33,7 +39,7 @@ export default function MapPicker({ lat, lng, radius, onPick, hint }) {
     // page and throw away a half-filled form.
     const map = L.map(box.current, { scrollWheelZoom: false, attributionControl: false }).setView(has ? [lat, lng] : FALLBACK_CENTER, has ? 18 : 13)
     L.control.attribution({ prefix: false }).addTo(map)
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>',
     }).addTo(map)
