@@ -30,7 +30,7 @@ Map of the repository:
 | `shared/` | Code that runs in the browser and on the server. `shared/datetime.js` writes every date and time a person sees; `shared/contract.js` holds the values the phone and the server must agree on (the sync limits, error codes, GPS limits, vocabularies), `shared/types.js` the JSDoc shapes they exchange |
 | `tests/` | Vitest: logic, the API against a real Postgres in a throwaway schema, i18n, contrast, typography, `tests/components` |
 | `e2e/` | Playwright on a Pixel 7 (Chromium) and an iPhone 14 (WebKit) |
-| `scripts/` | Migrations, `create-admin`, the dev seed, the CI guards (`check-*.mjs`), the text rules and the edit hook, the release notes (`release-notes.mjs`), the README's screenshots (`screenshots/`, with `playwright.screenshots.config.js` at the root) |
+| `scripts/` | Migrations, `create-admin`, the dev seed, the CI guards (`check-*.mjs`, among them the size budget `check-bundle-size.mjs` with its budgets in `check-bundle-size.json`), the text rules and the edit hook, the release notes (`release-notes.mjs`), the merges that Vercel does not deploy (`vercel-ignore.mjs`), the README's screenshots (`screenshots/`, with `playwright.screenshots.config.js` at the root) |
 | `docs/` | `install.md` (installing and updating a copy), `releases.md` (versions and releases), `privacy.md`, `agent-api.md` (the read-only agent API), `agent-prompt.md`, `manual-ios-checklist.md`, `screenshots/` (the README's images, made from the dev seed only), `adr/` (decisions), `runbooks/` (deploy and roll back, restore, incident, secrets) |
 | `legacy-redirect/` | A small Firebase site that redirects the old printed QR codes to the new address |
 
@@ -66,6 +66,7 @@ npm run db:migrate                   # applies the new migrations to the databas
 npm run db:create-admin -- <google-email> [name]   # adds a committee member to the database in DATABASE_URL, and prints which one
 npm run db:backup -- --out <dir> --neon-project <id>   # dumps the database to <dir> (kept 30 days, never in the repository), see docs/runbooks/restore.md
 npm run icons                        # makes the PNG icons in public/ from public/pwa-512x512.svg
+npm run size                         # builds the app and checks it against the size budget (scripts/check-bundle-size.json); CI runs it in the guards job
 npm run screenshots                  # retakes docs/screenshots/ from the dev seed, local only (docs/screenshots/README.md)
 ```
 
@@ -101,6 +102,12 @@ of a merge to the production branch (`master` here, see "Database and API change
   a compiler option to get to zero: fix the code, or bring the exception to the owner.
 - A value that the phone and the server must agree on lives in `shared/contract.js` (and a shape they exchange in
   `shared/types.js`), never as a copy on each side; `tests/contract.test.js` pins every value and fails on a copy.
+- The browser loads only what the Content-Security-Policy in `vercel.json` allows, and `tests/security-headers.test.js`
+  pins it. A new origin that the page loads or talks to (a script, a picture, a frame, a request) goes into the policy and
+  into that test in the same pull request, with its reason. Never `'unsafe-eval'`, never `'unsafe-inline'` in
+  `script-src`, no wildcard or scheme-only source (`https:`, and `data:` anywhere but `img-src`), and no inline script in
+  `index.html`: a script that must run before the first paint is a file in `public/`. Styles are set from JavaScript
+  (React's `style` prop, the CSSOM), never by writing a `style` attribute or a `<style>` element as HTML text.
 
 The two text rules (the em dash and the dates) live in one file, `scripts/text-rules.mjs`, which the two tests above and
 the Claude Code edit hook all read. Change a rule there, not in a copy.
@@ -127,6 +134,9 @@ Details that matter:
   These are the defaults: `E2E_APP_PORT`, `E2E_API_PORT` and `E2E_SCHEMA` change them (`scripts/e2e-config.mjs`, and the
   point on two runs below). Nothing may already be listening on the ports of a run.
 - The PWA is tested on the production build, because the service worker only exists there. Do not point the E2E at `vite dev`.
+- `vite preview` sends the headers of `vercel.json`, the Content-Security-Policy included (`vite.config.js`), so a page
+  that breaks the policy in a tested flow fails its test with a console error. The dev server sends none, because Vite's
+  own development scripts would break the policy.
 - A single spec or project: `npx playwright test e2e/pwa.spec.js --project=android-chrome`. A failing run keeps a trace
   in `test-results/` (`npx playwright show-trace <trace.zip>`).
 - Every E2E test fails on an unexpected `console.error` or page error. A test that provokes one on purpose (a wrong
@@ -158,6 +168,9 @@ new one builds. The PR title is a Conventional Commit (`fix: ...`). Never delete
 guards (`scripts/check-migrations.mjs`, `scripts/check-tests.mjs`) catch the common ways of slipping in a destructive
 migration, or of deleting, renaming away or skipping a test; they are heuristics, not a replacement for reading the
 diff. A test that really has to go is the owner's call: say why in the pull request (the label is `allow-test-removal`).
+The `guards` job also builds the app and checks its size (`npm run size`) against `scripts/check-bundle-size.json`: the
+JavaScript and the CSS of each app and what every phone downloads into its precache. A budget is raised only in a pull
+request that says why, and the owner decides; lower it when the app gets smaller.
 
 `.github/workflows/smoke.yml` is not a merge check: it runs after each production deployment (`scripts/smoke-check.mjs`
 against the address in the variable `SMOKE_BASE_URL` of the GitHub environment `smoke`, the production domain; a run
@@ -179,6 +192,13 @@ that the rulesets protect, and the migrations are checked against it.
 `npm run db:migrate` refuses a production database, so a migration reaches production with the merge that contains it:
 there is no separate step before or after, and no way to run one by hand. A failed migration fails that deployment and the
 previous one keeps serving.
+
+Not every merge is deployed. Vercel first runs `scripts/vercel-ignore.mjs` (the `ignoreCommand` of `vercel.json`): a merge
+whose every changed file is on its list (documents, tests, CI and the other files that never reach the build) is not
+built, so production keeps the previous deployment and serves an older commit than `master` until the next merge that
+changes the app, and that merge has no smoke test. Why: the build id in the JavaScript is the commit, so every deployment
+is a new version that every phone downloads and announces. The list is short on purpose. A file that is not on it is
+always deployed, and so is every migration, and any doubt (no previous deployment to compare with, a git error) builds.
 
 When a release is deployed, the old deployment keeps serving while the new one builds and while its migration runs. And
 a phone keeps running the JavaScript it already has: an installed PWA updates only when the person next opens it (the
@@ -476,6 +496,16 @@ reviewing agent should apply it too.
   or any change that lets an agent run the workflow, create a release or create or push a tag.
 - A change to `.github/workflows/smoke.yml` that reads `SMOKE_BASE_URL` from anywhere but the environment `smoke` (a
   repository variable can be changed by any collaborator), or that sends `SMOKE_AGENT_KEY` anywhere but that address.
+
+- A change that weakens the Content-Security-Policy in `vercel.json`: `'unsafe-eval'`, or `'unsafe-inline'` in
+  `script-src`, a wildcard or a scheme-only source, a directive removed or widened, an enforced policy turned back into
+  report-only, a new origin without its reason, an inline script in `index.html`, or `tests/security-headers.test.js`
+  loosened.
+- A budget in `scripts/check-bundle-size.json` raised without a reason in the pull request, or a measured file dropped
+  from the check.
+- A change to `scripts/vercel-ignore.mjs` or to the `ignoreCommand` of `vercel.json` that lets a change to the app, the
+  server, the shared code, a migration, the build or its configuration skip the deployment (a path like that added to
+  its list), or that skips the build when it cannot tell.
 
 **Report as P2 when you are sure:**
 
