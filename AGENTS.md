@@ -156,9 +156,10 @@ Details that matter:
   second one at once, but runs that share only a schema are not: each drops the other's data, and the seed starts before
   the ports bind, so a free port does not prove that no run is starting. Never share a schema.
 - The icons: iOS ignores an SVG as the Home Screen icon, so the PNGs in `public/` (`apple-touch-icon.png` 180x180 on a
-  solid background, `pwa-192x192.png`, `pwa-512x512.png`) are made from `public/pwa-512x512.svg` by `npm run icons`.
-  To change the logo, replace that SVG, run `npm run icons`, commit the PNGs. `tests/pwa-icons.test.js` and the
-  `apple-touch-icon` test in `e2e/pwa.spec.js` check them.
+  solid background, `pwa-192x192.png`, `pwa-512x512.png`, and `pwa-maskable-512x512.png`, the artwork inside the centre
+  80 percent on a solid background, which Android crops to its own shape and which is not precached) are made from
+  `public/pwa-512x512.svg` by `npm run icons`. To change the logo, replace that SVG, run `npm run icons`, commit the PNGs.
+  `tests/pwa-icons.test.js` and the icon tests in `e2e/pwa.spec.js` check them.
 
 CI (`.github/workflows/ci.yml`) runs `guards`, `unit` and `e2e` (both projects) on every pull request, against a
 Postgres 18 container instead of Neon, and all four checks are required to merge. A migration is a new file only (never
