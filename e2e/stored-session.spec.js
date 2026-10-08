@@ -20,10 +20,12 @@ const TOKEN = `${PROVIDER_TOKEN_PREFIX}${'a'.repeat(43)}` // shaped like a minte
 
 const storedSession = (page) => page.evaluate((key) => window.localStorage.getItem(key), STORAGE_KEY)
 
-// A reload while the app is still asking for something cancels that request, and WebKit reports a cancelled fetch as a page
-// error, which the console guard of the fixtures fails the test on. So a test waits until nothing is in flight before it
-// reloads: after a page load (the lists of the sign-in screen, the session check), until the network is idle, and after a
-// sign-in (which is not a page load: the network is "idle" already) until the home screen's own request has been answered.
+// WebKit refuses a request that starts while the page is being replaced (a reload), and logs it as "Fetch API cannot load ... due
+// to access control checks", which the console guard of the fixtures fails the test on as a page error; a request that is already
+// on its way is cancelled without a word. The app asks for a screen's data from effects that run after the screen is drawn, so a
+// test waits until the screen's requests have started before it reloads: after a page load (the lists of the sign-in screen, the
+// session check), until the network is idle, and after a sign-in (which is not a page load: the network is "idle" already) until
+// the home screen's own request has been answered (the phone's status report starts just before it, in the same moment).
 const settled = (page) => page.waitForLoadState('networkidle')
 
 async function signInAndSettle(page, person) {
