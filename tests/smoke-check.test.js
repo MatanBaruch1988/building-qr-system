@@ -7,7 +7,9 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   DB_ATTEMPTS,
+  expectedPolicy,
   newestMigration,
+  POLICY_HEADERS,
   parseBaseUrl,
   printable,
   readConfig,
@@ -23,14 +25,18 @@ const LATEST = newestMigration() // the real newest file of db/migrations
 const PAGE = '<!doctype html><html><body><div id="root"></div><script type="module" src="/assets/app.js"></script></body></html>'
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
-const page = (body = PAGE, status = 200) => new Response(body, { status, headers: { 'content-type': 'text/html' } })
+// The page sends the Content-Security-Policy of the real vercel.json, as production does; a test that wants another one
+// says so.
+const POLICY = expectedPolicy()
+const page = (body = PAGE, status = 200, headers = { [POLICY.name]: POLICY.value }) =>
+  new Response(body, { status, headers: { 'content-type': 'text/html', ...headers } })
 
 /**
  * Runs the smoke test against a stub. `handlers` has one function per address: health(n), home(n) and db(n), each given
  * the number of the call (1, 2, ...) and returning a Response, or throwing to look like a network error. Everything that
  * is printed is collected in `lines`, and every request in `calls`.
  */
-async function run({ health, home = () => page(), db, env = {}, migrationsDir } = {}) {
+async function run({ health, home = () => page(), db, env = {}, migrationsDir, policy } = {}) {
   let clock = 1_000_000
   const lines = []
   const calls = []
@@ -55,6 +61,7 @@ async function run({ health, home = () => page(), db, env = {}, migrationsDir } 
     now: () => clock,
     log: (line) => lines.push(line),
     migrationsDir,
+    ...(policy === undefined ? {} : { policy }),
   })
   return { ...result, lines, calls, counts, sleeps, output: lines.join('\n'), elapsed: clock - 1_000_000 }
 }
@@ -192,6 +199,53 @@ describe('step 2: the app page', () => {
       },
     })
     expect(none.failures[0]).toContain('GET / gave no answer')
+  })
+
+  it('passes with the policy of vercel.json, and says which header it checked', async () => {
+    const r = await run({ health: healthy })
+    expect(r.exitCode).toBe(0)
+    expect(r.output).toContain(`ok   2/3 GET / returns the app page (HTTP 200, root element found, ${POLICY.name} as in vercel.json)`)
+  })
+
+  it('fails when the page sends no policy, or the other kind of policy header than vercel.json sets', async () => {
+    const none = await run({ health: healthy, home: () => page(PAGE, 200, {}) })
+    expect(none.exitCode).toBe(1)
+    expect(none.failures[0]).toBe(`GET / sends no ${POLICY.name} header, which vercel.json sets`)
+    const otherName = POLICY_HEADERS.find((name) => name !== POLICY.name)
+    const swapped = await run({ health: healthy, home: () => page(PAGE, 200, { [otherName]: POLICY.value }) })
+    expect(swapped.exitCode).toBe(1)
+    expect(swapped.failures[0]).toContain(`sends no ${POLICY.name} header`)
+  })
+
+  it('fails when the policy differs from vercel.json, and never prints what the server sent', async () => {
+    const sent = "default-src * 'unsafe-inline' SERVER-SENT-THIS"
+    const r = await run({ health: healthy, home: () => page(PAGE, 200, { [POLICY.name]: sent }) })
+    expect(r.exitCode).toBe(1)
+    expect(r.failures[0]).toBe(`GET / sends a ${POLICY.name} that is not the one in vercel.json`)
+    expect(r.output).not.toContain('SERVER-SENT-THIS')
+  })
+
+  it('checks no header when vercel.json sets no policy', async () => {
+    const r = await run({ health: healthy, home: () => page(PAGE, 200, {}), policy: null })
+    expect(r.exitCode).toBe(0)
+    expect(r.output).toContain('ok   2/3 GET / returns the app page (HTTP 200, root element found)')
+  })
+
+  it('reads the policy from the rule of vercel.json for every page, enforced or report-only', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-policy-'))
+    try {
+      const file = path.join(dir, 'vercel.json')
+      const write = (headers) =>
+        fs.writeFileSync(file, JSON.stringify({ headers: [{ source: '/assets/(.*)', headers: [{ key: 'Content-Security-Policy', value: 'not this one' }] }, { source: '/(.*)', headers }] }))
+      write([{ key: 'X-Frame-Options', value: 'DENY' }, { key: 'Content-Security-Policy-Report-Only', value: "default-src 'self'" }])
+      expect(expectedPolicy(file)).toEqual({ name: 'Content-Security-Policy-Report-Only', value: "default-src 'self'" })
+      write([{ key: 'Content-Security-Policy', value: "default-src 'none'" }])
+      expect(expectedPolicy(file)).toEqual({ name: 'Content-Security-Policy', value: "default-src 'none'" })
+      write([{ key: 'X-Frame-Options', value: 'DENY' }])
+      expect(expectedPolicy(file)).toBe(null)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('still runs the database step after a failed page, and reports both', async () => {
