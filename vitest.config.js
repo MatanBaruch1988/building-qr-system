@@ -9,8 +9,9 @@ export default defineConfig({
     //   // @vitest-environment jsdom
     environment: 'node',
     include: ['tests/**/*.test.{js,jsx}'],
-    // Before every file: no test sees a HEALTH_HEARTBEAT_URL, so none can ping the owner's check (see the file).
-    setupFiles: ['tests/setup-no-heartbeat.js'],
+    // Before every file: no test sees a HEALTH_HEARTBEAT_URL, so none can ping the owner's check, and the committee app's cache of
+    // answers is emptied after every test, as a new page load would have it (see the two files).
+    setupFiles: ['tests/setup-no-heartbeat.js', 'tests/setup-load-cache.js'],
     testTimeout: 30000,
     hookTimeout: 60000,
     // Integration tests share one Postgres; each file uses its own throwaway schema.
