@@ -108,6 +108,73 @@ test('a tab that is opened by its address right after signing in opens', async (
   }
 })
 
+// A tab that was open before shows the list it showed, at once, and takes the current one in the background (useLoad's cache key,
+// src/admin/hooks.js). The server's answer for the points is held back by hand, so that the moment before it comes can be looked at: with no
+// cache the loading state would be there. The cache is the member's own: a sign-out and a new sign-in start every tab from the loading
+// state again. Both layouts, because the tabs are the tab bar on a phone and the side rail on a computer.
+test('a tab that was open before shows its list at once and refreshes it in the background, and after signing out and in the first visit loads again', async ({ page }) => {
+  const tag = randomUUID().slice(0, 6)
+  const added = `נקודה שנוספה ${tag}`
+  let gate = null // while it is set, the answer for the list of points waits for it
+  await page.route('**/api/admin/points', async (route) => {
+    if (route.request().method() === 'GET' && gate) await gate
+    await route.continue()
+  })
+  const hold = () => {
+    let release
+    gate = new Promise((resolve) => { release = () => { gate = null; resolve() } })
+    return release
+  }
+  const loading = page.getByRole('status').filter({ hasText: 'טוען' })
+  const lobby = page.getByRole('article').filter({ hasText: 'לובי' })
+  const addedTile = page.getByRole('article').filter({ hasText: added })
+  // the buttons of the tab bar (phone) and of the side rail (computer) have the same names; the one that is hidden has no role
+  const open = (name) => page.getByRole('button', { name, exact: true }).click()
+  const AGENT = 'אייג׳נט'
+  const AGENT_TITLE = "גישה לאייג'נט"
+
+  await adminSignIn(page)
+  let created = null
+  try {
+    for (const size of [null, COMPUTER]) {
+      if (size) await page.setViewportSize(size)
+      const where = size ? 'computer' : 'phone'
+      await expect(lobby, `${where}: the list has arrived`).toBeVisible()
+
+      // two tabs, then back to the first: the server's answer is held back, and the list is there anyway, with no loading state
+      await open(AGENT)
+      await expect(page.getByRole('heading', { level: 1, name: AGENT_TITLE })).toBeVisible()
+      created = (await (await page.request.post('/api/admin/points', { data: { name: added, lat: SAMPLE_POINT.lat, lng: SAMPLE_POINT.lng, gps_mode: 'none' } })).json()).point
+      const release = hold()
+      await open('נקודות')
+      await expect(page.getByRole('heading', { level: 1, name: 'נקודות סריקה' })).toBeVisible()
+      await expect(lobby, `${where}: back on Points, the list of the last visit is there before the server answers`).toBeVisible()
+      await expect(loading, `${where}: and there is no loading state`).toHaveCount(0)
+      await expect(addedTile, `${where}: what changed meanwhile is not there yet`).toHaveCount(0)
+      // the answer comes: the fresh list replaces it, with what changed meanwhile
+      release()
+      await expect(addedTile, `${where}: the fresh list replaces the old one`).toBeVisible()
+      await expect(lobby).toBeVisible()
+      expect(await noHorizontalScroll(page), `Points at ${where} width`).toBe(true)
+      await page.request.delete(`/api/admin/points/${created.id}`, { data: {} })
+      created = null
+
+      // signing out and in again: the first visit of a tab loads from the beginning, as it did
+      const again = hold()
+      await page.getByRole('button', { name: 'יציאה' }).click()
+      await page.getByRole('button', { name: 'כניסת פיתוח' }).click()
+      await expect(page.getByRole('heading', { level: 1, name: 'נקודות סריקה' }), `${where}: signed in again`).toBeVisible()
+      await expect(loading, `${where}: the first visit after a sign-in has its loading state`).toBeVisible()
+      await expect(lobby, `${where}: and none of the last session's list`).toHaveCount(0)
+      again()
+      await expect(lobby, `${where}: then the list arrives`).toBeVisible()
+      await expect(loading).toHaveCount(0)
+    }
+  } finally {
+    if (created) await page.request.delete(`/api/admin/points/${created.id}`, { data: {} })
+  }
+})
+
 test('the history date fields do not overlap and stay inside the filter bar, on a phone and on a computer', async ({ page }) => {
   await adminSignIn(page)
   for (const size of [null, COMPUTER]) {
