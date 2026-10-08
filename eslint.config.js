@@ -46,6 +46,14 @@ export default defineConfig([
     languageOptions: { globals: globals.browser },
   },
 
+  // The one file of public/ that is JavaScript: the theme script that index.html loads before the first paint
+  // (public/theme-boot.js). Vite copies it as it is, so it is not a module and not part of the bundle: a classic browser
+  // script. Only the names change for it (the browser's) and the kind of file (a script, not a module); every rule stays on.
+  {
+    files: ['public/theme-boot.js'],
+    languageOptions: { sourceType: 'script', globals: globals.browser },
+  },
+
   // The two classic React hooks rules, for the app only (the only place that has components and hooks).
   //
   // Not the whole `recommended` preset of eslint-plugin-react-hooks 7: it adds the rules of the React Compiler (`refs`,

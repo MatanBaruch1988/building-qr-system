@@ -2,8 +2,8 @@ import { useSyncExternalStore } from 'react'
 
 // Light / dark appearance for both apps. The person's choice is "system" (follow the device: the default),
 // "light" or "dark", kept on this device like the language. <html data-theme> always holds the RESOLVED value
-// ("light" | "dark"), which is what ui.css styles. An inline script in index.html applies the same logic before the
-// first paint, so keep THEME_KEY and the three values in step with it (tests/theme.test.js checks).
+// ("light" | "dark"), which is what ui.css styles. The script public/theme-boot.js (loaded by index.html) applies the
+// same logic before the first paint, so keep THEME_KEY and the three values in step with it (tests/theme.test.js checks).
 
 export const THEME_KEY = 'qr.theme'
 export const THEMES = ['system', 'light', 'dark']

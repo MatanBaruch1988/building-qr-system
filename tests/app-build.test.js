@@ -89,6 +89,33 @@ describe('vite.config.js defines the build id', () => {
   })
 })
 
+describe('vite.config.js makes `vite preview` send the headers of vercel.json', () => {
+  // The E2E tests run on the preview of the production build. If it sent other headers than Vercel does, a page that breaks
+  // the Content-Security-Policy would pass the tests and fail in production. So the headers of the rule for every path are
+  // the headers of the preview, and this test is what keeps the two from drifting apart.
+  const vercel = JSON.parse(fs.readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'))
+  const load = async (command) => (await loadConfigFromFile({ command, mode: 'production' }, `${ROOT}vite.config.js`, ROOT, 'silent')).config
+  const everyPage = vercel.headers.filter((rule) => rule.source === '/(.*)')
+
+  it('has exactly one rule for every path, with each header named once', () => {
+    expect(everyPage).toHaveLength(1)
+    const names = everyPage[0].headers.map((header) => header.key)
+    expect(names.length).toBeGreaterThan(0)
+    expect(new Set(names).size).toBe(names.length)
+  })
+
+  it('sends in the preview exactly the headers of that rule', async () => {
+    const expected = Object.fromEntries(everyPage[0].headers.map(({ key, value }) => [key, value]))
+    expect((await load('serve')).preview.headers).toEqual(expected)
+    expect((await load('build')).preview.headers).toEqual(expected)
+  })
+
+  it('does not put the headers on the dev server', async () => {
+    // The dev server writes inline scripts and style tags of its own: a Content-Security-Policy would break it.
+    expect((await load('serve')).server.headers).toBeUndefined()
+  })
+})
+
 describe('the build line is quiet, and stays on a colour that is held to AA', () => {
   const css = (file) => fs.readFileSync(new URL(file, import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
   const rule = (text, selector) => text.match(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
