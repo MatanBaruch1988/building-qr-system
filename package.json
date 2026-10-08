@@ -19,6 +19,7 @@
     "test:e2e": "playwright test",
     "screenshots": "playwright test --config playwright.screenshots.config.js",
     "icons": "node scripts/make-icons.mjs",
+    "size": "vite build && node scripts/check-bundle-size.mjs",
     "db:migrate": "node scripts/db-migrate.mjs",
     "db:create-admin": "node scripts/create-admin.mjs",
     "db:seed-dev": "node scripts/dev-seed.mjs",
