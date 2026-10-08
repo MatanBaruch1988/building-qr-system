@@ -4,6 +4,19 @@ import { THEME_KEY, THEMES, CHROME_COLORS, isTheme, readTheme, resolveTheme, app
 
 const storageWith = (value) => ({ getItem: (k) => (k === THEME_KEY ? value : null) })
 
+/**
+ * The HTML without its comments; one that is not closed runs to the end, as in a browser. A loop and not one replace: a
+ * single pass of a regular expression can leave a "<!--" behind when removing one comment joins the pieces of another.
+ */
+function withoutComments(html) {
+  let text = String(html)
+  for (let start = text.indexOf('<!--'); start !== -1; start = text.indexOf('<!--')) {
+    const end = text.indexOf('-->', start + 4)
+    text = end === -1 ? text.slice(0, start) : text.slice(0, start) + text.slice(end + 3)
+  }
+  return text
+}
+
 describe('theme choice', () => {
   it('is one of system | light | dark, and "system" (follow the device) is the default', () => {
     expect(THEMES).toEqual(['system', 'light', 'dark'])
@@ -72,10 +85,14 @@ describe('applyTheme', () => {
 })
 
 describe('index.html applies the same theme before the first paint', () => {
-  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8')
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? ''
+  // The page has no inline script (the Content-Security-Policy allows none), so the code that applies the theme is a file of
+  // public/, loaded by a script tag of index.html. The comments are dropped first: a word in a comment must not satisfy a check.
+  const html = withoutComments(fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8'))
+  const script = fs.readFileSync(new URL('../public/theme-boot.js', import.meta.url), 'utf8').replace(/^\s*\/\/.*$/gm, '')
+  const tags = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi)].map((match) => ({ attributes: match[1], body: match[2], at: match.index }))
+  const bootTags = tags.filter((tag) => /\bsrc\s*=\s*["']?\/theme-boot\.js["']?/i.test(tag.attributes))
 
-  it('has an inline script that reads the same storage key and values', () => {
+  it('has a script file that reads the same storage key and values', () => {
     expect(script).toContain(`'${THEME_KEY}'`)
     for (const value of ['light', 'dark', 'system']) expect(script).toContain(`'${value}'`)
     expect(script).toContain('prefers-color-scheme: light')
@@ -87,8 +104,24 @@ describe('index.html applies the same theme before the first paint', () => {
     expect(script).toContain(CHROME_COLORS.dark)
   })
 
+  it('has no inline script: every script tag has a src and an empty body', () => {
+    expect(tags.length).toBeGreaterThan(0)
+    for (const tag of tags) {
+      expect(tag.attributes, 'a script tag without a src').toMatch(/\bsrc\s*=\s*["']?[^"'\s>]+/i)
+      expect(tag.body.trim(), 'a script tag with code in it').toBe('')
+    }
+  })
+
+  it('loads theme-boot.js once, as a classic script: no async, no defer, no type (it must block the parser)', () => {
+    expect(bootTags).toHaveLength(1)
+    expect(bootTags[0].attributes).not.toMatch(/\b(async|defer|type)\b/i)
+  })
+
   it('runs before the stylesheet-bearing module script (so there is no flash)', () => {
-    expect(html.indexOf('<script>')).toBeGreaterThan(-1)
-    expect(html.indexOf('<script>')).toBeLessThan(html.indexOf('type="module"'))
+    const moduleAt = tags.find((tag) => /\btype\s*=\s*["']?module["']?/i.test(tag.attributes))?.at ?? -1
+    expect(moduleAt).toBeGreaterThan(-1)
+    const bootAt = bootTags[0]?.at ?? -1
+    expect(bootAt).toBeGreaterThan(-1)
+    expect(bootAt).toBeLessThan(moduleAt)
   })
 })
