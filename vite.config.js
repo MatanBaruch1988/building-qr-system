@@ -1,6 +1,17 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+// Imported next to this file (not read from the working directory): tests/app-build.test.js loads this config from anywhere.
+import vercel from './vercel.json' with { type: 'json' }
+
+// The headers that Vercel puts on every page and file (the rule "/(.*)" of vercel.json, whatever else is there), as the
+// object that Vite wants: { name: value }. `vite preview` sends them below, so the E2E tests, which run on the preview of the
+// production build, run the app under the same headers as production (the Content-Security-Policy among them), and a page
+// that breaks the policy fails its test. The "/assets/(.*)" rule is not copied: it is a cache rule, and the preview sets its own cache headers.
+// tests/app-build.test.js pins that the two cannot drift.
+const everyPageRule = vercel.headers.find((rule) => rule.source === '/(.*)')
+if (!everyPageRule) throw new Error('vercel.json has no headers rule for "/(.*)": vite preview would send none of the production headers.')
+const productionHeaders = Object.fromEntries(everyPageRule.headers.map(({ key, value }) => [key, value]))
 
 // The build id of this bundle: the first 7 characters of the commit that Vercel builds (VERCEL_GIT_COMMIT_SHA, the same 7
 // characters that server/health.js reports as the server's own commit), or 'dev' for a build that has none (a local build and
@@ -71,4 +82,10 @@ export default defineConfig({
     // xfwd: pass the browser's real host along, so the API's same-origin check sees the page's own host.
     proxy: { '/api': { target: `http://localhost:${process.env.API_PORT || 3001}`, xfwd: true } },
   },
+  // Only `preview`, never `server`: the dev server injects an inline script and style tags of its own (the React refresh
+  // preamble, the HMR client, a style element per CSS file), which the Content-Security-Policy would refuse. The preview
+  // serves the built files, as they are in production. Vite sends these on every file and on index.html (which it
+  // serves for every path that is not a file); the answers of the API proxy do not get them here, and the tests need only
+  // the headers of pages and files.
+  preview: { headers: productionHeaders },
 })

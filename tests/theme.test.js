@@ -72,10 +72,14 @@ describe('applyTheme', () => {
 })
 
 describe('index.html applies the same theme before the first paint', () => {
-  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8')
-  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? ''
+  // The page has no inline script (the Content-Security-Policy allows none), so the code that applies the theme is a file of
+  // public/, loaded by a script tag of index.html. The comments are dropped first: a word in a comment must not satisfy a check.
+  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8').replace(/<!--[\s\S]*?-->/g, '')
+  const script = fs.readFileSync(new URL('../public/theme-boot.js', import.meta.url), 'utf8').replace(/^\s*\/\/.*$/gm, '')
+  const tags = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)].map((match) => ({ attributes: match[1], body: match[2], at: match.index }))
+  const bootTags = tags.filter((tag) => /\bsrc="\/theme-boot\.js"/.test(tag.attributes))
 
-  it('has an inline script that reads the same storage key and values', () => {
+  it('has a script file that reads the same storage key and values', () => {
     expect(script).toContain(`'${THEME_KEY}'`)
     for (const value of ['light', 'dark', 'system']) expect(script).toContain(`'${value}'`)
     expect(script).toContain('prefers-color-scheme: light')
@@ -87,8 +91,24 @@ describe('index.html applies the same theme before the first paint', () => {
     expect(script).toContain(CHROME_COLORS.dark)
   })
 
+  it('has no inline script: every script tag has a src and an empty body', () => {
+    expect(tags.length).toBeGreaterThan(0)
+    for (const tag of tags) {
+      expect(tag.attributes, 'a script tag without a src').toMatch(/\bsrc="[^"]+"/)
+      expect(tag.body.trim(), 'a script tag with code in it').toBe('')
+    }
+  })
+
+  it('loads theme-boot.js once, as a classic script: no async, no defer, no type (it must block the parser)', () => {
+    expect(bootTags).toHaveLength(1)
+    expect(bootTags[0].attributes).not.toMatch(/\b(async|defer|type)\b/i)
+  })
+
   it('runs before the stylesheet-bearing module script (so there is no flash)', () => {
-    expect(html.indexOf('<script>')).toBeGreaterThan(-1)
-    expect(html.indexOf('<script>')).toBeLessThan(html.indexOf('type="module"'))
+    const moduleAt = tags.find((tag) => /\btype="module"/.test(tag.attributes))?.at ?? -1
+    expect(moduleAt).toBeGreaterThan(-1)
+    const bootAt = bootTags[0]?.at ?? -1
+    expect(bootAt).toBeGreaterThan(-1)
+    expect(bootAt).toBeLessThan(moduleAt)
   })
 })
