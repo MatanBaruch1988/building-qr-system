@@ -494,7 +494,8 @@ install)**. It does not make a GitHub fork: **the copy is not linked to this rep
 
 A copy updates by releases: update to each new release, in order. The latest release is the supported version, and every
 security fix is released as a PATCH version on the day it merges, so a PATCH can be a security fix: take it soon. An update
-is a merge to the production branch, and every such merge is a production deployment. The migrations run in that build by
+is a merge to the production branch, and every such merge is a production deployment (unless it changes only documents,
+tests or CI: [`scripts/vercel-ignore.mjs`](../scripts/vercel-ignore.mjs) skips those). The migrations run in that build by
 themselves ([ADR 0002](adr/0002-production-migrations-in-the-vercel-build.md)): there is nothing to run by hand.
 
 1. **Hear about releases.** Watch this repository's releases on GitHub (Watch, Custom, Releases)
