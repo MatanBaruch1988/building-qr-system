@@ -21,9 +21,10 @@
 // check without anybody noticing. A measurement more than 20 percent under its budget only prints a note that the budget
 // can be lowered. Exit 2: the guard could not run at all (a bad argument, an unreadable budget file).
 //
-// How the budgets were set: on 08/10/2026, on master after #137, from `npm run build`. Each budget is the measured size
-// plus about 10 percent, rounded up to a whole KiB; the budget for the number of files is the measured number plus 2. JSON
-// has no comments, so that is written here. A budget is raised only in a pull request that says why, and the owner decides
+// How the budgets were set: on 08/10/2026, on master after #138, from `npm run build`. Each budget is the measured size
+// plus about 10 percent, rounded up to a whole KiB (half a KiB for the provider app's CSS: a whole KiB would leave it more
+// than 20 percent under its budget, and the note below would print on every run); the budget for the number of files is the
+// measured number plus 2. JSON has no comments, so that is written here. A budget is raised only in a pull request that says why, and the owner decides
 // (AGENTS.md, "Testing" and the P1 review rules); it is lowered when the app gets smaller. The script and the budgets sit
 // under scripts/check-*, so the agent loop cannot change them (AGENTS.md, "The agent loop").
 //

@@ -134,7 +134,7 @@ new one builds, and installed apps keep running old code for days, so the databa
 - **Four CI checks must be green** on every pull request, and the branch must be up to date with `master`. CI runs against
   a Postgres 18 container:
   - `guards`: migrations only move forward, tests are not removed, the pull request title, ESLint, the type check, a
-    dependency audit
+    dependency audit, and the size of the built app against its budget (`npm run size`)
   - `unit`
   - `e2e (android-chrome)`
   - `e2e (iphone-webkit)`
