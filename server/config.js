@@ -67,12 +67,28 @@ export const ADMIN_COOKIE = 'qr_admin'
 //  - the label of a phone (the browser string it sent at sign-in) is cleared this many days after the phone was revoked, together
 //    with what the phone reported about itself (migration 009: its build, how many visits waited and since when, the totals),
 //  - a recorded error (app_errors: safe fields only, no personal data) is deleted this many days after its last event,
-//  - a day of the alert throttle (alert_pings: one date, no personal data) is deleted this many days after that day.
+//  - a day of the alert throttle (alert_pings: one date, no personal data) is deleted this many days after that day,
+//  - a minute of an agent key's usage (api_key_usage: a key, a minute, two counts, no personal data) is deleted this many days
+//    after that minute (owner decision of 08/10/2026).
 export const RETENTION_SESSION_DAYS = 30
 export const RETENTION_LOGIN_ATTEMPT_DAYS = 1
 export const RETENTION_DEVICE_LABEL_DAYS = 90
 export const RETENTION_APP_ERROR_DAYS = 90
 export const RETENTION_ALERT_PING_DAYS = 30
+export const RETENTION_API_KEY_USAGE_DAYS = 90
+
+// How many requests one agent key may make (the guard of the agent API, requireApiKey in server/auth.js, counts them in
+// api_key_usage). Over a limit the answer is 429 `rate_limited` with a Retry-After header and the window that was exceeded.
+// The numbers follow how the committee's agent really works: it is a language model that asks, reads, thinks and asks again,
+// so its calls are sequential and few (a year of scans is about 20 pages of 500), and nothing it does legitimately comes near
+// either number. The limits are there for a script in a loop or a key that leaked: 60 a minute stops such a loop within
+// seconds, and 2000 a building day (midnight to midnight in BUILDING_TZ, the day the committee reads) stops one that keeps
+// going all night within hours. A request that is turned away does not count towards the limits (it is counted as `refused`),
+// so a limited key is free again when its window ends. The count is read before it is bumped, so requests that arrive in the
+// very same instant can each be let in: the limit is soft by about the number of requests in flight, never by more.
+// Changing a number changes what docs/agent-api.md promises an agent (tests/agent-docs.test.js compares them).
+export const AGENT_KEY_MAX_PER_MINUTE = 60
+export const AGENT_KEY_MAX_PER_DAY = 2000
 
 // Recording an unhandled server error in app_errors (server/errorLog.js) is one insert that the answer of the request waits
 // for, so it is bounded: when the database does not answer within this many milliseconds the answer goes out without the

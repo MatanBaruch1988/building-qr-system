@@ -20,12 +20,16 @@ export class ApiError extends Error {
    * @param {string} code  the machine's word for the refusal (the `code` of the error that the client reads)
    * @param {string} [message]  an English sentence for a developer or a log (default: the code)
    * @param {Record<string, unknown>} [extra]  more fields for the `error` of the answer, for example `{ field }`
+   * @param {Record<string, string>} [headers]  more headers for the answer, for example `{ 'Retry-After': '30' }` (the router
+   *   sends them with the refusal)
    */
-  constructor(status, code, message, extra) {
+  constructor(status, code, message, extra, headers) {
     super(message || code)
     this.status = status
     this.code = code
     this.extra = extra
+    // Only when there are some: an error without headers keeps the keys it always had (tests/scan-refusals.test.js pins them).
+    if (headers) this.headers = headers
   }
 }
 

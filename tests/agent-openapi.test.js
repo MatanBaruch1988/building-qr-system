@@ -418,7 +418,21 @@ function allowedValues(schema, sampleOf) {
 
 describe('the real agent API answers what the document says', () => {
   let db, key, revokedKey, cookie
-  const get = (p, opts = {}) => call('GET', `/api/agent/v1${p}`, { token: key, ...opts })
+  // One key may make AGENT_KEY_MAX_PER_MINUTE requests in a minute (server/config.js), and the tests below send more than
+  // that in all (every documented value of every parameter is a request). So they work through keys, as
+  // tests/agent-docs.test.js does: the same key is used for at most KEY_USES requests (counting the ones that never reach
+  // the guard too, which only makes it safer), then a fresh one is made. No test depends on which key it gets.
+  const KEY_USES = Math.floor((config.AGENT_KEY_MAX_PER_MINUTE * 2) / 3)
+  let keyUses = 0
+  async function currentKey() {
+    if (keyUses >= KEY_USES) {
+      key = (await mintAgentKey(cookie, 'agent openapi')).key
+      keyUses = 0
+    }
+    keyUses += 1
+    return key
+  }
+  const get = async (p, opts = {}) => call('GET', `/api/agent/v1${p}`, { token: await currentKey(), ...opts })
   /** The 200 JSON schema of a registry row, from the document. */
   const answerSchema = (e) => operationOf(e).responses['200'].content['application/json'].schema
   /** The schema behind a $ref to the components (or the schema itself). */
@@ -500,7 +514,7 @@ describe('the real agent API answers what the document says', () => {
       expect(r.json.error.code).toBe(code)
       expect(r.text).not.toContain('openapi')
     }
-    expect((await call('POST', path, { token: key, body: {} })).status).toBe(405)
+    expect((await call('POST', path, { token: await currentKey(), body: {} })).status).toBe(405)
   })
 
   // ---- e ----
@@ -699,9 +713,9 @@ describe('the real agent API answers what the document says', () => {
     check(await call('GET', '/api/agent/v1/scans', { token: `${config.API_KEY_PREFIX}unknown` }), 'an unknown key', 'api_key_invalid')
     check(await get('/scans?order=up'), 'a bad order', 'invalid_filter')
     check(await get('/scans?cursor=zzz'), 'a bad cursor', 'invalid_cursor')
-    check(await call('GET', '/api/agent/v1/health', { token: key, badJsonBody: true }), 'a body that is not JSON', 'invalid_json')
+    check(await call('GET', '/api/agent/v1/health', { token: await currentKey(), badJsonBody: true }), 'a body that is not JSON', 'invalid_json')
     check(await call('GET', '/api/agent/v1/nope', {}), 'an unknown endpoint', 'not_found')
-    check(await call('POST', '/api/agent/v1/scans', { token: key, body: {} }), 'a POST', 'method_not_allowed')
+    check(await call('POST', '/api/agent/v1/scans', { token: await currentKey(), body: {} }), 'a POST', 'method_not_allowed')
     // A failure of the server itself: a database that cannot be reached, through the real route and the real router.
     const pool = getPool()
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})

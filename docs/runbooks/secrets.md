@@ -48,6 +48,9 @@ A read-only agent key for the database step of the smoke test (`.github/workflow
   and paste the key at the prompt. To rotate, make a new key, set the secret, and revoke the old key in the same tab.
 - **If it leaked:** revoke it in the Agent tab. A refused key shows as `the agent key was refused (HTTP 401)` in the smoke
   test, and without the secret the database step is skipped with a warning and the run still passes.
+- **Limits.** Every agent key is counted and limited by the server (60 requests a minute and 2000 a building day, then `429
+  rate_limited`, `docs/agent-api.md`). The smoke test makes one request with this key per run, far from either number. A leaked
+  key that is used in a loop reaches a limit within seconds, but the limit is a brake and not a revocation: revoke the key.
 - **Where it goes.** Only to the address in the variable `SMOKE_BASE_URL` of the environment `smoke` (not a secret, but it
   decides where this key is sent, so it lives where only the owner can change it; `deploy-and-rollback.md`). The script refuses an address that is not
   https, and the request that carries the key does not follow a redirect.

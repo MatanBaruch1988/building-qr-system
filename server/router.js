@@ -259,6 +259,7 @@ export async function handle(req, res, now = () => performance.now()) {
       return send(res, {
         status: err.status,
         json: /** @type {ErrorEnvelope} */ ({ error: { code: err.code, message: err.message, ...(err.extra || {}) } }),
+        headers: err.headers, // for example the Retry-After of a 429
       })
     }
     console.error(describeUnhandled(matched, raw))

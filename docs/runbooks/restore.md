@@ -43,11 +43,13 @@ server refused) when they are part of the damage. `max(received_at)` of `scans` 
 counts with production now.
 
 `scan_refusals` is append-only like `scans` and holds the names as they were at the time, so a lost row can be put back as it
-was. `app_errors` and `alert_pings` are the server's own records (ADR 0007, `incident.md`): they hold no personal data and
-nothing depends on them, so they are rarely worth copying back. A restore takes them back to the restore point: the errors of
+was. `app_errors` and `alert_pings` are the server's own records (ADR 0007, `incident.md`), and `api_key_usage` (how many
+requests each agent key made in each minute) is another: they hold no personal data and nothing depends on them, so they are
+rarely worth copying back. A restore takes them back to the restore point: the errors of
 the hours after it are gone from `app_errors` (healthchecks.io still has their pings, where the server's heartbeat is set up:
 the first installation has it, a copy only if it set `HEALTH_HEARTBEAT_URL`), and a day whose alert was sent after the
-point is announced again by its next error, so one ping can repeat.
+point is announced again by its next error, so one ping can repeat. The counts of `api_key_usage` go back too, so a key may
+make a few more requests than its limit that day, and nothing else changes.
 
 ## 3. Choose how to recover
 
@@ -65,7 +67,9 @@ migration: a restore to a point before one leaves the running code expecting tab
 the answer of `/api/health/db` must be the newest file in `db/migrations/`; if it is older, the next production deployment
 migrates the database again (`deploy-and-rollback.md`). For `010_app_errors.sql` and `011_alert_pings.sql` the symptom is mild:
 the server keeps answering (recording an error never fails a request), and its alerts say "Server error, alert record failed"
-(`incident.md`) until the tables are back.
+(`incident.md`) until the tables are back. For `013_api_key_usage.sql` it is not: the guard of the agent API counts every
+request in that table, so until it is back every agent request fails with a `500` (and `/api/health/db` with a `503`). Redeploy
+production at once (`deploy-and-rollback.md`) to migrate again.
 
 ## 4. Afterwards
 

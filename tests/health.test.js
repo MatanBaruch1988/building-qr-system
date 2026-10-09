@@ -1,7 +1,7 @@
 // GET /api/health (public, no database) and GET /api/health/db (needs a read-only agent key: the smoke test after a deploy).
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
-import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
+import { setupDb, call, seedAdmin, adminCookie, putKeyAtMinuteLimit } from './helpers.js'
 import { setPool } from '../server/db.js'
 
 const SHA = '0123456789abcdef0123456789abcdef01234567'
@@ -126,6 +126,20 @@ describe('GET /api/health/db', () => {
     expect(r.json.error.code).toBe('api_key_invalid')
   })
 
+  it('answers 429, not 503, for a key that is over its limit, with the Retry-After header and without the migration', async () => {
+    const cookie = await adminCookie()
+    const limited = (await call('POST', '/api/admin/api-keys', { cookie, body: { name: 'health, over the limit' } })).json
+    await putKeyAtMinuteLimit(db.pool, limited.api_key.id)
+    const r = await call('GET', '/api/health/db', { token: limited.key })
+    expect(r.status).toBe(429)
+    expect(r.json.error).toMatchObject({ code: 'rate_limited', window: 'minute' })
+    expect(r.json).not.toHaveProperty('migration')
+    expect(r.json).not.toHaveProperty('ok')
+    expect(Number(r.headers['retry-after'])).toBe(r.json.error.retry_after_s)
+    expect(r.json.error.retry_after_s).toBeGreaterThanOrEqual(1)
+    expect(r.json.error.retry_after_s).toBeLessThanOrEqual(60)
+  })
+
   it('answers 200 with the newest migration for a valid key', async () => {
     const r = await call('GET', '/api/health/db', { token: key })
     expect(r.status).toBe(200)
@@ -197,10 +211,11 @@ describe('GET /api/health/db', () => {
       setPool({
         query: (text) => {
           asked.push(text)
-          if (/update api_keys/.test(text)) return Promise.resolve({ rows: [] })
+          // The guard of the key is one statement (the lookup, the count and the bookkeeping: server/auth.js), so it is the one that
+          // mentions api_keys; it answers a key that is let through (`limited_by` empty).
           const lookup = /from api_keys/.test(text)
           return new Promise((resolve) =>
-            setTimeout(() => resolve({ rows: lookup ? [{ id: 'k' }] : [{ ok: 1, migration: 'm' }] }), lookup ? lookupMs : queryMs),
+            setTimeout(() => resolve({ rows: lookup ? [{ id: 'k', limited_by: null, retry_after_s: null }] : [{ ok: 1, migration: 'm' }] }), lookup ? lookupMs : queryMs),
           )
         },
       })

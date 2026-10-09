@@ -5,6 +5,9 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 
 - **Base URL:** `https://<your-domain>/api/agent/v1` (the committee sees the exact address in the admin screen, in the Agent tab ("אייג׳נט"))
 - **Auth:** `Authorization: Bearer qrk_…`, a key the committee creates and can revoke at any time. Read-only.
+- **Limits:** one key may make at most 60 requests in a minute and at most 2000 in a building day. Over a limit the answer is a
+  `429 rate_limited` with a `Retry-After` header (see "Errors"). Ask for fewer, larger pages (`limit=500` and the cursor)
+  rather than many small requests.
 - **Self-description:** `GET /schema` returns this contract as JSON. Read it first. `GET /openapi.json` returns the same API as an
   OpenAPI 3.1 document, for tools that read OpenAPI (see "OpenAPI" below).
 - **Ready-made system prompt for the committee's agent:** [`agent-prompt.md`](agent-prompt.md).
@@ -165,10 +168,13 @@ JSON `{ "error": { "code": "…", "message": "…" } }`, sometimes with extra ke
 
 The key is checked first. A request to an endpoint that exists but has no valid key gets a `401`, whatever else is wrong with it (a bad filter, a bad cursor, a body that is not valid JSON): the `400` errors below are answered only to a valid key. `404` and `405` are answered without a key, because no endpoint is reached.
 
+Right after the key, and before anything else about the request, the limit of the key is checked. A key that has made 60 requests in the current minute, or 2000 in the building's day (midnight to midnight, Israel time), gets a `429` until its minute or its day is over. The `429` has a `Retry-After` header (whole seconds) and, in the error, `window` (`minute` or `day`, the limit that was reached) and `retry_after_s` (the same number): wait that long, then ask again. A refused request does not count towards the limits.
+
 | Status and code | Meaning |
 |---|---|
 | `401 api_key_required` | No key, or the header is not a `Bearer qrk_…` key |
 | `401 api_key_invalid` | The key is unknown or revoked |
+| `429 rate_limited` | The key has used up a limit: 60 requests in the current minute, or 2000 in the building's day. `window` says which one, and `retry_after_s` (and the `Retry-After` header) how long to wait. Only a valid key gets this answer |
 | `400 invalid_filter` | A bad `from`, `to`, `point_id`, `provider_id`, `outcome`, `order` or `limit` (`field` names it) |
 | `400 invalid_cursor` | The `cursor` is not one that this API returned |
 | `400 invalid_input` | The database refused a value as out of range or malformed |

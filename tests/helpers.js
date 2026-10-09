@@ -5,6 +5,7 @@ import { migrate, MigrationError } from '../server/migrate.js'
 import { setPool, poolConfig, guardPool, createPool } from '../server/db.js'
 import { assertNotProduction } from '../server/dbGuard.js'
 import { setGoogleVerifier } from '../server/google.js'
+import { AGENT_KEY_MAX_PER_MINUTE } from '../server/config.js'
 
 loadEnv()
 
@@ -139,4 +140,20 @@ export async function mintAgentKey(cookie, name = 'test agent') {
 export async function revokeAgentKey(cookie, id) {
   const r = await call('POST', `/api/admin/api-keys/${id}/revoke`, { cookie })
   if (r.status !== 200) throw new Error('revoking an agent key failed: ' + r.text)
+}
+
+/**
+ * Puts an agent key at the limit of requests per minute (AGENT_KEY_MAX_PER_MINUTE), so that its next request gets the 429
+ * `rate_limited`, without sending that many requests. The usage is written for the current minute AND the next one, so a test
+ * that crosses a minute boundary between this call and its request still finds the key at the limit.
+ * @param {{ query: (text: string, params?: unknown[]) => Promise<unknown> }} pool  the pool of the throwaway schema
+ * @param {string} keyId  the id of the key (mintAgentKey)
+ */
+export async function putKeyAtMinuteLimit(pool, keyId) {
+  await pool.query(
+    `insert into api_key_usage (key_id, minute, requests)
+     select $1::uuid, date_trunc('minute', now()) + make_interval(mins => m), $2::int from generate_series(0, 1) as m
+     on conflict (key_id, minute) do update set requests = excluded.requests`,
+    [keyId, AGENT_KEY_MAX_PER_MINUTE],
+  )
 }
