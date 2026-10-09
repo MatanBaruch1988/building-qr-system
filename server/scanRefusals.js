@@ -134,6 +134,12 @@ export const refusalJson = (r) => ({
 })
 
 /**
+ * Every query parameter that listRefusals reads, in one list (the same idea as SCAN_FILTERS in server/scans.js).
+ * tests/read-filters.test.js proves that listRefusals reads exactly these. A new filter goes here and in listRefusals.
+ */
+export const REFUSAL_FILTERS = Object.freeze(['from', 'to', 'point_id', 'provider_id', 'limit', 'cursor'])
+
+/**
  * The refused visits, newest first, one page at a time: `{ refusals, next_cursor }`, for the committee only (GET
  * /api/admin/scan-refusals; it is not part of the agent API). The filters are `from`, `to`, `point_id`, `provider_id`, `limit`
  * (at most MAX_REFUSAL_PAGE_SIZE) and `cursor`, and fail with the same codes as the scans list (`invalid_filter`,

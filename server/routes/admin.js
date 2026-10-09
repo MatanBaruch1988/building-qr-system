@@ -12,6 +12,7 @@ import { readBuilding, saveBuilding, parseAddress, parseName } from '../building
 import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvRow } from '../scans.js'
 import { audit, adminActor, changesOf, idsChanged } from '../audit.js'
 import { commit } from '../health.js'
+import { PHONE_HEALTH_LATERAL } from '../deviceStatus.js'
 import { ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, API_KEY_PREFIX } from '../config.js'
 import {
   GPS_MODES, GPS_MODE_REQUIRED, DEFAULT_GPS_MODE,
@@ -493,13 +494,7 @@ const PROVIDER_SELECT = `
          (select count(*)::int from scans s where s.provider_id = p.id) as scan_count, -- scans recorded for them (they survive deleting them)
          phones.waiting, phones.oldest_waiting_at, phones.outdated_devices
     from providers p
-    cross join lateral (
-      select coalesce(sum(d.waiting_count), 0)::int as waiting,
-             min(d.oldest_waiting_at) filter (where d.waiting_count > 0) as oldest_waiting_at,
-             (count(*) filter (where d.app_build is not null and d.app_build <> $1::text))::int as outdated_devices
-        from provider_devices d
-       where d.provider_id = p.id and d.revoked_at is null
-    ) phones`
+    ${PHONE_HEALTH_LATERAL}`
 
 /** The rows of PROVIDER_SELECT followed by `tail` (a where, an order); `values` are the parameters of `tail`, numbered from $2. */
 const providerRows = async (tail, values = []) => (await query(`${PROVIDER_SELECT} ${tail}`, [commit(), ...values])).rows

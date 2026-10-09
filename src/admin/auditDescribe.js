@@ -10,11 +10,16 @@
 // before #78 have the older shapes (the fields that were sent, flat, instead of `changes`; `provider_ids` as a list instead
 // of `{ added, removed }`), so both are read.
 import { formatDay, formatDateTime } from '../../shared/datetime.js'
+import { looksSecret } from '../../shared/secretLike.js'
 import { serviceLabel } from './hooks.js'
 import {
   ACTION_LABELS, FIELD_LABELS, GPS_MODE_LABELS, METHOD_LABELS, RETENTION_LABELS, SYSTEM_ACTOR, SCRIPT_ACTOR, UNKNOWN_ACTOR,
   DELETED_ACTOR_MARK, EMPTY_VALUE, YES, NO,
 } from './auditLabels.js'
+
+// What looks like a secret is decided by shared/secretLike.js (the server uses it too); it is also exported from here, where the
+// screen and its tests have always found it.
+export { looksSecret }
 
 /** @typedef {{ kind: 'text', text: string }} TextLine */
 /** @typedef {{ kind: 'field', label: string, value: string }} FieldLine */
@@ -30,23 +35,6 @@ const isCount = (value) => Number.isInteger(value) && value >= 0
 const clip = (text) => {
   const chars = Array.from(text)
   return chars.length > VALUE_MAX ? `${chars.slice(0, VALUE_MAX - 1).join('')}…` : text
-}
-
-// The shapes of a secret. `prefix_body` is how every key and token of this app starts (a short word, an underscore, the
-// rest); a long run of letters and digits with no space is a hash, a token or an id. Neither is a thing that the committee
-// has any use for on a screen, so neither is shown, whatever key it was found under.
-const PREFIXED_TOKEN = /^[a-z]{2,5}_[A-Za-z0-9_-]{6,}$/i
-const LONG_RUN = /^[A-Za-z0-9+/_=.-]{24,}$/
-
-/**
- * True for a text that looks like a key, a hash, a token or an id: `abc_def123456`, or 24 or more characters of letters,
- * digits and `+/_=.-` with no space and at least one digit and one letter.
- * @param {unknown} value
- */
-export function looksSecret(value) {
-  if (typeof value !== 'string') return false
-  const text = value.trim()
-  return PREFIXED_TOKEN.test(text) || (LONG_RUN.test(text) && /\d/.test(text) && /[A-Za-z]/.test(text))
 }
 
 /** A day or a moment that the API writes (ISO 8601) as DD/MM/YYYY or DD/MM/YYYY HH:MM, through the one shared module; else null. */

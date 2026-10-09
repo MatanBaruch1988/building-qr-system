@@ -2,8 +2,8 @@
 import {
   TIMEZONE, SCAN_COOLDOWN_MINUTES, GPS_MAX_USABLE_ACCURACY_M, GPS_PIN_TOLERANCE_M, GPS_MAX_ACCURACY_CREDIT_M,
   GPS_STALE_AFTER_S, CLOCK_MAX_AGE_MS, CLOCK_MAX_FUTURE_MS, CLOCK_SKEW_FLAG_MS,
-  DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH,
 } from './config.js'
+import { AGENT_ENDPOINTS, endpointKey } from './agentEndpoints.js'
 import {
   FLAG_LOCATION_UNVERIFIED, FLAG_LOCATION_OUTSIDE_RADIUS, FLAG_LOCATION_STALE, FLAG_OFFLINE_SYNC, FLAG_CLOCK_SKEW,
   FLAG_DEMO, FLAG_LEGACY_IMPORT,
@@ -29,25 +29,9 @@ export const schemaDoc = {
     checked_in_local: `Same instant as 'YYYY-MM-DD HH:mm:ss' in ${TIMEZONE}.`,
     local_date: `Calendar date in ${TIMEZONE}. Use this for "per day" questions.`,
   },
-  endpoints: {
-    'GET /api/agent/v1/scans':
-      'Query: from, to (YYYY-MM-DD = a calendar day in Israel time, or an ISO date-time that carries Z or an offset), ' +
-      `point_id, provider_id (uuids), service_type, flag (both text, cut to ${FILTER_TEXT_MAX_LENGTH} characters), ` +
-      'outcome (accepted|rejected|all, default accepted), ' +
-      'include_voided, include_demo (only true or 1 mean yes; anything else means no), order (asc|desc, default desc), ' +
-      `limit (1-${MAX_PAGE_SIZE}, default ${DEFAULT_PAGE_SIZE}; a larger number is cut to ${MAX_PAGE_SIZE}, not refused), ` +
-      'cursor (from next_cursor), ' +
-      'format (csv for CSV; any other value, or none, returns JSON). ' +
-      'Returns { scans, count, next_cursor }: count is the number of scans in this page (not the total), ' +
-      'next_cursor is null on the last page. With format=csv the body is CSV and next_cursor is in the X-Next-Cursor header ' +
-      '(absent on the last page). CSV: flags are joined with ";", booleans are the text true/false, null is an empty cell.',
-    'GET /api/agent/v1/points':
-      'Returns { points } with every service point, including inactive ones (is_active=false). See points_fields.',
-    'GET /api/agent/v1/providers':
-      'Returns { providers } with every service provider, including inactive ones, with last_scan_at. See providers_fields.',
-    'GET /api/agent/v1/schema': 'This document.',
-    'GET /api/agent/v1/health': 'Liveness. Returns { ok, server_time (UTC ISO), server_time_local (YYYY-MM-DD HH:mm:ss in the building time zone) }.',
-  },
+  // Built from the registry of server/agentEndpoints.js: the key (`GET /api/agent/v1/scans`) and the text of every endpoint, in
+  // the order of the registry.
+  endpoints: Object.fromEntries(AGENT_ENDPOINTS.map((endpoint) => [endpointKey(endpoint), endpoint.description])),
   auth: 'Header "Authorization: Bearer qrk_…". Keys are created and revoked by the committee in the admin screen.',
   errors: {
     shape: '{ "error": { "code": "...", "message": "..." } }, sometimes with extra keys such as field.',

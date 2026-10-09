@@ -147,7 +147,7 @@
  */
 
 /**
- * One entry of the audit log, as the committee reads it (GET /api/admin/audit, auditEntry in server/routes/audit.js). It is
+ * One entry of the audit log, as the committee reads it (GET /api/admin/audit, auditEntry in server/auditRead.js). It is
  * the row of `audit_log`, the name of the member and the current name of what the entry is about, nothing else: no session, no
  * token. The agent API never has it.
  * @typedef {object} AuditEntry
