@@ -154,6 +154,8 @@ export async function touchLastSync(deviceId) {
  *  - `active_devices`: how many phones are signed in (0 when none);
  *  - `last_sync_at`: the latest upload of any of the phones (null when none uploaded);
  *  - `not_accepted_total`, `overflow_total`: the two running totals of what the phones dropped, added up over the phones (0 when none).
+ *    Each phone may report up to DEVICE_STATUS_MAX_TOTAL, so the sum over many phones could pass the largest int; it stops there
+ *    (a cast of a bigger sum would make the whole providers list fail, the committee's included).
  * They are numbers and times over the provider's phones, never a column of one phone: the label, the browser string and the token hash
  * are not read here, and no row per phone comes out. $1 is the server's build (`commit()` in server/health.js), so the caller's own
  * values start at $2. The committee's providers list (PROVIDER_SELECT in server/routes/admin.js) and the agent's providers
@@ -165,8 +167,8 @@ export const PHONE_HEALTH_LATERAL = `cross join lateral (
              (count(*) filter (where d.app_build is not null and d.app_build <> $1::text))::int as outdated_devices,
              count(*)::int as active_devices,
              max(d.last_sync_at) as last_sync_at,
-             coalesce(sum(d.not_accepted_total), 0)::int as not_accepted_total,
-             coalesce(sum(d.overflow_total), 0)::int as overflow_total
+             least(coalesce(sum(d.not_accepted_total), 0), 2147483647)::int as not_accepted_total,
+             least(coalesce(sum(d.overflow_total), 0), 2147483647)::int as overflow_total
         from provider_devices d
        where d.provider_id = p.id and d.revoked_at is null
     ) phones`
