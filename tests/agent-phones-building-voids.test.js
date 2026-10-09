@@ -251,6 +251,20 @@ describe('GET /api/agent/v1/providers: the health of the phones of each provider
     expect((await call('DELETE', '/api/session', { token: extra.token })).status).toBe(200)
     expect(await agentProvider(world.a.id)).toEqual(before)
   })
+
+  it('stops the two totals at the largest int instead of failing the whole list when many phones add up past it', async () => {
+    const phones = (await db.pool.query('select id, not_accepted_total, overflow_total from provider_devices where provider_id = $1 and revoked_at is null', [world.a.id])).rows
+    expect(phones.length).toBe(2) // two signed-in phones: 2 x 2,000,000,000 is past 2,147,483,647
+    try {
+      for (const phone of phones) await setStatus(phone.id, { not_accepted_total: 2_000_000_000, overflow_total: 2_000_000_000 })
+      const a = await agentProvider(world.a.id)
+      expect([a.not_accepted_total, a.overflow_total]).toEqual([2147483647, 2147483647])
+      const committee = await call('GET', '/api/admin/providers', { cookie })
+      expect(committee.status).toBe(200) // the committee's list uses the same fragment and still answers
+    } finally {
+      for (const phone of phones) await setStatus(phone.id, { not_accepted_total: phone.not_accepted_total, overflow_total: phone.overflow_total })
+    }
+  })
 })
 
 // ======================================================================================================================
