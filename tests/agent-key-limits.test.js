@@ -10,7 +10,9 @@
 //     times a handler asks the guard; a refused request never counts towards the limit;
 //   - last_used_at: written on the first request, then not again within 5 minutes, and again after;
 //   - an unknown and a revoked key write nothing; a deleted key takes its usage with it; a key deleted while requests are in
-//     flight gives those requests a 401, never a 409 or a 500; parallel requests of one key are all counted and none deadlocks.
+//     flight gives those requests a 401, never a 409 or a 500; parallel requests of one key are all counted and none deadlocks;
+//   - the numbers of the Agent screen (GET /api/admin/api-keys): per key, the requests of the building's day, of the last 7
+//     building days and the refused requests of the last 30, from the same day boundary as the guard; zeros for a key with no usage.
 // A usage row is put in place with SQL instead of sending that many requests. A test that reads "the row of the current minute"
 // first waits out the end of a minute (settleMinute), so that the turn of a minute cannot move its request to another row.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -445,5 +447,121 @@ describe('a key that does not work writes nothing', () => {
       }
       expect(await usageOf(id), 'nothing of the deleted key is left').toEqual([])
     }
+  })
+})
+
+describe('the Agent screen: how much each key is used (GET /api/admin/api-keys)', () => {
+  const list = async () => (await call('GET', '/api/admin/api-keys', { cookie })).json
+  const listed = async (id) => (await list()).api_keys.find((k) => k.id === id)
+  const usageNumbers = (k) => ({ requests_today: k.requests_today, requests_7d: k.requests_7d, refused_30d: k.refused_30d })
+  /** The midnight that began the building's day `days` days ago, as a Date (0 is the start of today). Whole local days, so a change of summer time does not move it. */
+  const midnight = async (days) =>
+    (
+      await rowsOf(
+        `select (date_trunc('day', now() at time zone $1) - make_interval(days => $2::int)) at time zone $1 as t`,
+        [TIMEZONE, days],
+      )
+    )[0].t
+  const before = (date, minutes = 1) => new Date(date.getTime() - minutes * 60_000)
+
+  it('adds to each key its requests of today and of the last 7 days and its refused requests of the last 30 days, as numbers, and the limits to the answer', async () => {
+    const { id } = await newKey('screen numbers')
+    const { api_keys: keys, limits } = await list()
+    expect(limits).toEqual({ per_minute: AGENT_KEY_MAX_PER_MINUTE, per_day: AGENT_KEY_MAX_PER_DAY })
+    const k = keys.find((x) => x.id === id)
+    // The fields that were there stay, and nothing else comes with the new ones (never the hash of the key).
+    expect(Object.keys(k).sort()).toEqual(
+      ['created_at', 'id', 'key_prefix', 'last_used_at', 'name', 'refused_30d', 'requests_7d', 'requests_today', 'revoked_at'],
+    )
+    for (const field of ['requests_today', 'requests_7d', 'refused_30d']) expect(typeof k[field], field).toBe('number')
+  })
+
+  it('shows zeros for a key that was never used, and for a key whose usage is all older than the windows', async () => {
+    const fresh = await newKey('never used')
+    expect(usageNumbers(await listed(fresh.id))).toEqual({ requests_today: 0, requests_7d: 0, refused_30d: 0 })
+    const old = await newKey('used long ago')
+    await putUsage(old.id, before(await midnight(29)), 40, 9) // the last minute before the 30-day window: outside every window
+    await putUsage(old.id, await midnight(60), 40, 9)
+    await putUsage(old.id, await midnight(89), 40, 9)
+    expect(usageNumbers(await listed(old.id))).toEqual({ requests_today: 0, requests_7d: 0, refused_30d: 0 })
+  })
+
+  it("counts the building's day from its midnight: the first minute of today is today, the last minute of yesterday is not (but is in the 7 days)", async () => {
+    await settleMinute()
+    const { id } = await newKey('day boundary')
+    const start = await midnight(0)
+    await putUsage(id, before(start), 11) // yesterday, 23:59 in the building
+    await putUsage(id, start, 5) // today, 00:00
+    await putUsage(id, new Date(start.getTime() + 60_000), 7) // today, 00:01
+    expect(usageNumbers(await listed(id))).toEqual({ requests_today: 12, requests_7d: 23, refused_30d: 0 })
+  })
+
+  it('counts the last 7 building days with today as the first of them: the midnight 6 days back is in, the minute before it is out', async () => {
+    await settleMinute()
+    const { id } = await newKey('7 days')
+    const edge = await midnight(6)
+    await putUsage(id, before(edge), 100) // the last minute before the 7-day window: outside
+    await putUsage(id, edge, 13) // 6 days back, 00:00: the first minute of the window
+    await putUsage(id, await midnight(3), 4)
+    await putUsage(id, await midnight(0), 2)
+    expect(usageNumbers(await listed(id))).toEqual({ requests_today: 2, requests_7d: 19, refused_30d: 0 })
+  })
+
+  it('counts refused requests over the last 30 building days: the midnight 29 days back is in, the minute before it is out, and they are not requests', async () => {
+    await settleMinute()
+    const { id } = await newKey('30 days')
+    const edge = await midnight(29)
+    await putUsage(id, before(edge), 50, 5) // the last minute before the 30-day window: outside
+    await putUsage(id, edge, 3, 3) // 29 days back, 00:00: the first minute of the window
+    await putUsage(id, await midnight(10), 1, 4)
+    await putUsage(id, await midnight(0), 2, 1)
+    await putUsage(id, await midnight(45), 9, 8)
+    expect(usageNumbers(await listed(id))).toEqual({ requests_today: 2, requests_7d: 2, refused_30d: 8 })
+  })
+
+  it("keeps one key's numbers apart from another's, and shows them for a revoked key too", async () => {
+    await settleMinute()
+    const a = await newKey('key a')
+    const b = await newKey('key b')
+    const start = await midnight(0)
+    await putUsage(a.id, start, 10, 1)
+    await putUsage(b.id, start, 3, 0)
+    await revokeAgentKey(cookie, b.id)
+    expect(usageNumbers(await listed(a.id))).toEqual({ requests_today: 10, requests_7d: 10, refused_30d: 1 })
+    const revoked = await listed(b.id)
+    expect(revoked.revoked_at).not.toBeNull()
+    expect(usageNumbers(revoked)).toEqual({ requests_today: 3, requests_7d: 3, refused_30d: 0 })
+  })
+
+  it('agrees with the guard: the requests that the daily limit counts are the requests of today, and a refusal shows as refused, never as a request', async () => {
+    await settleMinute()
+    const { id, key } = await newKey('agrees with the guard')
+    await putUsage(id, await midnight(0), AGENT_KEY_MAX_PER_DAY - 2)
+    expect(usageNumbers(await listed(id))).toEqual({
+      requests_today: AGENT_KEY_MAX_PER_DAY - 2, requests_7d: AGENT_KEY_MAX_PER_DAY - 2, refused_30d: 0,
+    })
+    expect((await get(key)).status).toBe(200) // the 1999th
+    expect((await get(key)).status).toBe(200) // the 2000th
+    expect((await get(key)).status, 'over the daily limit').toBe(429)
+    expect((await get(key)).status).toBe(429)
+    expect(usageNumbers(await listed(id))).toEqual({
+      requests_today: AGENT_KEY_MAX_PER_DAY, requests_7d: AGENT_KEY_MAX_PER_DAY, refused_30d: 2,
+    })
+  })
+
+  it('counts the requests that a key really makes', async () => {
+    await settleMinute()
+    const { id, key } = await newKey('real requests')
+    for (let i = 0; i < 3; i++) expect((await get(key)).status).toBe(200)
+    expect(usageNumbers(await listed(id))).toEqual({ requests_today: 3, requests_7d: 3, refused_30d: 0 })
+  })
+
+  it('keeps the order of the list (the newest key first) and answers a committee member only', async () => {
+    const first = await newKey('order first')
+    const second = await newKey('order second')
+    const ids = (await list()).api_keys.map((k) => k.id)
+    expect(ids.indexOf(second.id)).toBeLessThan(ids.indexOf(first.id))
+    expect((await call('GET', '/api/admin/api-keys')).status).toBe(401)
+    expect((await call('GET', '/api/admin/api-keys', { token: first.key })).status).toBe(401)
   })
 })
