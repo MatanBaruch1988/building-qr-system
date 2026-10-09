@@ -72,10 +72,19 @@ The server cuts every report to a fixed list of fields (`shared/contract.js`) an
   ("יומן פעולות"). It shows the same entries by the fields it knows and leaves out any value that looks like a key, a hash or
   a token. The committee app does not show the label of a phone, the sessions, the login attempts, the recorded errors or the alert days.
 - **The committee's own AI agent**, through the read-only agent API (`docs/agent-api.md`), with a key that the committee
-  made: the points, the providers (company, contact name, kind of service, whether active, the time of the last scan) and the
-  scans (provider name, point, times, distance, accuracy, flags). It cannot write anything, and it does not see the phones or
-  what they reported, the labels of the phones, the sessions, the login attempts, the recorded errors, the audit log, the refused visits, the password hashes or any
-  token.
+  made, and through it **the AI service that runs the agent**, which the committee chooses and which receives what the
+  agent reads under its own terms (the first installation's committee uses a bot on xAI's Grok). Since the owner's
+  decision of 08/10/2026 the agent is the committee's analyst and may read everything that the committee app shows: the
+  building's name and address, the points, the providers (company, contact name, kind of service, whether active, the
+  time of the last scan), the scans (provider name, point, times, distance, accuracy, flags, which phone sent it as a
+  random id, when the server received it, and who voided it and when), counts of the scans per day, provider, point or
+  service, the visits that the server refused, the health of each provider's phones as numbers (how many phones, what
+  waits on them and since when, the totals, never a phone's label or browser string and never a row per phone), and the
+  audit log with the names, e-mail addresses and reasons that it holds. The parts beyond the points, the providers and
+  the scans reach the agent with release 2.3.0. It cannot write anything: the only thing that its requests change is the
+  record of its own key (when it was last used, and how many requests it made). It never sees a QR code, a password or a
+  hash of one, a token, a key or a hash of one, the label of a phone, the sessions, the login attempts, a network (IP)
+  address, the recorded errors or the alert days.
 - **Whoever runs the services under the app**: the owner of the project and the services that host it (the database is a
   Neon project, the app runs on Vercel). The committee's sign-in goes through Google, which handles it under its own terms.
   The first installation's owner has a check on healthchecks.io (optional: a copy has it only if it set
