@@ -11,7 +11,7 @@
 //   d. every enum is its constant (shared/), every minimum, maximum or default is its constant (server/config.js), and a keyword
 //      that this file does not pin fails until it does;
 //   e. the real answer of every JSON route (a database with every kind of scan, a deleted point and provider, a voided scan, a
-//      rejected one) validates against its 200 schema CLOSED (additionalProperties false), so a field that an answer gains or loses
+//      rejected one, and a refused visit of every code) validates against its 200 schema CLOSED (additionalProperties false), so a field that an answer gains or loses
 //      fails here until the document says so; and the CSV variant of /scans is what the document says;
 //   f. the document that the route serves is the document that the module builds;
 //   g. the error codes of the document are the ones of schemaDoc.errors, with their statuses, and the real error answers fit them.
@@ -32,10 +32,10 @@ import { getPool, setPool } from '../server/db.js'
 import { schemaDoc } from '../server/schemaDoc.js'
 import { AGENT_ENDPOINTS, endpointKey } from '../server/agentEndpoints.js'
 import { buildOpenApi, openApiDocument } from '../server/agentOpenApi.js'
-import { SCAN_CSV_COLUMNS } from '../server/scans.js'
+import { AGENT_SCAN_CSV_COLUMNS } from '../server/scans.js'
 import * as config from '../server/config.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
-import { SCAN_OUTCOMES, SCAN_SOURCES, GPS_MODES, OUTCOME_ACCEPTED } from '../shared/contract.js'
+import { SCAN_OUTCOMES, SCAN_SOURCES, GPS_MODES, OUTCOME_ACCEPTED, SYNC_PERMANENT_ERROR_CODES } from '../shared/contract.js'
 
 const OPENAPI = 'server/agentOpenApi.js'
 const HTTP_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace']
@@ -263,7 +263,8 @@ describe('b. the paths are the agent routes, the registry and the base path', ()
 // The facts that a parameter states about its values (every enum, bound and default inside its schema), by name. A parameter whose
 // schema states a fact that is not here, or lacks one that is, fails: a limit is a constant of server/config.js, an enum a constant
 // of shared/ (the values of outcome, order and format are the literals of server/scans.js and the route: the black-box test below
-// sends each of them to the real route and the unknown one too).
+// sends each of them to the real route and the unknown one too). A parameter that means something else on one endpoint has its
+// facts under "<operationId>.<name>" (the page of the refused visits is cut at its own size).
 const KEYWORDS = ['enum', 'const', 'default', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'minLength', 'maxLength', 'minItems', 'maxItems', 'multipleOf']
 const PARAMETER_FACTS = {
   flag: { enum: [...SCAN_FLAGS] },
@@ -272,8 +273,10 @@ const PARAMETER_FACTS = {
   include_demo: { default: false },
   order: { enum: ['asc', 'desc'], default: 'desc' },
   limit: { minimum: 1, maximum: config.MAX_PAGE_SIZE, default: config.DEFAULT_PAGE_SIZE },
+  'listRefusals.limit': { minimum: 1, maximum: config.MAX_REFUSAL_PAGE_SIZE, default: config.DEFAULT_PAGE_SIZE },
   format: { enum: ['json', 'csv'], default: 'json' },
 }
+const factsFor = (operation, name) => PARAMETER_FACTS[`${operation.operationId}.${name}`] ?? PARAMETER_FACTS[name] ?? {}
 // The same for the schemas of the components, by the path of the keyword (the key `enum` of Scan.properties.source is
 // "Scan.properties.source.enum").
 const SCHEMA_FACTS = {
@@ -282,6 +285,9 @@ const SCHEMA_FACTS = {
   'Scan.properties.outcome.enum': [...SCAN_OUTCOMES],
   'Scan.properties.flags.items.enum': [...SCAN_FLAGS],
   'ScanList.properties.count.minimum': 0,
+  'Refusal.properties.source.enum': [...SCAN_SOURCES],
+  'Refusal.properties.code.enum': [...SYNC_PERMANENT_ERROR_CODES],
+  'RefusalList.properties.count.minimum': 0,
 }
 const factsOf = (schema) => Object.fromEntries([...nodes(schema)].flatMap(([, node]) => Object.entries(node).filter(([key]) => KEYWORDS.includes(key))))
 
@@ -326,7 +332,7 @@ describe('d. every enum is its constant, every limit and default is its constant
     for (const { path, method, operation } of operationsOf(doc)) {
       for (const p of operation.parameters ?? []) {
         const found = factsOf(p.schema)
-        const want = PARAMETER_FACTS[p.name] ?? {}
+        const want = factsFor(operation, p.name)
         if (!isDeepStrictEqual(found, want)) {
           problems.push(`The parameter ${p.name} of ${method} ${path} states ${JSON.stringify(found)} but the constants say ${JSON.stringify(want)}: change ${OPENAPI}, or PARAMETER_FACTS in this test if the constant is what is new.`)
         }
@@ -356,6 +362,11 @@ describe('d. every enum is its constant, every limit and default is its constant
     expect(scan.outcome.enum).toEqual([...SCAN_OUTCOMES])
     expect(scan.source.enum).toEqual([...SCAN_SOURCES])
     expect(doc.components.schemas.Point.properties.gps_mode.enum).toEqual([...GPS_MODES])
+    // A refused visit carries the source of a scan and one of the permanent codes of the sync contract.
+    const refusal = doc.components.schemas.Refusal.properties
+    expect(refusal.source.enum).toEqual([...SCAN_SOURCES])
+    expect(refusal.code.enum).toEqual([...SYNC_PERMANENT_ERROR_CODES])
+    expect(Object.keys(schemaDoc.refusal_codes).sort()).toEqual([...SYNC_PERMANENT_ERROR_CODES].sort())
     // schemaDoc describes the same values.
     expect(Object.keys(schemaDoc.flags)).toEqual([...SCAN_FLAGS])
     expect(Object.keys(schemaDoc.outcomes)).toEqual([...SCAN_OUTCOMES])
@@ -364,7 +375,7 @@ describe('d. every enum is its constant, every limit and default is its constant
 
   it('every field of an answer is described by schemaDoc, and every property of an object is required', () => {
     const problems = []
-    for (const [name, fields] of [['Point', schemaDoc.points_fields], ['Provider', schemaDoc.providers_fields], ['Scan', { ...schemaDoc.time_fields, ...schemaDoc.scan_fields }]]) {
+    for (const [name, fields] of [['Point', schemaDoc.points_fields], ['Provider', schemaDoc.providers_fields], ['Building', schemaDoc.building_fields], ['Refusal', schemaDoc.refusal_fields], ['Scan', { ...schemaDoc.time_fields, ...schemaDoc.scan_fields }]]) {
       const properties = doc.components.schemas[name].properties
       problems.push(...diffNames('field', { where: `schemaDoc (${name})`, names: Object.keys(fields) }, { where: `components.schemas.${name}`, names: Object.keys(properties) }))
       for (const [field, text] of Object.entries(fields)) {
@@ -464,6 +475,16 @@ describe('the real agent API answers what the document says', () => {
     await point({ name: 'Roof', gps_mode: 'none', is_active: false }) // no coordinates, switched off
     const session = async (p, password = 'agent-openapi-1') => (await call('POST', '/api/session', { body: { provider_id: p.id, password } })).json.token
     const [cleanerToken, gardenerToken, demoToken, leavingToken] = await Promise.all([session(cleaner), session(gardener), session(demo), session(leaving)])
+    // What a phone of the cleaner reported about itself (written straight into its row): visits wait, some were not accepted and some
+    // were dropped from a full queue, and its build is not the server's own (the server's is stubbed below).
+    vi.stubEnv('VERCEL_GIT_COMMIT_SHA', 'abcdef1234567890abcdef1234567890abcdef12')
+    await db.pool.query(
+      `update provider_devices set app_build = '1234567', waiting_count = 3, oldest_waiting_at = now() - interval '2 hours',
+              not_accepted_total = 2, overflow_total = 1, status_at = now() where provider_id = $1`,
+      [cleaner.id],
+    )
+    // The committee has typed the name and the address of the building.
+    await call('PUT', '/api/admin/building', { cookie, body: { address: 'Test Street 1, Test City', name: 'Test Building' } })
     const scan = (token, p, gps) => call('POST', '/api/scan', { token, body: { id: randomUUID(), code: p.qr_token, ...(gps ? { gps } : {}) } })
     const north = (metres) => ({ lat: HOME.lat + metres / 111_195, lng: HOME.lng, accuracy: 8 })
     const results = [
@@ -477,8 +498,27 @@ describe('the real agent API answers what the document says', () => {
       await scan(leavingToken, lobby, { ...HOME, accuracy: 8, age_s: 120 }), // a remembered position: location_stale; voided and left below
     ]
     if (results.some((r) => r.status !== 200)) throw new Error(`a seed scan was refused: ${results.map((r) => r.status).join()}`)
+    // Visits that the server refused (they are not scans): a real one, at a point that is switched off, and one for every code of the
+    // sync contract written straight into the table, from both sources, with and without an id, a point and the phone's clock.
+    const roof = await db.pool.query("select qr_token from points where name = 'Roof'")
+    const refused = await scan(gardenerToken, { qr_token: roof.rows[0].qr_token }, null)
+    if (refused.status !== 409) throw new Error(`the seed refusal was not made: ${refused.status}`)
+    for (const [i, code] of SYNC_PERMANENT_ERROR_CODES.entries()) {
+      const named = i % 2 === 0
+      await db.pool.query(
+        `insert into scan_refusals (scan_id, source, code, provider_id, provider_name, device_id, point_id, point_name, client_time)
+         values ($1, $2, $3, $4, 'Sparkle Cleaning – Test', $5, $6, $7, $8)`,
+        [i % 3 === 2 ? null : randomUUID(), SCAN_SOURCES[i % 2], code, cleaner.id, randomUUID(), named ? lobby.id : null, named ? 'Lobby' : null, named ? null : new Date().toISOString()],
+      )
+    }
     const leavingScan = results[7].json.scan
     await post(`/api/admin/scans/${leavingScan.id}/void`, { reason: 'test' })
+    // A scan that the one-time import of the old system wrote: no phone is known for it (device_id is null) and nobody voided it.
+    await db.pool.query(
+      `insert into scans (id, point_id, provider_id, point_name, provider_name, checked_in_at, local_date, source, outcome, flags)
+       values ($1, $2, $3, 'Lobby', 'Sparkle Cleaning', '2026-01-05T08:00:00Z', '2026-01-05', 'online', 'accepted', '{legacy_import}')`,
+      [randomUUID(), lobby.id, cleaner.id],
+    )
     expect((await call('DELETE', `/api/admin/points/${gone.id}`, { cookie })).status).toBe(200)
     expect((await call('DELETE', `/api/admin/providers/${leaving.id}`, { cookie })).status).toBe(200)
 
@@ -488,7 +528,10 @@ describe('the real agent API answers what the document says', () => {
     await revokeAgentKey(cookie, spare.id)
   }, 120_000)
 
-  afterAll(async () => db?.teardown())
+  afterAll(async () => {
+    vi.unstubAllEnvs()
+    await db?.teardown()
+  })
 
   // ---- f ----
 
@@ -551,15 +594,24 @@ describe('the real agent API answers what the document says', () => {
     const problems = []
     for (const outcome of SCAN_OUTCOMES) if (!seen(scans, 'outcome').has(outcome)) problems.push(`No seed scan has the outcome ${outcome}.`)
     for (const source of SCAN_SOURCES) if (!seen(scans, 'source').has(source)) problems.push(`No seed scan has the source ${source}.`)
-    for (const field of ['service_type', 'distance_m', 'gps_accuracy_m', 'void_reason']) if (!nullAndNot(scans, field)) problems.push(`The seed scans do not have both a null and a value in ${field}.`)
+    for (const field of ['service_type', 'distance_m', 'gps_accuracy_m', 'void_reason', 'voided_at', 'voided_by', 'device_id']) if (!nullAndNot(scans, field)) problems.push(`The seed scans do not have both a null and a value in ${field}.`)
+    if (scans.some((s) => typeof s.received_at !== 'string')) problems.push('A seed scan has no received_at: it is never null.')
     if (!seen(scans, 'voided').has(true) || !seen(scans, 'voided').has(false)) problems.push('The seed scans are not both voided and not voided.')
     const flags = new Set(scans.flatMap((s) => s.flags))
-    for (const flag of ['offline_sync', 'clock_skew', 'demo', 'location_stale', 'location_outside_radius']) if (!flags.has(flag)) problems.push(`No seed scan carries the flag ${flag}.`)
+    for (const flag of ['offline_sync', 'clock_skew', 'demo', 'location_stale', 'location_outside_radius', 'legacy_import']) if (!flags.has(flag)) problems.push(`No seed scan carries the flag ${flag}.`)
     if (!scans.some((s) => !points.some((p) => p.id === s.point_id))) problems.push('No seed scan is at a deleted point.')
     if (!scans.some((s) => !providers.some((p) => p.id === s.provider_id))) problems.push('No seed scan is by a deleted provider.')
     if (!nullAndNot(points, 'lat') || !nullAndNot(points, 'lng') || !nullAndNot(points, 'service_type')) problems.push('The seed points do not have both a null and a value in lat, lng and service_type.')
     if (!points.some((p) => p.assigned_provider_ids.length) || !points.some((p) => !p.assigned_provider_ids.length)) problems.push('The seed points are not both assigned and open to everyone.')
     if (!nullAndNot(providers, 'last_scan_at')) problems.push('The seed providers do not have both a last_scan_at and none.')
+    for (const field of ['oldest_waiting_at', 'last_sync_at']) if (!nullAndNot(providers, field)) problems.push(`The seed providers do not have both a null and a value in ${field}.`)
+    const refusals = (await get('/refusals?limit=200')).json.refusals
+    for (const code of SYNC_PERMANENT_ERROR_CODES) if (!seen(refusals, 'code').has(code)) problems.push(`No seed refusal has the code ${code}.`)
+    for (const source of SCAN_SOURCES) if (!seen(refusals, 'source').has(source)) problems.push(`No seed refusal has the source ${source}.`)
+    for (const field of ['scan_id', 'point_id', 'point_name', 'client_time']) if (!nullAndNot(refusals, field)) problems.push(`The seed refusals do not have both a null and a value in ${field}.`)
+    if (!providers.some((p) => p.active_devices === 0) || !providers.some((p) => p.active_devices > 0)) problems.push('The seed providers are not both with phones and without.')
+    if (!providers.some((p) => p.waiting > 0 && p.not_accepted_total > 0 && p.overflow_total > 0 && p.outdated_devices > 0)) problems.push('No seed provider has visits waiting, visits not accepted, visits dropped and an outdated phone.')
+    if (!(await get('/building')).json.building.name) problems.push('The seed building has no name.')
     report(problems)
   })
 
@@ -592,17 +644,38 @@ describe('the real agent API answers what the document says', () => {
     expect(validate(last), errorsOf(validate).join('; ')).toBe(true)
   })
 
+  it('e. paging the refused visits: next_cursor is a string on a page that has another and null on the last, as the schema says', async () => {
+    const validate = compileSchema(doc.components.schemas.RefusalList, { shut: true })
+    const first = (await get('/refusals?limit=2')).json
+    expect(typeof first.next_cursor).toBe('string')
+    expect(first.count).toBe(2)
+    const last = (await get('/refusals?limit=200')).json
+    expect(last.next_cursor).toBeNull()
+    expect(last.count).toBe(last.refusals.length)
+    expect(validate(first), errorsOf(validate).join('; ')).toBe(true)
+    expect(validate(last), errorsOf(validate).join('; ')).toBe(true)
+    const changed = (change) => {
+      const copy = plain(first)
+      change(copy)
+      return copy
+    }
+    expect(validate(changed((a) => (a.refusals[0].device_id = randomUUID())))).toBe(false) // a field that the schema does not list
+    expect(validate(changed((a) => delete a.refusals[0].point_name))).toBe(false)
+    expect(validate(changed((a) => (a.refusals[0].code = 'something_else')))).toBe(false)
+    expect(validate(changed((a) => (a.refusals[0].source = 'carrier_pigeon')))).toBe(false)
+  })
+
   it('e. the CSV variant is what the document says: text/csv, the columns of a scan, and the cursor in X-Next-Cursor', async () => {
     const ok = operationOf(AGENT_ENDPOINTS.find((x) => x.id === 'listScans')).responses['200']
     expect(Object.keys(ok.content)).toEqual(['application/json', 'text/csv'])
     expect(ok.content['text/csv'].schema.type).toBe('string')
     expect(Object.keys(ok.headers)).toEqual(['X-Next-Cursor'])
-    expect(Object.keys(doc.components.schemas.Scan.properties)).toEqual(SCAN_CSV_COLUMNS)
-    for (const column of SCAN_CSV_COLUMNS) expect(ok.content['text/csv'].schema.description, `the CSV column ${column}`).toContain(column)
+    expect(Object.keys(doc.components.schemas.Scan.properties)).toEqual(AGENT_SCAN_CSV_COLUMNS)
+    for (const column of AGENT_SCAN_CSV_COLUMNS) expect(ok.content['text/csv'].schema.description, `the CSV column ${column}`).toContain(column)
 
     const page = await get('/scans?outcome=all&format=csv&limit=2')
     expect(page.headers['content-type']).toMatch(/^text\/csv/)
-    expect(page.text.split('\r\n')[0]).toBe(SCAN_CSV_COLUMNS.join(','))
+    expect(page.text.split('\r\n')[0]).toBe(AGENT_SCAN_CSV_COLUMNS.join(','))
     const first = (await get('/scans?outcome=all&limit=2')).json.next_cursor
     expect(page.headers['x-next-cursor']).toBe(first) // the header is the cursor of the JSON page
     const all = await get('/scans?outcome=all&format=csv&limit=500')
@@ -613,7 +686,10 @@ describe('the real agent API answers what the document says', () => {
 
   it('c. the real route accepts what each documented parameter allows, and refuses what it must refuse', async () => {
     const problems = []
-    const cursor = (await get('/scans?outcome=all&limit=1')).json.next_cursor
+    const cursors = {
+      listScans: (await get('/scans?outcome=all&limit=1')).json.next_cursor,
+      listRefusals: (await get('/refusals?limit=1')).json.next_cursor, // the cursor of the scans is not one of the refused visits
+    }
     for (const e of AGENT_ENDPOINTS) {
       for (const parameter of operationOf(e).parameters ?? []) {
         const { name } = parameter
@@ -621,7 +697,11 @@ describe('the real agent API answers what the document says', () => {
           problems.push(`${endpointKey(e)} documents the parameter "${name}", which INVALID_VALUES of this test does not know: add the values that the route must refuse (an empty list if it refuses none).`)
           continue
         }
-        const sample = name === 'cursor' ? cursor : 'cleaning'
+        const sample = name === 'cursor' ? cursors[e.id] : 'cleaning'
+        if (name === 'cursor' && !sample) {
+          problems.push(`This test has no cursor for ${endpointKey(e)}: add one to cursors.`)
+          continue
+        }
         for (const value of allowedValues(parameter.schema, sample)) {
           const r = await get(`${pathOf(e)}?${name}=${encodeURIComponent(value)}${name === 'limit' ? '' : '&limit=1'}`)
           if (r.status !== 200) problems.push(`${endpointKey(e)} with ${name}=${value}, which the document allows, answered ${r.status} ${r.json?.error?.code}.`)
@@ -645,6 +725,14 @@ describe('the real agent API answers what the document says', () => {
     expect(r.status).toBe(200)
     const description = doc.paths['/scans'].get.parameters.find((p) => p.name === 'limit').description
     expect(description).toContain(`cut to ${config.MAX_PAGE_SIZE}`)
+    // The refused visits are cut at their own size, and the parameter of that endpoint says so (not the size of the scans).
+    const refusals = await get(`/refusals?limit=${config.MAX_REFUSAL_PAGE_SIZE + 1}`)
+    expect(refusals.status).toBe(200)
+    expect(refusals.json.count).toBeLessThanOrEqual(config.MAX_REFUSAL_PAGE_SIZE)
+    const refusalLimit = doc.paths['/refusals'].get.parameters.find((p) => p.name === 'limit')
+    expect(refusalLimit.description).toContain(`cut to ${config.MAX_REFUSAL_PAGE_SIZE}`)
+    expect(refusalLimit.description).not.toContain(String(config.MAX_PAGE_SIZE))
+    expect(refusalLimit.schema.maximum).toBe(config.MAX_REFUSAL_PAGE_SIZE)
   })
 
   // ---- g ----
@@ -716,12 +804,14 @@ describe('the real agent API answers what the document says', () => {
     check(await call('GET', '/api/agent/v1/health', { token: await currentKey(), badJsonBody: true }), 'a body that is not JSON', 'invalid_json')
     check(await call('GET', '/api/agent/v1/nope', {}), 'an unknown endpoint', 'not_found')
     check(await call('POST', '/api/agent/v1/scans', { token: await currentKey(), body: {} }), 'a POST', 'method_not_allowed')
-    // A failure of the server itself: a database that cannot be reached, through the real route and the real router.
+    // A failure of the server itself: a database that cannot be reached, through the real route and the real router. The key is taken
+    // before the database is broken: the rotation of keys (currentKey) mints a new one through the database when the old one is used up.
+    const brokenKey = await currentKey()
     const pool = getPool()
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     setPool({ query: async () => { throw Object.assign(new Error('connection lost'), { code: 'ECONNRESET' }) } })
     try {
-      check(await get('/scans'), 'a database that cannot be reached', 'server_error')
+      check(await call('GET', '/api/agent/v1/scans', { token: brokenKey }), 'a database that cannot be reached', 'server_error')
     } finally {
       setPool(pool)
       logged.mockRestore()

@@ -191,7 +191,8 @@ export const IDLE_IN_TRANSACTION_TIMEOUT_MS = 20_000
 
 export const DEFAULT_PAGE_SIZE = 100
 export const MAX_PAGE_SIZE = 500
-// The most refused visits that one page of the committee's list holds (GET /api/admin/scan-refusals).
+// The most refused visits that one page holds, in the committee's list (GET /api/admin/scan-refusals) and in the agent's
+// (GET /api/agent/v1/refusals): one constant for both.
 export const MAX_REFUSAL_PAGE_SIZE = 200
 // The most audit entries that one page of the committee's list holds (GET /api/admin/audit).
 export const MAX_AUDIT_PAGE_SIZE = 200

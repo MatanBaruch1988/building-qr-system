@@ -7,15 +7,17 @@
 // already lives, so that a change there changes this document with it:
 //   - the paths, the operationIds, the summaries, the descriptions and the query parameters (by name, in order) come from the
 //     registry of server/agentEndpoints.js, so an endpoint that is a row there is in this document;
-//   - the enums come from shared/ (the flags, the outcomes, the sources, the GPS modes), the page size, the longest text filter
-//     and the key prefix from server/config.js, the CSV columns from server/scans.js;
-//   - the description of every field of a point, a provider and a scan comes from server/schemaDoc.js, and the errors (the status,
-//     the codes and what they mean) are built from schemaDoc.errors, so a new error code there is in every error response here.
+//   - the enums come from shared/ (the flags, the outcomes, the sources, the GPS modes, the codes of a refused visit), the page
+//     sizes, the longest text filter and the key prefix from server/config.js, the CSV columns (the agent's) from server/scans.js;
+//   - the description of every field of a point, a provider, a scan, a refused visit and the building comes from server/schemaDoc.js,
+//     and the errors (the status, the codes and what they mean) are built from schemaDoc.errors, so a new error code there is in
+//     every error response here.
 //
 // What is written here: the type of every field (a field that schemaDoc describes and this file does not type, or the other way
 // round, stops the server from starting), the description of every query parameter (a filter in the registry without one stops it
-// too, and so does an endpoint without an answer below), and the few values that only server/scans.js knows (the values of the
-// `outcome`, `order` and `format` filters). tests/agent-openapi.test.js proves all of it: the document is valid OpenAPI 3.1, its
+// too, and so does an endpoint without an answer below; an endpoint whose filter of the same name means something else, such as
+// the page size of the refused visits, has its own description of it), and the few values that only server/scans.js knows (the
+// values of the `outcome`, `order` and `format` filters). tests/agent-openapi.test.js proves all of it: the document is valid OpenAPI 3.1, its
 // paths are the routes, its parameters the filters, its enums and limits the constants, and every real answer fits its schema.
 //
 // Every object that an answer holds lists all its fields as required: the keys are always there (a value that can be missing is
@@ -23,12 +25,12 @@
 // validates answers with it does not break when a field is added; the test closes them, so that a field that an answer gains
 // fails there until this file types it.
 import { STATUS_CODES } from 'node:http'
-import { TIMEZONE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH, API_KEY_PREFIX } from './config.js'
+import { TIMEZONE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_REFUSAL_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH, API_KEY_PREFIX } from './config.js'
 import { AGENT_ENDPOINTS } from './agentEndpoints.js'
-import { SCAN_CSV_COLUMNS } from './scans.js'
+import { AGENT_SCAN_CSV_COLUMNS } from './scans.js'
 import { schemaDoc } from './schemaDoc.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
-import { SCAN_OUTCOMES, SCAN_SOURCES, GPS_MODES, OUTCOME_ACCEPTED } from '../shared/contract.js'
+import { SCAN_OUTCOMES, SCAN_SOURCES, GPS_MODES, OUTCOME_ACCEPTED, SYNC_PERMANENT_ERROR_CODES } from '../shared/contract.js'
 
 const FILE = 'server/agentOpenApi.js'
 
@@ -128,12 +130,25 @@ function componentSchemas() {
         is_demo: boolean,
         created_at: dateTime,
         last_scan_at: orNull(dateTime),
+        active_devices: integer,
+        waiting: integer,
+        oldest_waiting_at: orNull(dateTime),
+        outdated_devices: integer,
+        last_sync_at: orNull(dateTime),
+        not_accepted_total: integer,
+        overflow_total: integer,
       },
       schemaDoc.providers_fields,
     ),
     ProviderList: plainObject(
       { providers: { type: 'array', items: ref('schemas', 'Provider'), description: 'Every service provider, including inactive ones.' } },
       'The answer of the providers endpoint.',
+    ),
+
+    Building: describedObject('Building', { name: string, address: string }, schemaDoc.building_fields),
+    BuildingAnswer: plainObject(
+      { building: { ...ref('schemas', 'Building'), description: 'The name and the address of the building, as the committee typed them.' } },
+      'The answer of the building endpoint.',
     ),
 
     Scan: describedObject(
@@ -155,6 +170,10 @@ function componentSchemas() {
         flags: { type: 'array', items: oneOf(SCAN_FLAGS) },
         voided: boolean,
         void_reason: orNull(string),
+        voided_at: orNull(dateTime),
+        voided_by: orNull(string),
+        received_at: dateTime,
+        device_id: orNull(uuid),
       },
       { ...schemaDoc.time_fields, ...schemaDoc.scan_fields },
     ),
@@ -165,6 +184,32 @@ function componentSchemas() {
         next_cursor: { ...orNull(string), description: 'Pass it as the cursor to get the next page. Null on the last page.' },
       },
       'One page of scans (the JSON answer; with format=csv the answer is CSV).',
+    ),
+
+    Refusal: describedObject(
+      'Refusal',
+      {
+        id: integer,
+        at: dateTime,
+        scan_id: orNull(uuid),
+        source: oneOf(SCAN_SOURCES),
+        code: oneOf(SYNC_PERMANENT_ERROR_CODES),
+        provider_id: uuid,
+        provider_name: string,
+        point_id: orNull(uuid),
+        point_name: orNull(string),
+        client_time: orNull(dateTime),
+      },
+      schemaDoc.refusal_fields,
+    ),
+    RefusalList: plainObject(
+      {
+        refusals: { type: 'array', items: ref('schemas', 'Refusal'), description: 'One page of refused visits, newest first.' },
+        count: { type: 'integer', minimum: 0, description: 'The number of refusals in this page (not the total).' },
+        next_cursor: { ...orNull(string), description: 'Pass it as the cursor to get the next page. Null on the last page.' },
+      },
+      'One page of the visits that the server refused (they are not scans and never count as attendance). What each code means:\n' +
+        Object.entries(schemaDoc.refusal_codes).map(([code, meaning]) => `- ${code}: ${meaning}`).join('\n'),
     ),
 
     SchemaDocument: {
@@ -271,6 +316,47 @@ const PARAMETERS = {
   },
 }
 
+/**
+ * The parameters whose name is also a filter of another endpoint but whose meaning here is another one (a refused visit is not a scan,
+ * and its page is cut at its own size), by the id of the endpoint and then by name. A name that is not here is described by PARAMETERS.
+ * @type {Record<string, Record<string, { description: string, schema: object }>>}
+ */
+const ENDPOINT_PARAMETERS = {
+  listRefusals: {
+    from: {
+      description:
+        `The oldest refused visit to include, by the time at which the server refused it. A calendar day (YYYY-MM-DD) means that day in the building time zone (${TIMEZONE}). ` +
+        'An ISO 8601 date-time that carries Z or an offset is an exact moment. A date-time without Z or an offset is refused.',
+      schema: DAY_OR_MOMENT,
+    },
+    to: {
+      description:
+        `The newest refused visit to include, in the same two forms as from. A calendar day (YYYY-MM-DD) includes that whole day in ${TIMEZONE}.`,
+      schema: DAY_OR_MOMENT,
+    },
+    point_id: {
+      description: 'Only the visits refused at this service point. A deleted point keeps its refusals, and its id still works here. A refusal that named no point is matched by no point_id.',
+      schema: uuid,
+    },
+    provider_id: {
+      description: 'Only the refused visits of this service provider. A deleted provider keeps its refusals, and its id still works here.',
+      schema: uuid,
+    },
+    limit: {
+      description:
+        `The most refusals in one page. A bigger number is cut to ${MAX_REFUSAL_PAGE_SIZE}, not refused. Zero, a negative number or a value ` +
+        'that is not a whole number is refused.',
+      schema: { type: 'integer', minimum: 1, maximum: MAX_REFUSAL_PAGE_SIZE, default: DEFAULT_PAGE_SIZE },
+    },
+    cursor: {
+      description:
+        'The next_cursor of the previous page, to get the page after it. Keep every other parameter the same. A value that this endpoint ' +
+        'did not return is refused (the cursor of /scans is not one).',
+      schema: string,
+    },
+  },
+}
+
 // ---------- the answers ----------
 
 const json = (/** @type {string} */ schema) => ({ 'application/json': { schema: ref('schemas', schema) } })
@@ -296,14 +382,16 @@ const ANSWERS = {
         schema: {
           type: 'string',
           description:
-            `A header line and then one scan per line, with these columns in this order: ${SCAN_CSV_COLUMNS.join(', ')}. The flags ` +
+            `A header line and then one scan per line, with these columns in this order: ${AGENT_SCAN_CSV_COLUMNS.join(', ')}. The flags ` +
             'are joined with ";", booleans are the text true or false, a null is an empty cell. There is no byte-order mark.',
         },
       },
     },
   },
+  listRefusals: { description: 'A page of the visits that the server refused.', content: json('RefusalList') },
   listPoints: { description: 'Every service point.', content: json('PointList') },
   listProviders: { description: 'Every service provider.', content: json('ProviderList') },
+  getBuilding: { description: 'The name and the address of the building.', content: json('BuildingAnswer') },
   getSchema: { description: 'The contract of this API.', content: json('SchemaDocument') },
   getOpenApi: { description: 'This document.', content: json('OpenApiDocument') },
   getHealth: { description: 'The API is alive.', content: json('Health') },
@@ -365,7 +453,7 @@ function buildPaths(/** @type {Record<number, object>} */ attached) {
   for (const endpoint of AGENT_ENDPOINTS) {
     if (!endpoint.path.startsWith(`${BASE_PATH}/`)) throw new Error(`${FILE}: the path ${endpoint.path} of ${endpoint.id} is not under ${BASE_PATH}.`)
     const parameters = endpoint.filters.map((name) => {
-      const parameter = PARAMETERS[name]
+      const parameter = ENDPOINT_PARAMETERS[endpoint.id]?.[name] ?? PARAMETERS[name]
       if (!parameter) throw new Error(`${FILE}: the filter "${name}" of ${endpoint.id} has no description in PARAMETERS: add it.`)
       return { name, in: 'query', description: parameter.description, schema: parameter.schema }
     })
