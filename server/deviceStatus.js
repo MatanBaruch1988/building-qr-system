@@ -146,18 +146,27 @@ export async function touchLastSync(deviceId) {
 
 /**
  * The health of a provider's ACTIVE phones, as a SQL fragment for a list of providers: `cross join lateral (...) phones`, to be
- * written after `from providers p` (the alias `p` is what it joins on). It gives each provider three columns, which the caller
- * selects as `phones.waiting`, `phones.oldest_waiting_at` and `phones.outdated_devices`:
+ * written after `from providers p` (the alias `p` is what it joins on). It gives each provider seven columns, which the caller
+ * selects by name as `phones.<name>` (the committee's list takes the first three, the agent's providers the seven):
  *  - `waiting`: the sum of what the phones say waits in their queues (0 when none reported);
  *  - `oldest_waiting_at`: the oldest of the phones that have something waiting (null when none);
- *  - `outdated_devices`: how many phones reported a build that is not the server's own (0 when the server does not know its build).
- * $1 is the server's build (`commit()` in server/health.js), so the caller's own values start at $2. The committee's providers
- * list uses it (PROVIDER_SELECT in server/routes/admin.js).
+ *  - `outdated_devices`: how many phones reported a build that is not the server's own (0 when the server does not know its build);
+ *  - `active_devices`: how many phones are signed in (0 when none);
+ *  - `last_sync_at`: the latest upload of any of the phones (null when none uploaded);
+ *  - `not_accepted_total`, `overflow_total`: the two running totals of what the phones dropped, added up over the phones (0 when none).
+ * They are numbers and times over the provider's phones, never a column of one phone: the label, the browser string and the token hash
+ * are not read here, and no row per phone comes out. $1 is the server's build (`commit()` in server/health.js), so the caller's own
+ * values start at $2. The committee's providers list (PROVIDER_SELECT in server/routes/admin.js) and the agent's providers
+ * (server/routes/agent.js) use it, so the two show the same numbers.
  */
 export const PHONE_HEALTH_LATERAL = `cross join lateral (
       select coalesce(sum(d.waiting_count), 0)::int as waiting,
              min(d.oldest_waiting_at) filter (where d.waiting_count > 0) as oldest_waiting_at,
-             (count(*) filter (where d.app_build is not null and d.app_build <> $1::text))::int as outdated_devices
+             (count(*) filter (where d.app_build is not null and d.app_build <> $1::text))::int as outdated_devices,
+             count(*)::int as active_devices,
+             max(d.last_sync_at) as last_sync_at,
+             coalesce(sum(d.not_accepted_total), 0)::int as not_accepted_total,
+             coalesce(sum(d.overflow_total), 0)::int as overflow_total
         from provider_devices d
        where d.provider_id = p.id and d.revoked_at is null
     ) phones`

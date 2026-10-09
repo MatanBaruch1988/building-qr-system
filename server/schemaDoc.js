@@ -76,6 +76,17 @@ export const schemaDoc = {
     is_demo: 'true for the demo account (its scans are test data, flagged demo)',
     created_at: 'UTC ISO time the provider was created',
     last_scan_at: 'UTC ISO time of the latest accepted, not voided scan, or null if none',
+    active_devices: 'How many phones of the provider are signed in now (a phone that was signed out is not counted): a number, 0 when none. Never a row per phone.',
+    waiting: 'The sum, over the signed-in phones, of the visits that each phone says it holds and has not uploaded yet (0 when none reported). A visit that waits on a phone is not in /scans until the phone uploads it.',
+    oldest_waiting_at: "UTC ISO time of the oldest visit that waits on any of the signed-in phones (the phone's own clock, as it reported), or null when nothing waits or no believable time was reported",
+    outdated_devices: "How many of the signed-in phones reported a version of the app that is not the server's own, a phone that was not updated since an earlier release (0 when none, or when the server does not know its own version)",
+    last_sync_at: 'UTC ISO time of the latest upload of any signed-in phone, written by the server when an upload ended, or null when none of them uploaded',
+    not_accepted_total: 'The sum, over the signed-in phones, of the visits that the server refused for good and that the phone dropped from its queue, counted since each phone signed in (0 when none)',
+    overflow_total: 'The sum, over the signed-in phones, of the visits that left a full queue on the phone and were dropped (the oldest go first), counted since each phone signed in (0 when none)',
+  },
+  building_fields: {
+    name: 'The name of the building, as the committee typed it, or an empty string when the committee has not set one',
+    address: 'The address of the building, as the committee typed it, or an empty string when the committee has not set one',
   },
   scan_fields: {
     id: 'uuid',
@@ -91,6 +102,10 @@ export const schemaDoc = {
     flags: 'Signals for you to weigh. Never blocking. See flags below.',
     voided: 'true if a committee member cancelled this scan (excluded by default)',
     void_reason: 'Reason given when voided',
+    voided_at: 'UTC ISO time the scan was voided, or null when it is not voided',
+    voided_by: 'The name of the committee member who voided the scan (their e-mail when they have no name), as it was when they did it, or null when the scan is not voided or no record names who',
+    received_at: 'UTC ISO time the server received the scan. The server clock, which cannot be wrong: unlike checked_in_at it is not an estimate, so for an offline_sync scan it is the time of the upload',
+    device_id: "A random uuid for the sign-in of the phone that sent the scan, or null when it is not known (the old import has none). A sign-in belongs to one provider, and a phone that signs in again, or as another provider, gets a new id: so it tells apart the phones that one provider's scans came from, and it does not recognise the same physical phone across sign-ins or providers. Nothing else about the phone is available",
   },
   outcomes: {
     [OUTCOME_ACCEPTED]: 'Recorded as attendance.',

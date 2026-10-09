@@ -20,7 +20,8 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 |---|---|
 | `GET /scans` | Scan records, newest first. Filters below. |
 | `GET /points` | Every service point, including inactive ones, with assigned providers. |
-| `GET /providers` | Every provider, including inactive and demo ones, with `last_scan_at`. |
+| `GET /providers` | Every provider, including inactive and demo ones, with `last_scan_at` and the health of the provider's phones as numbers. |
+| `GET /building` | The name and the address of the building. |
 | `GET /schema` | Field, flag and rule descriptions. |
 | `GET /openapi.json` | The OpenAPI 3.1 description of this API: endpoints, parameters, answers, errors and the Bearer key. |
 | `GET /health` | Liveness and server time. |
@@ -32,6 +33,7 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 | `GET /scans` | `{ scans, count, next_cursor }`. `count` is the number of scans in this page, not the total. `next_cursor` is `null` on the last page. |
 | `GET /points` | `{ points }` |
 | `GET /providers` | `{ providers }` |
+| `GET /building` | `{ building }`, an object with the `name` and the `address` |
 | `GET /health` | `{ ok, server_time, server_time_local }` (UTC ISO, and `YYYY-MM-DD HH:mm:ss` in Israel time) |
 
 ### `GET /scans` filters
@@ -53,8 +55,9 @@ Paging: the response has `next_cursor`; pass it back as `cursor`. For CSV the cu
 
 ### CSV
 
-The same columns as a scan row, in the same order, with a header line and no byte-order mark. `flags` are joined with
-`;` (for example `offline_sync;clock_skew`). `voided` is the text `true` or `false`. A null is an empty cell.
+The same columns as a scan row, in the same order, with a header line and no byte-order mark: the last four, `voided_at`,
+`voided_by`, `received_at` and `device_id`, come after `void_reason`. `flags` are joined with `;` (for example
+`offline_sync;clock_skew`). `voided` is the text `true` or `false`. A null is an empty cell.
 
 ```bash
 curl -H "Authorization: Bearer $KEY" \
@@ -64,7 +67,7 @@ curl -H "Authorization: Bearer $KEY" \
 ### OpenAPI
 
 `GET /openapi.json` answers one OpenAPI 3.1 document (JSON). It lists every endpoint of this page with its parameters (types, formats,
-allowed values and limits), the shape of every answer (the JSON of a scan, a point and a provider, the CSV variant of `GET /scans`
+allowed values and limits), the shape of every answer (the JSON of a scan, a point, a provider and the building, the CSV variant of `GET /scans`
 and its `X-Next-Cursor` header), the errors of the table under "Errors", and the Bearer key. It needs the key like every other endpoint.
 Give it to a tool that imports OpenAPI (an agent platform, a client generator). It is built from the same list of endpoints as
 `GET /schema`, so the two name the same endpoints; the prose (what a field, a flag or a rule means) stays in `GET /schema`, which
@@ -86,11 +89,27 @@ validates answers should not refuse a field it does not know.
   "outcome": "accepted",
   "distance_m": 12, "gps_accuracy_m": 8,
   "flags": [],
-  "voided": false, "void_reason": null
+  "voided": false, "void_reason": null,
+  "voided_at": null, "voided_by": null,
+  "received_at": "2026-09-30T06:04:11.402Z",
+  "device_id": "uuid"
 }
 ```
 
 `distance_m` is null when no GPS fix was sent, and also when the point has no coordinates.
+
+The last four fields are the details of a scan that the committee sees in its history:
+
+| Key | Meaning |
+|---|---|
+| `voided_at` | UTC ISO time the scan was voided, or null when it is not voided |
+| `voided_by` | The name of the committee member who voided it (their e-mail when they have no name), as it was when they did it. Null when the scan is not voided, or when no record names who |
+| `received_at` | UTC ISO time the server received the scan. Unlike `checked_in_at`, which is the best estimate of the visit, it is the server's clock and is never an estimate: for an `offline_sync` scan it is the time of the upload |
+| `device_id` | A random uuid for the sign-in of the phone that sent the scan, or null when it is not known (the old import has none). Nothing else about the phone is shown |
+
+`device_id` stands for a phone's sign-in, and a sign-in belongs to one provider. A phone that signs in again, or as another provider, gets a new
+id. So it tells apart the phones that one provider's scans came from (several ids: several phones, or the same phone signed in
+again), and it cannot show the same physical phone across providers, because two providers never share an id.
 
 ## Outcomes and sources
 
@@ -136,6 +155,28 @@ A provider (`/providers`):
 | `is_demo` | true for the demo account (its scans are test data) |
 | `created_at` | UTC ISO time the provider was created |
 | `last_scan_at` | UTC ISO time of the latest accepted, not voided scan, or null |
+| `active_devices` | How many phones of the provider are signed in now, a number (0 when none) |
+| `waiting` | The sum, over the signed-in phones, of the visits that each phone says it holds and has not uploaded yet (0 when none reported). They are not in `/scans` until the phone uploads them |
+| `oldest_waiting_at` | UTC ISO time of the oldest visit that waits on any of the signed-in phones (the phone's own clock), or null when nothing waits or no believable time was reported |
+| `outdated_devices` | How many of the signed-in phones run a version of the app that is not the server's own (0 when none, or when the server does not know its own version) |
+| `last_sync_at` | UTC ISO time of the latest upload of any signed-in phone, or null when none of them uploaded |
+| `not_accepted_total` | The sum, over the signed-in phones, of the visits that the server refused for good and the phone dropped from its queue, counted since each phone signed in |
+| `overflow_total` | The sum, over the signed-in phones, of the visits that left a full queue on the phone and were dropped (the oldest go first), counted since each phone signed in |
+
+The last seven fields of a provider are the health of its phones, as numbers over all of the provider's signed-in phones: there is
+never a row per phone, and never a phone's label or browser string. A provider with no phone signed in has 0 in the numbers and null in
+the times. A phone that never reported counts for nothing (an old version of the app does not report), so a count of 0 does not prove
+that nothing waits on such a phone.
+
+## The building
+
+`GET /building` answers `{ "building": { "name": "...", "address": "..." } }`: the two texts that the committee types in the
+committee app. Nothing else about the building is there (not who saved it or when).
+
+| Key | Meaning |
+|---|---|
+| `name` | The name of the building, as the committee typed it, or an empty string when none was set |
+| `address` | The address of the building, as the committee typed it, or an empty string when none was set |
 
 ## How to read it
 
@@ -159,8 +200,10 @@ A provider (`/providers`):
 - Points can be `required`, `optional` or `none` for GPS (`gps_mode` in `/points`). A fix is usable when the phone reports an accuracy of 150 m or better. A usable fix is judged the same way on
   `required` and `optional` points (inside the radius + 15 m, crediting the phone's own accuracy up to 50 m). They differ only
   when there is no usable fix: `required` refuses the scan, `optional` accepts it with `location_unverified`. `none` points are never judged.
-- Patterns worth looking for are yours to define, for example: missing visits on expected days, the same phone used by
-  two providers, two distant points minutes apart, or a run of `location_unverified` at a point that usually has GPS.
+- Patterns worth looking for are yours to define, for example: missing visits on expected days, two distant points
+  minutes apart (`device_id` says whether the two scans came from the same phone sign-in or from two), visits that wait on
+  a phone (`waiting`, `oldest_waiting_at`) and are not in the scans yet, or a run of `location_unverified` at a point that
+  usually has GPS. `device_id` cannot show that one phone was used by two providers: every sign-in has its own id and belongs to one provider.
 
 ## Errors
 

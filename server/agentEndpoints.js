@@ -74,7 +74,19 @@ export const AGENT_ENDPOINTS = Object.freeze([
     filters: [],
     envelope: ['providers'],
     description:
-      'Returns { providers } with every service provider, including inactive ones, with last_scan_at. See providers_fields.',
+      'Returns { providers } with every service provider, including inactive ones, with last_scan_at and the health of the ' +
+      "provider's phones as numbers over all of them (never a row per phone). See providers_fields.",
+  }),
+  row({
+    id: 'getBuilding',
+    summary: 'Read the building',
+    method: 'GET',
+    path: '/agent/v1/building',
+    filters: [],
+    envelope: ['building'],
+    description:
+      'Returns { building } with the name and the address of the building, as the committee typed them. A text the committee has ' +
+      'not set is an empty string. See building_fields.',
   }),
   row({
     id: 'getSchema',

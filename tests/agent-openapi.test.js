@@ -32,7 +32,7 @@ import { getPool, setPool } from '../server/db.js'
 import { schemaDoc } from '../server/schemaDoc.js'
 import { AGENT_ENDPOINTS, endpointKey } from '../server/agentEndpoints.js'
 import { buildOpenApi, openApiDocument } from '../server/agentOpenApi.js'
-import { SCAN_CSV_COLUMNS } from '../server/scans.js'
+import { AGENT_SCAN_CSV_COLUMNS } from '../server/scans.js'
 import * as config from '../server/config.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
 import { SCAN_OUTCOMES, SCAN_SOURCES, GPS_MODES, OUTCOME_ACCEPTED } from '../shared/contract.js'
@@ -364,7 +364,7 @@ describe('d. every enum is its constant, every limit and default is its constant
 
   it('every field of an answer is described by schemaDoc, and every property of an object is required', () => {
     const problems = []
-    for (const [name, fields] of [['Point', schemaDoc.points_fields], ['Provider', schemaDoc.providers_fields], ['Scan', { ...schemaDoc.time_fields, ...schemaDoc.scan_fields }]]) {
+    for (const [name, fields] of [['Point', schemaDoc.points_fields], ['Provider', schemaDoc.providers_fields], ['Building', schemaDoc.building_fields], ['Scan', { ...schemaDoc.time_fields, ...schemaDoc.scan_fields }]]) {
       const properties = doc.components.schemas[name].properties
       problems.push(...diffNames('field', { where: `schemaDoc (${name})`, names: Object.keys(fields) }, { where: `components.schemas.${name}`, names: Object.keys(properties) }))
       for (const [field, text] of Object.entries(fields)) {
@@ -464,6 +464,16 @@ describe('the real agent API answers what the document says', () => {
     await point({ name: 'Roof', gps_mode: 'none', is_active: false }) // no coordinates, switched off
     const session = async (p, password = 'agent-openapi-1') => (await call('POST', '/api/session', { body: { provider_id: p.id, password } })).json.token
     const [cleanerToken, gardenerToken, demoToken, leavingToken] = await Promise.all([session(cleaner), session(gardener), session(demo), session(leaving)])
+    // What a phone of the cleaner reported about itself (written straight into its row): visits wait, some were not accepted and some
+    // were dropped from a full queue, and its build is not the server's own (the server's is stubbed below).
+    vi.stubEnv('VERCEL_GIT_COMMIT_SHA', 'abcdef1234567890abcdef1234567890abcdef12')
+    await db.pool.query(
+      `update provider_devices set app_build = '1234567', waiting_count = 3, oldest_waiting_at = now() - interval '2 hours',
+              not_accepted_total = 2, overflow_total = 1, status_at = now() where provider_id = $1`,
+      [cleaner.id],
+    )
+    // The committee has typed the name and the address of the building.
+    await call('PUT', '/api/admin/building', { cookie, body: { address: 'Test Street 1, Test City', name: 'Test Building' } })
     const scan = (token, p, gps) => call('POST', '/api/scan', { token, body: { id: randomUUID(), code: p.qr_token, ...(gps ? { gps } : {}) } })
     const north = (metres) => ({ lat: HOME.lat + metres / 111_195, lng: HOME.lng, accuracy: 8 })
     const results = [
@@ -479,6 +489,12 @@ describe('the real agent API answers what the document says', () => {
     if (results.some((r) => r.status !== 200)) throw new Error(`a seed scan was refused: ${results.map((r) => r.status).join()}`)
     const leavingScan = results[7].json.scan
     await post(`/api/admin/scans/${leavingScan.id}/void`, { reason: 'test' })
+    // A scan that the one-time import of the old system wrote: no phone is known for it (device_id is null) and nobody voided it.
+    await db.pool.query(
+      `insert into scans (id, point_id, provider_id, point_name, provider_name, checked_in_at, local_date, source, outcome, flags)
+       values ($1, $2, $3, 'Lobby', 'Sparkle Cleaning', '2026-01-05T08:00:00Z', '2026-01-05', 'online', 'accepted', '{legacy_import}')`,
+      [randomUUID(), lobby.id, cleaner.id],
+    )
     expect((await call('DELETE', `/api/admin/points/${gone.id}`, { cookie })).status).toBe(200)
     expect((await call('DELETE', `/api/admin/providers/${leaving.id}`, { cookie })).status).toBe(200)
 
@@ -488,7 +504,10 @@ describe('the real agent API answers what the document says', () => {
     await revokeAgentKey(cookie, spare.id)
   }, 120_000)
 
-  afterAll(async () => db?.teardown())
+  afterAll(async () => {
+    vi.unstubAllEnvs()
+    await db?.teardown()
+  })
 
   // ---- f ----
 
@@ -551,15 +570,20 @@ describe('the real agent API answers what the document says', () => {
     const problems = []
     for (const outcome of SCAN_OUTCOMES) if (!seen(scans, 'outcome').has(outcome)) problems.push(`No seed scan has the outcome ${outcome}.`)
     for (const source of SCAN_SOURCES) if (!seen(scans, 'source').has(source)) problems.push(`No seed scan has the source ${source}.`)
-    for (const field of ['service_type', 'distance_m', 'gps_accuracy_m', 'void_reason']) if (!nullAndNot(scans, field)) problems.push(`The seed scans do not have both a null and a value in ${field}.`)
+    for (const field of ['service_type', 'distance_m', 'gps_accuracy_m', 'void_reason', 'voided_at', 'voided_by', 'device_id']) if (!nullAndNot(scans, field)) problems.push(`The seed scans do not have both a null and a value in ${field}.`)
+    if (scans.some((s) => typeof s.received_at !== 'string')) problems.push('A seed scan has no received_at: it is never null.')
     if (!seen(scans, 'voided').has(true) || !seen(scans, 'voided').has(false)) problems.push('The seed scans are not both voided and not voided.')
     const flags = new Set(scans.flatMap((s) => s.flags))
-    for (const flag of ['offline_sync', 'clock_skew', 'demo', 'location_stale', 'location_outside_radius']) if (!flags.has(flag)) problems.push(`No seed scan carries the flag ${flag}.`)
+    for (const flag of ['offline_sync', 'clock_skew', 'demo', 'location_stale', 'location_outside_radius', 'legacy_import']) if (!flags.has(flag)) problems.push(`No seed scan carries the flag ${flag}.`)
     if (!scans.some((s) => !points.some((p) => p.id === s.point_id))) problems.push('No seed scan is at a deleted point.')
     if (!scans.some((s) => !providers.some((p) => p.id === s.provider_id))) problems.push('No seed scan is by a deleted provider.')
     if (!nullAndNot(points, 'lat') || !nullAndNot(points, 'lng') || !nullAndNot(points, 'service_type')) problems.push('The seed points do not have both a null and a value in lat, lng and service_type.')
     if (!points.some((p) => p.assigned_provider_ids.length) || !points.some((p) => !p.assigned_provider_ids.length)) problems.push('The seed points are not both assigned and open to everyone.')
     if (!nullAndNot(providers, 'last_scan_at')) problems.push('The seed providers do not have both a last_scan_at and none.')
+    for (const field of ['oldest_waiting_at', 'last_sync_at']) if (!nullAndNot(providers, field)) problems.push(`The seed providers do not have both a null and a value in ${field}.`)
+    if (!providers.some((p) => p.active_devices === 0) || !providers.some((p) => p.active_devices > 0)) problems.push('The seed providers are not both with phones and without.')
+    if (!providers.some((p) => p.waiting > 0 && p.not_accepted_total > 0 && p.overflow_total > 0 && p.outdated_devices > 0)) problems.push('No seed provider has visits waiting, visits not accepted, visits dropped and an outdated phone.')
+    if (!(await get('/building')).json.building.name) problems.push('The seed building has no name.')
     report(problems)
   })
 
@@ -597,12 +621,12 @@ describe('the real agent API answers what the document says', () => {
     expect(Object.keys(ok.content)).toEqual(['application/json', 'text/csv'])
     expect(ok.content['text/csv'].schema.type).toBe('string')
     expect(Object.keys(ok.headers)).toEqual(['X-Next-Cursor'])
-    expect(Object.keys(doc.components.schemas.Scan.properties)).toEqual(SCAN_CSV_COLUMNS)
-    for (const column of SCAN_CSV_COLUMNS) expect(ok.content['text/csv'].schema.description, `the CSV column ${column}`).toContain(column)
+    expect(Object.keys(doc.components.schemas.Scan.properties)).toEqual(AGENT_SCAN_CSV_COLUMNS)
+    for (const column of AGENT_SCAN_CSV_COLUMNS) expect(ok.content['text/csv'].schema.description, `the CSV column ${column}`).toContain(column)
 
     const page = await get('/scans?outcome=all&format=csv&limit=2')
     expect(page.headers['content-type']).toMatch(/^text\/csv/)
-    expect(page.text.split('\r\n')[0]).toBe(SCAN_CSV_COLUMNS.join(','))
+    expect(page.text.split('\r\n')[0]).toBe(AGENT_SCAN_CSV_COLUMNS.join(','))
     const first = (await get('/scans?outcome=all&limit=2')).json.next_cursor
     expect(page.headers['x-next-cursor']).toBe(first) // the header is the cursor of the JSON page
     const all = await get('/scans?outcome=all&format=csv&limit=500')
@@ -716,12 +740,14 @@ describe('the real agent API answers what the document says', () => {
     check(await call('GET', '/api/agent/v1/health', { token: await currentKey(), badJsonBody: true }), 'a body that is not JSON', 'invalid_json')
     check(await call('GET', '/api/agent/v1/nope', {}), 'an unknown endpoint', 'not_found')
     check(await call('POST', '/api/agent/v1/scans', { token: await currentKey(), body: {} }), 'a POST', 'method_not_allowed')
-    // A failure of the server itself: a database that cannot be reached, through the real route and the real router.
+    // A failure of the server itself: a database that cannot be reached, through the real route and the real router. The key is taken
+    // before the database is broken: the rotation of keys (currentKey) mints a new one through the database when the old one is used up.
+    const brokenKey = await currentKey()
     const pool = getPool()
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     setPool({ query: async () => { throw Object.assign(new Error('connection lost'), { code: 'ECONNRESET' }) } })
     try {
-      check(await get('/scans'), 'a database that cannot be reached', 'server_error')
+      check(await call('GET', '/api/agent/v1/scans', { token: brokenKey }), 'a database that cannot be reached', 'server_error')
     } finally {
       setPool(pool)
       logged.mockRestore()

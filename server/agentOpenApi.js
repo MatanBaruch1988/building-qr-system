@@ -8,8 +8,8 @@
 //   - the paths, the operationIds, the summaries, the descriptions and the query parameters (by name, in order) come from the
 //     registry of server/agentEndpoints.js, so an endpoint that is a row there is in this document;
 //   - the enums come from shared/ (the flags, the outcomes, the sources, the GPS modes), the page size, the longest text filter
-//     and the key prefix from server/config.js, the CSV columns from server/scans.js;
-//   - the description of every field of a point, a provider and a scan comes from server/schemaDoc.js, and the errors (the status,
+//     and the key prefix from server/config.js, the CSV columns (the agent's) from server/scans.js;
+//   - the description of every field of a point, a provider, a scan and the building comes from server/schemaDoc.js, and the errors (the status,
 //     the codes and what they mean) are built from schemaDoc.errors, so a new error code there is in every error response here.
 //
 // What is written here: the type of every field (a field that schemaDoc describes and this file does not type, or the other way
@@ -25,7 +25,7 @@
 import { STATUS_CODES } from 'node:http'
 import { TIMEZONE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH, API_KEY_PREFIX } from './config.js'
 import { AGENT_ENDPOINTS } from './agentEndpoints.js'
-import { SCAN_CSV_COLUMNS } from './scans.js'
+import { AGENT_SCAN_CSV_COLUMNS } from './scans.js'
 import { schemaDoc } from './schemaDoc.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
 import { SCAN_OUTCOMES, SCAN_SOURCES, GPS_MODES, OUTCOME_ACCEPTED } from '../shared/contract.js'
@@ -128,12 +128,25 @@ function componentSchemas() {
         is_demo: boolean,
         created_at: dateTime,
         last_scan_at: orNull(dateTime),
+        active_devices: integer,
+        waiting: integer,
+        oldest_waiting_at: orNull(dateTime),
+        outdated_devices: integer,
+        last_sync_at: orNull(dateTime),
+        not_accepted_total: integer,
+        overflow_total: integer,
       },
       schemaDoc.providers_fields,
     ),
     ProviderList: plainObject(
       { providers: { type: 'array', items: ref('schemas', 'Provider'), description: 'Every service provider, including inactive ones.' } },
       'The answer of the providers endpoint.',
+    ),
+
+    Building: describedObject('Building', { name: string, address: string }, schemaDoc.building_fields),
+    BuildingAnswer: plainObject(
+      { building: { ...ref('schemas', 'Building'), description: 'The name and the address of the building, as the committee typed them.' } },
+      'The answer of the building endpoint.',
     ),
 
     Scan: describedObject(
@@ -155,6 +168,10 @@ function componentSchemas() {
         flags: { type: 'array', items: oneOf(SCAN_FLAGS) },
         voided: boolean,
         void_reason: orNull(string),
+        voided_at: orNull(dateTime),
+        voided_by: orNull(string),
+        received_at: dateTime,
+        device_id: orNull(uuid),
       },
       { ...schemaDoc.time_fields, ...schemaDoc.scan_fields },
     ),
@@ -296,7 +313,7 @@ const ANSWERS = {
         schema: {
           type: 'string',
           description:
-            `A header line and then one scan per line, with these columns in this order: ${SCAN_CSV_COLUMNS.join(', ')}. The flags ` +
+            `A header line and then one scan per line, with these columns in this order: ${AGENT_SCAN_CSV_COLUMNS.join(', ')}. The flags ` +
             'are joined with ";", booleans are the text true or false, a null is an empty cell. There is no byte-order mark.',
         },
       },
@@ -304,6 +321,7 @@ const ANSWERS = {
   },
   listPoints: { description: 'Every service point.', content: json('PointList') },
   listProviders: { description: 'Every service provider.', content: json('ProviderList') },
+  getBuilding: { description: 'The name and the address of the building.', content: json('BuildingAnswer') },
   getSchema: { description: 'The contract of this API.', content: json('SchemaDocument') },
   getOpenApi: { description: 'This document.', content: json('OpenApiDocument') },
   getHealth: { description: 'The API is alive.', content: json('Health') },

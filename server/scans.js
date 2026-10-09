@@ -62,6 +62,30 @@ export function scanJson(r) {
   }
 }
 
+const isoOrNull = (time) => (time === null || time === undefined ? null : new Date(time).toISOString())
+
+/**
+ * A scan as the committee's analyst, the agent, reads it (GET /api/agent/v1/scans): the shape of scanJson, which is what the
+ * committee and the provider phones get and does not change, and four fields after it. Written field by field from the row that
+ * agentScanPage reads, so a column added to `scans` later does not reach the agent by itself.
+ *  - `voided_at`: when the scan was voided (ISO), or null;
+ *  - `voided_by`: the name of the committee member who voided it, from the audit entry `scan.void` of that scan (null when the
+ *    scan is not voided, or when no entry names who);
+ *  - `received_at`: when the server received the scan (ISO), the clock that cannot be wrong, beside `checked_in_at`, the best estimate;
+ *  - `device_id`: the random id of the sign-in of the phone that sent the scan (a row of provider_devices, which belongs to one
+ *    provider), or null when it is not known. Only the id: never the label, the browser string or the token of the phone.
+ * @param {Record<string, any>} r  a row of agentScanPage: a row of `scans` with `voided_by`
+ */
+export function agentScanJson(r) {
+  return {
+    ...scanJson(r),
+    voided_at: isoOrNull(r.voided_at),
+    voided_by: r.voided_by ?? null,
+    received_at: isoOrNull(r.received_at),
+    device_id: r.device_id ?? null,
+  }
+}
+
 // Only real numbers count. (Number(null), Number('') and Number([]) are all 0: a phone sending an
 // empty form would otherwise be judged as standing at latitude 0, longitude 0.)
 const realNumber = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null)
@@ -332,11 +356,12 @@ export function scanWhere(q = {}) {
 }
 
 /**
- * Shared by the admin history screen and the agent API.
- * Filters: see SCAN_FILTERS (the first nine are scanWhere's). from/to are YYYY-MM-DD (Israel calendar day) or a full ISO
- * time, outcome is accepted | rejected | all.
+ * What every listing of scans shares: the conditions of the filters and the cursor (`where`, over `params`), the order and the size
+ * of the page. A bad filter, order, limit or cursor is a 400 here, before any statement is run. The conditions name the columns of
+ * `scans` without a table, so they are written for a statement whose `from` is that table.
+ * @param {Record<string, any>} q
  */
-export async function listScans(q = {}) {
+function scanPageParts(q) {
   const { where, params } = scanWhere(q)
 
   const order = q.order === 'asc' ? 'asc' : 'desc'
@@ -349,15 +374,82 @@ export async function listScans(q = {}) {
   }
 
   const limit = pageLimit(q.limit)
+  return { where, params, order, limit }
+}
+
+/** The rows of a statement that read one more row than the page holds, cut to the page, and the cursor of the next page (or null). */
+function cutPage(rows, limit, toJson) {
+  const page = rows.slice(0, limit)
+  return {
+    scans: page.map(toJson),
+    next_cursor: rows.length > limit ? encodeCursor(page[page.length - 1]) : null,
+  }
+}
+
+/**
+ * Shared by the admin history screen and the agent API.
+ * Filters: see SCAN_FILTERS (the first nine are scanWhere's). from/to are YYYY-MM-DD (Israel calendar day) or a full ISO
+ * time, outcome is accepted | rejected | all.
+ */
+export async function listScans(q = {}) {
+  const { where, params, order, limit } = scanPageParts(q)
 
   const sql = `select * from scans ${where.length ? 'where ' + where.join(' and ') : ''}
                 order by checked_in_at ${order}, id ${order} limit ${limit + 1}`
   const { rows } = await query(sql, params)
-  const page = rows.slice(0, limit)
-  return {
-    scans: page.map(scanJson),
-    next_cursor: rows.length > limit ? encodeCursor(page[page.length - 1]) : null,
-  }
+  return cutPage(rows, limit, scanJson)
+}
+
+// The columns of `scans` that the agent's listing reads, by name (never `select *`): a column that is added to the table later does
+// not reach the agent until someone has decided that it may and adds it here and to agentScanJson. `client_time` (the phone's own
+// clock, which the scan's `checked_in_at` already weighs) is not among them.
+const AGENT_SCAN_COLUMNS = [
+  'id', 'checked_in_at', 'received_at', 'local_date', 'point_id', 'point_name', 'provider_id', 'provider_name', 'service_type',
+  'source', 'outcome', 'distance_m', 'gps_accuracy_m', 'device_id', 'flags', 'voided_at', 'void_reason',
+]
+
+/**
+ * The statement for one page of the agent's scans, and what it needs: `{ sql, params, limit }`. It filters, orders and cuts the page
+ * from `scans` exactly as listScans does (scanPageParts, one more row than the page to know whether there is a next page), and only
+ * THEN looks up, for each voided scan of that page, who voided it: the latest `scan.void` entry of the audit log for that scan, read
+ * through audit_log_entity_idx (entity, entity_id, at desc), so the lookup costs a few index reads and not a scan of the log. The name
+ * is the snapshot on the entry (`actor_name`), as the committee's audit screen shows it (server/auditRead.js); the member's current
+ * name or e-mail is the fallback of an older entry that has no name on it, and is looked up only then. A scan that is not voided
+ * looks nothing up. The outer `order by` repeats the order of the page because a join does not promise to keep it. Exported so that
+ * a test can ask the database how it runs this text.
+ * @param {Record<string, any>} [q]  the query of the request: every value is text, or missing
+ */
+export function agentScanQuery(q = {}) {
+  const { where, params, order, limit } = scanPageParts(q)
+  const sql = `
+    with page as (
+      select ${AGENT_SCAN_COLUMNS.join(', ')} from scans ${where.length ? 'where ' + where.join(' and ') : ''}
+       order by checked_in_at ${order}, id ${order} limit ${limit + 1}
+    )
+    select page.*, v.voided_by
+      from page
+      left join lateral (
+        select coalesce(
+                 nullif(a.actor_name, ''),
+                 (select coalesce(nullif(m.name, ''), m.email) from admins m where a.actor_type = 'admin' and m.id::text = a.actor_id)
+               ) as voided_by
+          from audit_log a
+         where page.voided_at is not null and a.entity = 'scan' and a.entity_id = page.id::text and a.action = 'scan.void'
+         order by a.at desc, a.id desc
+         limit 1
+      ) v on true
+     order by page.checked_in_at ${order}, page.id ${order}`
+  return { sql, params, limit }
+}
+
+/**
+ * One page of scans for the agent API: the filters, the order, the paging and the cursor of listScans, and the shape of
+ * agentScanJson (the shape of listScans and four fields more).
+ */
+export async function listAgentScans(q = {}) {
+  const { sql, params, limit } = agentScanQuery(q)
+  const { rows } = await query(sql, params)
+  return cutPage(rows, limit, agentScanJson)
 }
 
 /** Every page of a filtered listing (for the committee's CSV export). Stops at maxRows and says so. */
@@ -378,10 +470,17 @@ export const SCAN_CSV_COLUMNS = [
   'distance_m', 'gps_accuracy_m', 'flags', 'voided', 'void_reason',
 ]
 
+/**
+ * The columns of the agent's CSV (GET /api/agent/v1/scans?format=csv): the keys of agentScanJson, in order. The committee's columns
+ * as they are (SCAN_CSV_COLUMNS), then the four that only the agent has, at the end, so that a reader that took the first sixteen
+ * columns by position still reads what it always read. The committee's own file does not have the four.
+ */
+export const AGENT_SCAN_CSV_COLUMNS = [...SCAN_CSV_COLUMNS, 'voided_at', 'voided_by', 'received_at', 'device_id']
+
 // The committee's file is read by people (in Excel): dates are DD/MM/YYYY and times HH:MM. checked_in_local is the
 // building's time and checked_in_utc is the same moment in UTC: it is what tells apart the two 01:30 of the night the
-// clocks go back, so the file never loses a moment. The agent's CSV keeps SCAN_CSV_COLUMNS as they are: a machine reads
-// ISO dates and must not have to guess day-month or month-day.
+// clocks go back, so the file never loses a moment. The agent's CSV keeps the columns of SCAN_CSV_COLUMNS as they are (and adds
+// four after them, AGENT_SCAN_CSV_COLUMNS): a machine reads ISO dates and must not have to guess day-month or month-day.
 export const COMMITTEE_CSV_COLUMNS = SCAN_CSV_COLUMNS.map((column) => (column === 'checked_in_at' ? 'checked_in_utc' : column))
 export const committeeCsvRow = (scan) => ({
   ...scan,

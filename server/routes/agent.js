@@ -2,13 +2,18 @@ import { route } from '../router.js'
 import { query } from '../db.js'
 import { toCsv } from '../http.js'
 import { requireApiKey } from '../auth.js'
-import { listScans, SCAN_CSV_COLUMNS, toLocal } from '../scans.js'
+import { listAgentScans, AGENT_SCAN_CSV_COLUMNS, toLocal } from '../scans.js'
+import { readBuilding } from '../building.js'
+import { PHONE_HEALTH_LATERAL } from '../deviceStatus.js'
+import { commit } from '../health.js'
 import { schemaDoc } from '../schemaDoc.js'
 import { openApiDocument } from '../agentOpenApi.js'
 import { AGENT_ENDPOINTS } from '../agentEndpoints.js'
 
-// Read-only surface for the external agent. Nothing here writes, and secrets (QR tokens,
-// password hashes, device tokens) are never returned.
+// Read-only surface for the external agent. Nothing here writes (the guard's own bookkeeping for the key apart), and secrets (QR
+// tokens, password hashes, device tokens) are never returned. The agent is the committee's analyst (owner decision of 08/10/2026,
+// AGENTS.md "Safety"): it reads what the committee app shows, and every answer here is built field by field, so a column that is
+// added to a table later does not reach it by itself.
 //
 // The routes are registered from the registry of server/agentEndpoints.js (the one list of the endpoints, with their ids,
 // filters and envelopes), by id: see the end of this file. A handler without a row there, or a row without a handler here,
@@ -44,23 +49,39 @@ async function listPoints({ req }) {
   return { points: rows }
 }
 
+async function getBuilding({ req }) {
+  await requireApiKey(req)
+  // The two texts the committee typed, and nothing of the row (not who saved it, not when).
+  const { name, address } = await readBuilding()
+  return { building: { name, address } }
+}
+
+// The last seven columns are the health of the provider's ACTIVE phones, as numbers and times over all of them (the lateral of
+// server/deviceStatus.js, the very SQL of the committee's providers list): never the label or the browser string of a phone, the hash of
+// its token, its own build, or a row per phone. They are fields added after the others, which are as they were. $1 is the server's
+// build, which the lateral compares the phones' builds with.
 async function listProviders({ req }) {
   await requireApiKey(req)
   const { rows } = await query(
     `select p.id, p.company, p.contact_name, p.service_type, p.is_active, p.is_demo, p.created_at,
             (select max(s.checked_in_at) from scans s
-              where s.provider_id = p.id and s.outcome = 'accepted' and s.voided_at is null) as last_scan_at
-       from providers p order by p.company, p.contact_name`,
+              where s.provider_id = p.id and s.outcome = 'accepted' and s.voided_at is null) as last_scan_at,
+            phones.active_devices, phones.waiting, phones.oldest_waiting_at, phones.outdated_devices,
+            phones.last_sync_at, phones.not_accepted_total, phones.overflow_total
+       from providers p
+       ${PHONE_HEALTH_LATERAL}
+      order by p.company, p.contact_name`,
+    [commit()],
   )
   return { providers: rows }
 }
 
 async function listScansHandler({ req, query: q }) {
   await requireApiKey(req)
-  const { scans, next_cursor } = await listScans(q)
+  const { scans, next_cursor } = await listAgentScans(q)
   if (q.format === 'csv') {
     return {
-      text: toCsv(scans, SCAN_CSV_COLUMNS, { bom: false }), // machine reader: no byte-order mark
+      text: toCsv(scans, AGENT_SCAN_CSV_COLUMNS, { bom: false }), // machine reader: no byte-order mark
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
         // The cursor can't ride in the CSV body, so it goes in a header.
@@ -72,7 +93,7 @@ async function listScansHandler({ req, query: q }) {
 }
 
 /** The handler of every endpoint of the registry, by its id. */
-const HANDLERS = { getHealth, getOpenApi, getSchema, listPoints, listProviders, listScans: listScansHandler }
+const HANDLERS = { getBuilding, getHealth, getOpenApi, getSchema, listPoints, listProviders, listScans: listScansHandler }
 
 const registered = new Set(AGENT_ENDPOINTS.map((endpoint) => endpoint.id))
 for (const id of Object.keys(HANDLERS)) {
