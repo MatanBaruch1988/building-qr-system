@@ -40,8 +40,9 @@ The committee app is in Hebrew. Every screen above shows invented sample data. M
   the committee list.
 - **A location check ("soft GPS").** A scan is refused only when the phone has an accurate position that is clearly far
   from the point. With no signal or a weak position the visit is recorded and flagged `location_unverified`, except at a
-  point set to `required`, where a scan without a position is refused. Each point is `required`, `optional` or `none`
-  (for a basement).
+  point set to `required`, where a scan without a position is refused. Every point that the committee app saves is
+  `required`, so every point needs a pin on the map. (`optional` and `none` remain only for points that were saved
+  before; saving such a point in the committee app moves it to `required`.)
 - **A read-only API for the committee's own AI agent:** [docs/agent-api.md](docs/agent-api.md), with a ready-made prompt
   in [docs/agent-prompt.md](docs/agent-prompt.md).
 - **Daily jobs.** One deletes personal data when its retention period ends. One sends a short health summary, if you set
