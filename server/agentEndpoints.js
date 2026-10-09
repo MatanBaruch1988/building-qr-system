@@ -13,8 +13,9 @@
 //
 // The text of a row is what an agent reads in /schema. Every number it quotes from server/config.js is written from the constant
 // (never typed), as in server/schemaDoc.js: tests/agent-docs.test.js reads this file for typed numbers too.
-import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH } from './config.js'
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_REFUSAL_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH } from './config.js'
 import { SCAN_FILTERS } from './scans.js'
+import { REFUSAL_FILTERS } from './scanRefusals.js'
 
 /**
  * One endpoint of the agent API.
@@ -56,6 +57,23 @@ export const AGENT_ENDPOINTS = Object.freeze([
       'Returns { scans, count, next_cursor }: count is the number of scans in this page (not the total), ' +
       'next_cursor is null on the last page. With format=csv the body is CSV and next_cursor is in the X-Next-Cursor header ' +
       '(absent on the last page). CSV: flags are joined with ";", booleans are the text true/false, null is an empty cell.',
+  }),
+  row({
+    id: 'listRefusals',
+    summary: 'List the visits that were not counted',
+    method: 'GET',
+    path: '/agent/v1/refusals',
+    filters: [...REFUSAL_FILTERS],
+    envelope: ['refusals', 'count', 'next_cursor'],
+    description:
+      'Query: from, to (YYYY-MM-DD = a calendar day in Israel time, or an ISO date-time that carries Z or an offset; they bound the ' +
+      'time at which the server refused the visit), point_id, provider_id (uuids), ' +
+      `limit (default ${DEFAULT_PAGE_SIZE}, at most ${MAX_REFUSAL_PAGE_SIZE}: a bigger number is cut to ${MAX_REFUSAL_PAGE_SIZE}, not refused), ` +
+      'cursor (from next_cursor). ' +
+      'Returns { refusals, count, next_cursor }: the visits that the server turned away for good, newest first. A refusal is not a ' +
+      'scan and never counts as attendance, and it is not a scan with an outcome of rejected_far or rejected_no_location (those are ' +
+      'in /scans): it is a visit that did not become a scan at all. count is the number of refusals in this page (not the total), ' +
+      'next_cursor is null on the last page. See refusal_fields and refusal_codes.',
   }),
   row({
     id: 'listPoints',

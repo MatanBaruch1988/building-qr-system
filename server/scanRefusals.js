@@ -6,9 +6,10 @@
 // scan keeps (the provider's name as it was, the point, the time of the server and of the phone, which phone) and the code.
 // Not the position and not the QR code that was scanned.
 //
-// What it is NOT: not a scan and not an outcome. SCAN_OUTCOMES and the agent API do not change, the answer of an item and the
-// answer of POST /api/scan are exactly what they were, and a refusal never blocks a later scan with the same id. Distance and
-// a missing position (rejected_far, rejected_no_location) are not refusals of this kind: they are stored as scans.
+// What it is NOT: not a scan and not an outcome. SCAN_OUTCOMES and the agent's /scans do not change (the agent reads the refused
+// visits from their own endpoint, GET /api/agent/v1/refusals, below), the answer of an item and the answer of POST /api/scan are
+// exactly what they were, and a refusal never blocks a later scan with the same id. Distance and a missing position
+// (rejected_far, rejected_no_location) are not refusals of this kind: they are stored as scans.
 //
 // Failure policy, written down because it decides what a phone keeps:
 //   - an infrastructure failure of the insert (a connection, a timeout) is thrown on: the batch of a sync answers 500, the
@@ -134,20 +135,21 @@ export const refusalJson = (r) => ({
 })
 
 /**
- * Every query parameter that listRefusals reads, in one list (the same idea as SCAN_FILTERS in server/scans.js).
- * tests/read-filters.test.js proves that listRefusals reads exactly these. A new filter goes here and in listRefusals.
+ * Every query parameter that listRefusals reads, in one list (the same idea as SCAN_FILTERS in server/scans.js). It is also the
+ * list of the filters of GET /api/agent/v1/refusals, which reads the same ones through refusalPageParts. tests/read-filters.test.js
+ * proves that listRefusals and listAgentRefusals read exactly these, and tests/agent-docs.test.js that the documents of the agent
+ * API name exactly these. A new filter goes here and in refusalPageParts.
  */
 export const REFUSAL_FILTERS = Object.freeze(['from', 'to', 'point_id', 'provider_id', 'limit', 'cursor'])
 
 /**
- * The refused visits, newest first, one page at a time: `{ refusals, next_cursor }`, for the committee only (GET
- * /api/admin/scan-refusals; it is not part of the agent API). The filters are `from`, `to`, `point_id`, `provider_id`, `limit`
- * (at most MAX_REFUSAL_PAGE_SIZE) and `cursor`, and fail with the same codes as the scans list (`invalid_filter`,
- * `invalid_cursor`). `from` and `to` are a building day (YYYY-MM-DD, in the building's time zone, both ends included) or a
- * full ISO time that says which zone it means.
+ * The conditions, the parameters and the page size of one page of refused visits: `{ where, params, limit }`. The one reading of
+ * the filters, for the committee's list (listRefusals) and the agent's (listAgentRefusals), so that the two filter, validate and
+ * cut a page exactly alike. `where` is a list of SQL conditions to join with ` and `; its placeholders are numbered from $1 over
+ * `params`. A bad value is a 400 `invalid_filter` (named by `field`) or `invalid_cursor`, judged in the order the filters are listed.
  * @param {Record<string, any>} [q]  the query string of the request
  */
-export async function listRefusals(q = {}) {
+function refusalPageParts(q = {}) {
   const where = []
   const params = []
   /** Adds a value to the parameters of the statement and returns its placeholder. */
@@ -181,14 +183,76 @@ export async function listRefusals(q = {}) {
   if (!Number.isInteger(limit) || limit < 1) throw bad('invalid_filter', 'limit must be a positive integer', { field: 'limit' })
   limit = Math.min(limit, MAX_REFUSAL_PAGE_SIZE)
 
+  return { where, params, limit }
+}
+
+/** The rows of a statement that read one more row than the page holds, cut to the page, and the cursor of the next page (or null). */
+function cutRefusalPage(rows, limit, toJson) {
+  const page = rows.slice(0, limit)
+  return {
+    refusals: page.map(toJson),
+    next_cursor: rows.length > limit ? encodeCursor(page[page.length - 1]) : null,
+  }
+}
+
+/**
+ * The refused visits, newest first, one page at a time: `{ refusals, next_cursor }`, for the committee (GET
+ * /api/admin/scan-refusals; the agent has listAgentRefusals). The filters are `from`, `to`, `point_id`, `provider_id`, `limit`
+ * (at most MAX_REFUSAL_PAGE_SIZE) and `cursor`, and fail with the same codes as the scans list (`invalid_filter`,
+ * `invalid_cursor`). `from` and `to` are a building day (YYYY-MM-DD, in the building's time zone, both ends included) or a
+ * full ISO time that says which zone it means.
+ * @param {Record<string, any>} [q]  the query string of the request
+ */
+export async function listRefusals(q = {}) {
+  const { where, params, limit } = refusalPageParts(q)
   const { rows } = await query(
     `select * from scan_refusals ${where.length ? 'where ' + where.join(' and ') : ''}
       order by at desc, id desc limit ${limit + 1}`,
     params,
   )
-  const page = rows.slice(0, limit)
-  return {
-    refusals: page.map(refusalJson),
-    next_cursor: rows.length > limit ? encodeCursor(page[page.length - 1]) : null,
-  }
+  return cutRefusalPage(rows, limit, refusalJson)
+}
+
+// ---------- reading (the agent's list) ----------
+
+// The columns of `scan_refusals` that the agent's listing reads, by name (never `select *`): a column that is added to the table
+// later does not reach the agent until someone has decided that it may and adds it here and to agentRefusalJson. `device_id` (which
+// phone sent the visit) is not among them, on purpose: the agent never sees a phone's id in a refusal.
+export const AGENT_REFUSAL_COLUMNS = Object.freeze([
+  'id', 'at', 'scan_id', 'source', 'code', 'provider_id', 'provider_name', 'point_id', 'point_name', 'client_time',
+])
+
+/**
+ * One refused visit as the committee's analyst, the agent, reads it (GET /api/agent/v1/refusals): the fields that the committee's
+ * list shows (refusalJson), written one by one from the row that listAgentRefusals reads. Never the phone (`device_id`), the QR
+ * code that was scanned or a position: the table does not keep the last two, and the first is not read. ISO times.
+ * @param {Record<string, any>} r  a row of scan_refusals, with the columns of AGENT_REFUSAL_COLUMNS
+ */
+export const agentRefusalJson = (r) => ({
+  id: Number(r.id),
+  at: new Date(r.at).toISOString(),
+  scan_id: r.scan_id ?? null,
+  source: r.source,
+  code: r.code,
+  provider_id: r.provider_id,
+  provider_name: r.provider_name,
+  point_id: r.point_id ?? null,
+  point_name: r.point_name ?? null,
+  client_time: r.client_time === null || r.client_time === undefined ? null : new Date(r.client_time).toISOString(),
+})
+
+/**
+ * One page of refused visits for the agent API (GET /api/agent/v1/refusals): the filters, the validation, the order, the paging
+ * and the cursor of listRefusals (refusalPageParts, one reading of them), the shape of agentRefusalJson, and the columns of
+ * AGENT_REFUSAL_COLUMNS only.
+ * @param {Record<string, any>} [q]  the query string of the request
+ */
+export async function listAgentRefusals(q = {}) {
+  const { where, params, limit } = refusalPageParts(q)
+  const { rows } = await query(
+    `select ${AGENT_REFUSAL_COLUMNS.join(', ')} from scan_refusals ${where.length ? 'where ' + where.join(' and ') : ''}
+      order by at desc, id desc limit ${limit + 1}`,
+    params,
+  )
+  return cutRefusalPage(rows, limit, agentRefusalJson)
 }
