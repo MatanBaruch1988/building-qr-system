@@ -34,7 +34,6 @@ import { AGENT_ENDPOINTS, endpointKey } from '../server/agentEndpoints.js'
 import { buildOpenApi, openApiDocument } from '../server/agentOpenApi.js'
 import { SCAN_CSV_COLUMNS } from '../server/scans.js'
 import * as config from '../server/config.js'
-import * as config from '../server/config.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
 import { SCAN_OUTCOMES, SCAN_SOURCES, GPS_MODES, OUTCOME_ACCEPTED } from '../shared/contract.js'
 
