@@ -23,6 +23,8 @@
 //  10. the audit log:  the real /audit answer = schemaDoc.audit_fields = the md table and example; the groups = AUDIT_GROUPS
 //                      (server/auditRead.js) = schemaDoc.audit_groups = the md table; the actions, their entity and the keys of
 //                      their detail = AUDIT_DETAIL_ALLOW (server/audit.js) = schemaDoc.audit_actions = the md table
+//  11. the counts:     the real /counts answer = schemaDoc.count_fields = the md table and its examples; the groups = COUNT_GROUPS
+//                      (server/scanCounts.js) = schemaDoc.count_groups = the md table
 // Where this file lists endpoints, envelopes and filters it is a table over the registry (AGENT_ENDPOINTS), so a new endpoint
 // is one more row there (and its handler in server/routes/agent.js) and these tests check its documents at once. An endpoint
 // that reads filters also needs a probe in FILTER_PROBES below, which shows what its code really reads, and a heading
@@ -47,6 +49,7 @@ import { SCAN_FLAGS } from '../shared/flags.js'
 import { SCAN_FILTERS, SCAN_CSV_COLUMNS, AGENT_SCAN_CSV_COLUMNS, listAgentScans } from '../server/scans.js'
 import { REFUSAL_FILTERS, listAgentRefusals } from '../server/scanRefusals.js'
 import { AUDIT_FILTERS, AUDIT_GROUPS, AGENT_AUDIT_FIELDS, listAgentAudit } from '../server/auditRead.js'
+import { COUNT_FILTERS, COUNT_FIELDS, COUNT_GROUPS, listAgentCounts } from '../server/scanCounts.js'
 import { AUDIT_DETAIL_ALLOW } from '../server/audit.js'
 import { evaluateGps, resolveClock } from '../server/scanLogic.js'
 import { SYNC_PERMANENT_ERROR_CODES, SCAN_ERROR_POINT_INACTIVE } from '../shared/contract.js'
@@ -90,6 +93,11 @@ const WHERE = {
   mdRefusalFields: `${MD} (the field table under "## A refused visit")`,
   mdRefusalExample: `${MD} (the JSON example under "## A refused visit")`,
   mdRefusalCodes: `${MD} (the code table under "## A refused visit")`,
+  schemaCountFields: `${SCHEMA} (count_fields)`,
+  schemaCountGroups: `${SCHEMA} (count_groups)`,
+  mdCountFields: `${MD} (the field table under "## Counting the visits")`,
+  mdCountExamples: `${MD} (the JSON examples under "## Counting the visits")`,
+  mdCountGroups: `${MD} (the group_by table under "## Counting the visits")`,
   schemaAuditFields: `${SCHEMA} (audit_fields)`,
   schemaAuditGroups: `${SCHEMA} (audit_groups)`,
   schemaAuditActions: `${SCHEMA} (audit_actions)`,
@@ -259,6 +267,15 @@ const mdRefusalRowKeys = () => {
   const block = /```json\n([\s\S]*?)\n```/.exec(section(md, '## A refused visit'))?.[1]
   if (!block) throw new Error(`${MD} has no \`\`\`json block under "## A refused visit": the refusal fields are read from its keys.`)
   return Object.keys(JSON.parse(block))
+}
+const mdCountTable = (before) => tableOf(section(md, '## Counting the visits'), 'under "## Counting the visits"', before).rows.flatMap((r) => codes(r[0]))
+const mdCountFields = () => mdCountTable(/\(`\/counts`\)/)
+const mdCountGroups = () => mdCountTable(/`group_by` filter takes/)
+/** Every JSON block under "## Counting the visits": each is an answer of /counts. */
+const mdCountAnswers = () => {
+  const blocks = [...section(md, '## Counting the visits').matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) => JSON.parse(m[1]))
+  if (!blocks.length) throw new Error(`${MD} has no json block under "## Counting the visits": the examples of the counts are read from them.`)
+  return blocks
 }
 const mdAuditTable = (before) => tableOf(section(md, '## The audit log'), 'under "## The audit log"', before)
 const mdAuditFields = () => mdAuditTable(/^An entry \(`\/audit`\):/).rows.flatMap((r) => codes(r[0]))
@@ -587,6 +604,8 @@ const NUMBER_RULES = [
   { what: 'the page of the audit log', constant: ['DEFAULT_PAGE_SIZE', 'MAX_AUDIT_PAGE_SIZE'], want: [config.DEFAULT_PAGE_SIZE, config.MAX_AUDIT_PAGE_SIZE], md: /`limit` \(default (\d+), up to (\d+) entries\)/, schema: /limit \(default (\d+), up to (\d+) entries:/ },
   { what: 'where a larger limit of the audit log is cut', constant: 'MAX_AUDIT_PAGE_SIZE', want: [config.MAX_AUDIT_PAGE_SIZE, config.MAX_AUDIT_PAGE_SIZE], md: /`limit` over (\d+) entries is cut to (\d+)/, schema: /more than that is cut to (\d+), not refused/ },
   { what: 'the length of a text filter', constant: 'FILTER_TEXT_MAX_LENGTH', want: [config.FILTER_TEXT_MAX_LENGTH], md: /are cut to (\d+) characters/, schema: /cut to (\d+) characters/ },
+  { what: 'the longest range of the counts', constant: 'COUNTS_MAX_DAYS', want: [config.COUNTS_MAX_DAYS], md: /covers (?:at most|more than) (\d+) days/, schema: /covers (?:at most|more than) (\d+) days/ },
+  { what: 'the most rows of an answer of the counts', constant: 'COUNTS_MAX_ROWS', want: [config.COUNTS_MAX_ROWS], md: /more than (\d+) rows/, schema: /more than (\d+) rows/ },
   { what: 'the requests a key may make in a minute', constant: 'AGENT_KEY_MAX_PER_MINUTE', want: [config.AGENT_KEY_MAX_PER_MINUTE], md: /(\d+) requests in (?:a|the current) minute/, schema: /(\d+) requests in (?:a|the current) minute/ },
   { what: 'the requests a key may make in a building day', constant: 'AGENT_KEY_MAX_PER_DAY', want: [config.AGENT_KEY_MAX_PER_DAY], md: /(\d+) (?:requests )?in (?:a|the) building(?:'s)? day/, schema: /(\d+) (?:requests )?in a building day/ },
 ]
@@ -840,6 +859,51 @@ describe('the real agent API answers what the documents say', () => {
     report(problems)
   })
 
+  it('the counts: the real answer = schemaDoc = the md (the fields, the examples and the groups of group_by)', async () => {
+    // The seed's scans were recorded just now: a range around today holds them, whichever side of midnight (UTC or Israel) the test runs on.
+    const dayOf = (offsetDays) => new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10)
+    const answer = (await get(`/counts?from=${dayOf(-30)}&to=${dayOf(2)}&group_by=day,provider,point,service_type&outcome=all&include_voided=1&include_demo=1`)).json
+    expect(Object.keys(answer)).toEqual(['group_by', 'counts', 'total'])
+    expect(answer.counts.length).toBeGreaterThanOrEqual(1)
+    const real = Object.keys(answer.counts[0])
+    const problems = []
+    for (const row of answer.counts) {
+      if (Object.keys(row).join() !== real.join()) problems.push('The /counts answer does not give every row the same keys in the same order (agentCountJson in server/scanCounts.js).')
+    }
+    if (COUNT_FIELDS.join() !== real.join()) problems.push('COUNT_FIELDS in server/scanCounts.js is not the keys of a row of the real answer, in order.')
+    problems.push(
+      ...diffAll('count field', { where: 'the real /counts answer (agentCountJson in server/scanCounts.js)', names: real }, [
+        { where: WHERE.schemaCountFields, names: Object.keys(schemaDoc.count_fields) },
+        { where: WHERE.mdCountFields, names: mdCountFields() },
+      ]),
+    )
+    // Every JSON example of the md is an answer of the real shape, with a total that is the sum of its rows and a group_by in the fixed order.
+    mdCountAnswers().forEach((example, i) => {
+      const where = `${WHERE.mdCountExamples}, example ${i + 1}`
+      if (Object.keys(example).join() !== 'group_by,counts,total') problems.push(`${where} does not have the keys group_by, counts and total, in this order.`)
+      for (const row of example.counts ?? []) {
+        if (Object.keys(row).join() !== real.join()) problems.push(`${where} has a row with the keys ${Object.keys(row).join(', ')}, but a row of the real answer has ${real.join(', ')}.`)
+      }
+      const sum = (example.counts ?? []).reduce((total, row) => total + row.count, 0)
+      if (sum !== example.total) problems.push(`${where} has a total of ${example.total}, but its rows add up to ${sum}.`)
+      if (JSON.stringify(example.group_by) !== JSON.stringify(COUNT_GROUPS.filter((g) => (example.group_by ?? []).includes(g)))) {
+        problems.push(`${where} has a group_by of ${JSON.stringify(example.group_by)}, which is not a list of ${COUNT_GROUPS.join(', ')} in this order.`)
+      }
+    })
+    problems.push(
+      ...diffAll('count group', { where: 'COUNT_GROUPS in server/scanCounts.js', names: [...COUNT_GROUPS] }, [
+        { where: WHERE.schemaCountGroups, names: Object.keys(schemaDoc.count_groups) },
+        { where: WHERE.mdCountGroups, names: mdCountGroups() },
+      ]),
+    )
+    for (const [name, rows] of [['count_fields', schemaDoc.count_fields], ['count_groups', schemaDoc.count_groups]]) {
+      for (const [field, text] of Object.entries(rows)) {
+        if (typeof text !== 'string' || text.trim().length < 10) problems.push(`${SCHEMA}: ${name}.${field} has no real description.`)
+      }
+    }
+    report(problems)
+  })
+
   it('points, providers and the building: the real answers = schemaDoc = the md tables; and the envelope of every answer', async () => {
     const points = (await get('/points')).json
     const providers = (await get('/providers')).json
@@ -869,7 +933,7 @@ describe('the real agent API answers what the documents say', () => {
         if (envelopes[endpoint]) problems.push(`${WHERE.mdEnvelopes} has a row for ${endpoint}, but its row in ${WHERE.registry} has no envelope (null): remove the row, or give the endpoint an envelope.`)
         continue
       }
-      const real = { where: `the real ${endpoint} answer`, names: Object.keys((await get(pathOf(e))).json) }
+      const real = { where: `the real ${endpoint} answer`, names: Object.keys((await get(`${pathOf(e)}${SAMPLE_QUERY[e.id] ?? ''}`)).json) }
       problems.push(...diffNames('top-level key', real, { where: `${WHERE.registry}, the envelope of ${endpoint}`, names: [...e.envelope] }))
       const inMd = envelopes[endpoint]
       if (!inMd) problems.push(`${WHERE.mdEnvelopes} has no row for ${endpoint}: add one.`)
@@ -885,6 +949,12 @@ describe('the real agent API answers what the documents say', () => {
     }
     report(problems)
   })
+
+  // The filters that an endpoint needs to answer at all (the counts need a from and a to). The envelope of its answer is read from a
+  // request that has them, and a bad value is tried with the others valid, so that what is refused is the filter that is tried and not one
+  // that is missing.
+  const REQUIRED_FILTERS = { countScans: { from: '2026-01-01', to: '2026-01-31' } }
+  const SAMPLE_QUERY = Object.fromEntries(Object.entries(REQUIRED_FILTERS).map(([id, q]) => [id, `?${new URLSearchParams(q)}`]))
 
   // For an endpoint that reads filters from its query: how to see what its code really reads (`read`), the list that the code keeps
   // of them (`listed`), and the names that the ROUTE reads itself, beside the function behind it (`routeReads`, proven by what
@@ -920,6 +990,28 @@ describe('the real agent API answers what the documents say', () => {
         if (!Array.isArray(asJson.json?.scans) || !Array.isArray(asOther.json?.scans)) problems.push('GET /scans with format=json or an unknown format does not answer JSON, as both documents say.')
         return problems
       },
+    },
+    countScans: {
+      readWhere: 'what listAgentCounts reads in server/scanCounts.js (the function behind the route)',
+      // Every property that listAgentCounts reads from its query (all values valid: a range within the longest one that is allowed).
+      read: async () => {
+        const reads = new Set()
+        const query = new Proxy(
+          {
+            from: '2026-01-01', to: '2026-06-30', group_by: 'day,provider', point_id: randomUUID(), provider_id: randomUUID(), service_type: 'cleaning',
+            flag: 'demo', outcome: 'all', include_voided: '1', include_demo: '1',
+          },
+          { get: (target, prop) => (typeof prop === 'string' ? (reads.add(prop), target[prop]) : target[prop]) },
+        )
+        await listAgentCounts(query)
+        return [...reads]
+      },
+      listedWhere: 'COUNT_FILTERS in server/scanCounts.js',
+      listed: COUNT_FILTERS,
+      routeReads: [],
+      routeReadsWhere: 'read by server/routes/agent.js',
+      // The route reads nothing beside the function behind it.
+      proveRouteReads: async () => [],
     },
     listAudit: {
       readWhere: 'what listAgentAudit reads in server/auditRead.js (the function behind the route)',
@@ -1117,7 +1209,8 @@ describe('the real agent API answers what the documents say', () => {
     for (const e of AGENT_ENDPOINTS.filter((x) => x.filters.length)) {
       for (const name of e.filters) {
         for (const value of ['zzz', '0', '2026-02-30', '2026-06-01T10:00:00', 'a\u0000b']) {
-          const r = await get(`${pathOf(e)}?${name}=${encodeURIComponent(value)}`)
+          const others = Object.entries(REQUIRED_FILTERS[e.id] ?? {}).filter(([other]) => other !== name).map(([other, good]) => `&${other}=${encodeURIComponent(good)}`).join('')
+          const r = await get(`${pathOf(e)}?${name}=${encodeURIComponent(value)}${others}`)
           if (r.status === 200) continue
           note(r, `a ${name} of ${JSON.stringify(value)}`)
           if (r.status !== 400) {

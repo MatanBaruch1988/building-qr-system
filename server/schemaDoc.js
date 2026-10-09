@@ -53,12 +53,12 @@ export const schemaDoc = {
   version: 'v1',
   purpose:
     'Attendance log for building service providers (cleaning, gardening). One row per QR scan. ' +
-    'This API is read-only and does not analyse anything: it returns the raw records and signals.',
+    'This API is read-only and does not analyse anything: it returns the raw records and signals, and counts of them (a count is a fact too; what it means is yours to say).',
   timezone: TIMEZONE,
   time_fields: {
     checked_in_at: 'UTC ISO time of the visit (best estimate; equals the phone time for plausible offline scans).',
     checked_in_local: `Same instant as 'YYYY-MM-DD HH:mm:ss' in ${TIMEZONE}.`,
-    local_date: `Calendar date in ${TIMEZONE}. Use this for "per day" questions.`,
+    local_date: `Calendar date in ${TIMEZONE}. Use this for "per day" questions. To count visits per day, ask /counts (group_by=day) instead of counting rows.`,
   },
   // Built from the registry of server/agentEndpoints.js: the key (`GET /api/agent/v1/scans`) and the text of every endpoint, in
   // the order of the registry.
@@ -76,7 +76,10 @@ export const schemaDoc = {
       `429: the key is over a limit: at most ${AGENT_KEY_MAX_PER_MINUTE} requests in a minute and at most ${AGENT_KEY_MAX_PER_DAY} in a building day (midnight to midnight in ${TIMEZONE}). ` +
       "The error carries window ('minute' or 'day', the limit that was reached) and retry_after_s, and the Retry-After header says the same in seconds: wait that long and ask again. " +
       'A refused request does not count towards the limits. It is answered right after the key check, so only a valid key gets it, and before the rest of the request is looked at.',
-    invalid_filter: '400: a bad from, to, point_id, provider_id, group, actor_id, outcome, order or limit. The field key names it.',
+    invalid_filter:
+      '400: a bad from, to, point_id, provider_id, group, group_by, actor_id, outcome, order or limit. The field key names it. ' +
+      'The counts (/counts) refuse in the same way a from or to that is missing, a range that is too long (the field is to) and an answer ' +
+      'that would have too many rows (the field is group_by): their text under endpoints says how long and how many.',
     invalid_cursor: '400: the cursor is not one that this API returned.',
     invalid_input: '400: the database refused a value as out of range or malformed.',
     invalid_json:
@@ -137,6 +140,23 @@ export const schemaDoc = {
     voided_by: 'The name of the committee member who voided the scan (their e-mail when they have no name), as it was when they did it, or null when the scan is not voided or no record names who',
     received_at: 'UTC ISO time the server received the scan. The server clock, which cannot be wrong: unlike checked_in_at it is not an estimate, so for an offline_sync scan it is the time of the upload',
     device_id: "A random uuid for the sign-in of the phone that sent the scan, or null when it is not known (the old import has none). A sign-in belongs to one provider, and a phone that signs in again, or as another provider, gets a new id: so it tells apart the phones that one provider's scans came from, and it does not recognise the same physical phone across sign-ins or providers. Nothing else about the phone is available",
+  },
+  // The counts (GET /counts, server/scanCounts.js). The row of the answer has all seven fields every time; a dimension that the request
+  // did not group by is null. The sum of the counts is the number of scans that /scans returns for the same filters.
+  count_fields: {
+    day: `The day of the visits in the group, YYYY-MM-DD in ${TIMEZONE} (the local_date of the scans), or null when the answer is not grouped by day.`,
+    provider_id: 'uuid of the service provider of the group, or null when the answer is not grouped by provider. A provider can be deleted by the committee: its scans stay, so this can be an id that /providers no longer lists.',
+    provider_name: "Company – contact name as the scans recorded it (the provider_name of /scans), or null when the answer is not grouped by provider. The name can change over a range (the committee renamed the provider): every row of one provider then carries the name that its newest counted visit has, so one provider is one name and never two groups.",
+    point_id: 'uuid of the service point of the group, or null when the answer is not grouped by point. A point can be deleted by the committee: its scans stay, so this can be an id that /points no longer lists.',
+    point_name: 'Name of the point as the scans recorded it (the point_name of /scans, which stays when the point is renamed or deleted), or null when the answer is not grouped by point. When the name changed over the range, every row of one point carries the name that its newest counted visit has.',
+    service_type: "The kind of service that the scans carry (the service_type of /scans, from the point, else the provider), or null. When the answer is grouped by service_type, a null means the visits that have no service type; when it is not, null just means not grouped.",
+    count: 'How many visits are in the group: the scans that /scans would list for the same filters and the same day, provider, point and service_type. 0 only in the one row of an answer that is not grouped and found no visit.',
+  },
+  count_groups: {
+    day: `One row for each day (the local_date of the visits, a day in ${TIMEZONE}).`,
+    provider: 'One row for each service provider (by provider_id).',
+    point: 'One row for each service point (by point_id).',
+    service_type: 'One row for each kind of service (the service_type of the visits, and one more row for the visits that have none).',
   },
   refusal_fields: {
     id: 'A whole number that identifies the refusal. It is not the id of any scan.',
