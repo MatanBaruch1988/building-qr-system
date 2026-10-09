@@ -64,7 +64,8 @@ describe('the last position of the phone', () => {
     await signInHeading()
     expect(window.localStorage.getItem(LAST_FIX_KEY), 'it is still there while nobody has signed in').not.toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(ploni.contact_name) }))
+    // the heading is drawn at once, the names only when the list of providers has been answered: wait for the name
+    fireEvent.click(await screen.findByRole('button', { name: new RegExp(ploni.contact_name) }))
     fireEvent.change(screen.getByLabelText(he['login.passwordLabel'], { selector: 'input' }), { target: { value: 'sample-pass-1' } })
     fireEvent.click(screen.getByRole('button', { name: he['login.submit'] }))
 
