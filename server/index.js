@@ -40,7 +40,7 @@ route('GET', '/health/db', async ({ req }) => {
     ])
     return { json: { ok: true, commit: commit(), migration: rows[0].migration } }
   } catch (err) {
-    if (err instanceof ApiError) throw err // a refused key is a 401, not a database failure
+    if (err instanceof ApiError) throw err // a refused key is a 401 (or a 429), not a database failure
     console.error(`health/db failed: ${failureLabel(err)}`)
     return { status: 503, json: { ok: false, commit: commit() } }
   } finally {

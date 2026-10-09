@@ -29,7 +29,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { setupDb, call, seedAdmin, adminCookie, mintAgentKey, revokeAgentKey } from './helpers.js'
+import { setupDb, call, seedAdmin, adminCookie, mintAgentKey, revokeAgentKey, putKeyAtMinuteLimit } from './helpers.js'
 import { SAMPLE_POINT } from '../scripts/sample-data.mjs'
 import '../server/index.js' // importing it registers every route file with the router
 import { routeTable } from '../server/router.js'
@@ -538,6 +538,8 @@ const NUMBER_RULES = [
   { what: 'the limit range of a page', constant: ['MAX_PAGE_SIZE', 'DEFAULT_PAGE_SIZE'], want: [config.MAX_PAGE_SIZE, config.DEFAULT_PAGE_SIZE], md: /`limit` \(1 to (\d+), default (\d+)\)/, schema: /limit \(1-(\d+), default (\d+);/ },
   { what: 'where a larger limit is cut', constant: 'MAX_PAGE_SIZE', want: [config.MAX_PAGE_SIZE, config.MAX_PAGE_SIZE], md: /`limit` above (\d+) is cut to (\d+)/, schema: /a larger number is cut to (\d+), not refused/ },
   { what: 'the length of a text filter', constant: 'FILTER_TEXT_MAX_LENGTH', want: [config.FILTER_TEXT_MAX_LENGTH], md: /are cut to (\d+) characters/, schema: /cut to (\d+) characters/ },
+  { what: 'the requests a key may make in a minute', constant: 'AGENT_KEY_MAX_PER_MINUTE', want: [config.AGENT_KEY_MAX_PER_MINUTE], md: /(\d+) requests in (?:a|the current) minute/, schema: /(\d+) requests in (?:a|the current) minute/ },
+  { what: 'the requests a key may make in a building day', constant: 'AGENT_KEY_MAX_PER_DAY', want: [config.AGENT_KEY_MAX_PER_DAY], md: /(\d+) (?:requests )?in (?:a|the) building(?:'s)? day/, schema: /(\d+) (?:requests )?in a building day/ },
 ]
 
 describe('numbers in prose come from server/config.js', () => {
@@ -616,7 +618,21 @@ describe('numbers in prose come from server/config.js', () => {
 describe('the real agent API answers what the documents say', () => {
   let db, cookie, key, revokedKey
   const HOME = SAMPLE_POINT
-  const get = (p, opts = {}) => call('GET', `/api/agent/v1${p}`, { token: key, ...opts })
+  // One key may make AGENT_KEY_MAX_PER_MINUTE requests in a minute (server/config.js), and the tests below send more than
+  // that in all (the filters alone take a request for each value). So they work through keys: the same key is used for at
+  // most KEY_USES requests (counting the ones that never reach the guard too, which only makes it safer), then a fresh one
+  // is made. No test depends on which key it gets.
+  const KEY_USES = Math.floor((config.AGENT_KEY_MAX_PER_MINUTE * 2) / 3)
+  let keyUses = 0
+  async function currentKey() {
+    if (keyUses >= KEY_USES) {
+      key = (await mintAgentKey(cookie, 'agent docs')).key
+      keyUses = 0
+    }
+    keyUses += 1
+    return key
+  }
+  const get = async (p, opts = {}) => call('GET', `/api/agent/v1${p}`, { token: await currentKey(), ...opts })
   const withCursor = () => Buffer.from(JSON.stringify({ t: new Date().toISOString(), id: randomUUID() })).toString('base64url')
 
   beforeAll(async () => {
@@ -864,11 +880,21 @@ describe('the real agent API answers what the documents say', () => {
       expectPair(await call(method, `/api/agent/v1${rel}`, { token: 'not-a-key' }), `${method} ${rel} with a Bearer token that is not a qrk_ key`, 401, 'api_key_required')
       expectPair(await call(method, `/api/agent/v1${rel}`, { token: `${config.API_KEY_PREFIX}unknown` }), `${method} ${rel} with an unknown key`, 401, 'api_key_invalid')
       expectPair(await call(method, `/api/agent/v1${rel}`, { token: revokedKey }), `${method} ${rel} with a revoked key`, 401, 'api_key_invalid')
-      expectPair(await call('POST', `/api/agent/v1${rel}`, { token: key, body: {} }), `POST ${rel}`, 405, 'method_not_allowed')
-      expectPair(await call(method, `/api/agent/v1${rel}`, { token: key, badJsonBody: true }), `${method} ${rel} with a valid key and a body that is not valid JSON`, 400, 'invalid_json')
+      expectPair(await call('POST', `/api/agent/v1${rel}`, { token: await currentKey(), body: {} }), `POST ${rel}`, 405, 'method_not_allowed')
+      expectPair(await call(method, `/api/agent/v1${rel}`, { token: await currentKey(), badJsonBody: true }), `${method} ${rel} with a valid key and a body that is not valid JSON`, 400, 'invalid_json')
     }
     expectPair(await get('/nope'), 'GET /nope', 404, 'not_found')
-    expectPair(await call('GET', '/api/agent/nope', { token: key }), 'GET /api/agent/nope', 404, 'not_found')
+    expectPair(await call('GET', '/api/agent/nope', { token: await currentKey() }), 'GET /api/agent/nope', 404, 'not_found')
+
+    // A key that has used up its requests for the minute: the 429 of both documents, right after the key check and before the
+    // rest of the request (a bad limit, which a key with requests left would get a 400 for, is not looked at). The usage is
+    // written at the limit instead of sending that many requests.
+    const spent = await mintAgentKey(cookie, 'agent docs, over the limit')
+    await putKeyAtMinuteLimit(db.pool, spent.id)
+    for (const { method, path: p } of agentRoutes()) {
+      const rel = p.replace('/agent/v1', '')
+      expectPair(await call(method, `/api/agent/v1${rel}?limit=abc`, { token: spent.key }), `${method} ${rel} with a key that is over its limit for the minute`, 429, 'rate_limited')
+    }
 
     // A failure of the server itself: a database that cannot be reached, through the real route and the real router.
     const pool = getPool()

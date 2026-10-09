@@ -3,13 +3,14 @@
 // exactly that and nothing more:
 //   - it deletes the committee sessions that expired or were revoked more than 30 days ago, the login attempts older than
 //     1 day, the recorded errors (app_errors) whose last event is older than 90 days, and the days of the alert throttle
-//     (alert_pings, migration 011) that are more than 30 days back, and it clears the label of a phone
+//     (alert_pings, migration 011) that are more than 30 days back, the minutes of the usage of an agent key (api_key_usage,
+//     migration 013) that are more than 90 days back (owner decision of 08/10/2026), and it clears the label of a phone
 //     that was revoked more than 90 days ago TOGETHER WITH everything that the phone reported about itself (migration 009:
 //     build, time of the report, what waited and since when, the two totals, the last upload), also when the label of that
 //     phone is empty;
 //   - it never touches a scan, the audit log, an active session or phone (label and reported status alike), or anything that is
 //     not yet due (every table that the job may not change is compared row for row before and after);
-//   - it writes one audit row, with the five counts and nothing else, and a second run finds nothing more;
+//   - it writes one audit row, with the six counts and nothing else, and a second run finds nothing more;
 //   - the route refuses every request without the secret, and every request at all when CRON_SECRET is not set, before any
 //     database statement.
 // It runs against the throwaway schema like the other API tests. The data is fake: names like "Fake Browser A" stand in for
@@ -25,6 +26,7 @@ import {
   RETENTION_DEVICE_LABEL_DAYS,
   RETENTION_APP_ERROR_DAYS,
   RETENTION_ALERT_PING_DAYS,
+  RETENTION_API_KEY_USAGE_DAYS,
 } from '../server/config.js'
 
 let db
@@ -66,12 +68,25 @@ const ERRORS_KEPT = ['kept-89d', 'kept-now', 'kept-first-old-last-recent']
 // change what is due.
 const PINGS_GONE = [31, 400]
 const PINGS_KEPT = [29, 1, 0, -1]
+// The usage of the agent keys (api_key_usage: a key, a minute, two counts) is named by the key and by how many days back its minute is.
+// The period is 90: a minute is due once it is MORE than 90 days back, and the fixture keeps clear of the exact boundary so that the
+// turn of a minute during a run cannot change what is due. The old minutes are spread over two keys, and each key keeps a recent one.
+const USAGE = [
+  { key: 'Retention key A', days: 91, gone: true },
+  { key: 'Retention key A', days: 89, gone: false },
+  { key: 'Retention key B', days: 400, gone: true },
+  { key: 'Retention key B', days: 1, gone: false },
+  { key: 'Retention key B', days: 0, gone: false },
+]
+const USAGE_GONE = USAGE.filter((u) => u.gone).map((u) => `${u.key}:${u.days}`)
+const USAGE_KEPT = USAGE.filter((u) => !u.gone).map((u) => `${u.key}:${u.days}`)
 // A phone that has no label but still holds what it reported is due too: a status must not outlive the period because the label was empty.
 const STATUS_ONLY_CLEARED = ['revoked-91d-no-label']
 const PHONES_CLEARED = [...LABELS_CLEARED, ...STATUS_ONLY_CLEARED]
 // A phone that is revoked and due but holds nothing to clear (no label, no status) is not touched and not counted.
 const NOTHING_TO_CLEAR = 'revoked-91d-nothing'
-const COUNTS = { sessions: 3, loginAttempts: 2, deviceLabels: 3, appErrors: 2, alertPings: 2 }
+const COUNTS = { sessions: 3, loginAttempts: 2, deviceLabels: 3, appErrors: 2, alertPings: 2, apiKeyUsage: 2 }
+const NOTHING_DUE = { sessions: 0, loginAttempts: 0, deviceLabels: 0, appErrors: 0, alertPings: 0, apiKeyUsage: 0 }
 // What a phone reports about itself (migration 009): every phone of the fixture but NOTHING_TO_CLEAR has this, and a cleared phone has CLEARED.
 const REPORTED = { app_build: 'abcdef1', waiting_count: 12, not_accepted_total: 4, overflow_total: 2 }
 const CLEARED = { label: '', app_build: null, status_at: null, waiting_count: null, oldest_waiting_at: null, last_sync_at: null, not_accepted_total: 0, overflow_total: 0 }
@@ -86,7 +101,7 @@ async function seed() {
   // One statement for each kind of row (a statement is several round trips to the database, and the schema is remote).
   await q(
     `with a as (delete from admin_sessions), b as (delete from auth_attempts), c as (delete from provider_devices),
-          d as (delete from app_errors), e as (delete from alert_pings)
+          d as (delete from app_errors), e as (delete from alert_pings), f as (delete from api_key_usage), g as (delete from api_keys)
      select 1`,
   )
 
@@ -140,6 +155,19 @@ async function seed() {
     `insert into alert_pings (day, sent_at)
      select current_date - ago, now() - make_interval(days => ago) from unnest($1::int[]) as t(ago)`,
     [[...PINGS_GONE, ...PINGS_KEPT]],
+  )
+
+  // Two agent keys (fake hashes) and their usage, counted back from now. A key is not touched by the job, only the old minutes of its usage.
+  await q(
+    `insert into api_keys (name, key_prefix, key_hash)
+     select distinct key, 'qrk_fake', 'hash-' || key from jsonb_to_recordset($1::jsonb) as t(key text, days int)`,
+    [JSON.stringify(USAGE)],
+  )
+  await q(
+    `insert into api_key_usage (key_id, minute, requests, refused)
+     select k.id, date_trunc('minute', now() - make_interval(days => t.days)), 7, 2
+       from jsonb_to_recordset($1::jsonb) as t(key text, days int) join api_keys k on k.name = t.key`,
+    [JSON.stringify(USAGE)],
   )
 
   const fixtures = [
@@ -215,6 +243,22 @@ const errorPlaces = async () => (await db.pool.query('select place from app_erro
 const pingAges = async () => (await db.pool.query('select (current_date - day)::int as ago from alert_pings order by day')).rows.map((r) => r.ago)
 const pingRows = async (ages) =>
   (await db.pool.query('select to_jsonb(p) as row from alert_pings p where current_date - day = any($1) order by day', [ages])).rows
+// The usage of the keys that is there, as "key name:days back" (the days are rounded), sorted; and the whole rows of some of it.
+const usageNames = async () =>
+  (
+    await db.pool.query(
+      `select k.name || ':' || round(extract(epoch from (now() - u.minute)) / 86400)::int as name
+         from api_key_usage u join api_keys k on k.id = u.key_id`,
+    )
+  ).rows.map((r) => r.name).sort()
+const usageRows = async (names) =>
+  (
+    await db.pool.query(
+      `select to_jsonb(u) as row from api_key_usage u join api_keys k on k.id = u.key_id
+        where k.name || ':' || round(extract(epoch from (now() - u.minute)) / 86400)::int = any($1) order by u.key_id, u.minute`,
+      [names],
+    )
+  ).rows
 const hashes = async (table, column) => (await db.pool.query(`select ${column} as name from ${table}`)).rows.map((r) => r.name).sort()
 /** One phone as JSON: its label and everything that it reported, with the other columns. */
 const phoneRow = async (id) => (await db.pool.query('select to_jsonb(d) as row from provider_devices d where id = $1', [id])).rows[0].row
@@ -225,7 +269,7 @@ const labelsByName = async (devices) => {
 }
 
 // The tables that the job is allowed to change. Everything else must come out of a run exactly as it went in.
-const MAY_CHANGE = new Set(['admin_sessions', 'auth_attempts', 'provider_devices', 'audit_log', 'app_errors', 'alert_pings'])
+const MAY_CHANGE = new Set(['admin_sessions', 'auth_attempts', 'provider_devices', 'audit_log', 'app_errors', 'alert_pings', 'api_key_usage'])
 const sameExceptWhatMayChange = (before, after) => {
   const keep = (state) => Object.fromEntries(Object.entries(state).filter(([name]) => !MAY_CHANGE.has(name)))
   expect(keep(after)).toEqual(keep(before))
@@ -252,16 +296,18 @@ async function withStatements(fn) {
   }
 }
 
-describe('the periods are the owner\'s decision of 04/10/2026 and 05/10/2026', () => {
-  it('are 30 days for a session, 1 day for a login attempt, 90 days for the label of a revoked phone, 90 days for a recorded error and 30 days for an alert day', () => {
-    // A change here is a change of what the committee promised in docs/privacy.md: it needs the owner's decision.
+describe('the periods are the owner\'s decision of 04/10/2026, 05/10/2026 and 08/10/2026', () => {
+  it('are 30 days for a session, 1 day for a login attempt, 90 days for the label of a revoked phone, 90 days for a recorded error, 30 days for an alert day and 90 days for the usage of an agent key', () => {
+    // A change here is a change of what the committee promised in docs/privacy.md: it needs the owner's decision. The 90 days of
+    // the usage of an agent key (api_key_usage, migration 013) is the owner's decision of 08/10/2026.
     expect([
       RETENTION_SESSION_DAYS,
       RETENTION_LOGIN_ATTEMPT_DAYS,
       RETENTION_DEVICE_LABEL_DAYS,
       RETENTION_APP_ERROR_DAYS,
       RETENTION_ALERT_PING_DAYS,
-    ]).toEqual([30, 1, 90, 90, 30])
+      RETENTION_API_KEY_USAGE_DAYS,
+    ]).toEqual([30, 1, 90, 90, 30, 90])
   })
 })
 
@@ -274,18 +320,21 @@ describe('runRetention', () => {
     const keptAttempts = (await db.pool.query(`select to_jsonb(a) as row from auth_attempts a where key = any($1) order by key`, [ATTEMPTS_KEPT])).rows
     const keptErrors = await errorRows(ERRORS_KEPT)
     const keptPings = await pingRows(PINGS_KEPT)
+    const keptUsage = await usageRows(USAGE_KEPT)
 
     // The fixture is what the lists say: the due rows and the rest are all there before the run.
     expect(await hashes('admin_sessions', 'token_hash')).toEqual([...SESSIONS_GONE, ...SESSIONS_KEPT].sort())
     expect(await hashes('auth_attempts', 'key')).toEqual([...ATTEMPTS_GONE, ...ATTEMPTS_KEPT].sort())
     expect(await errorPlaces()).toEqual([...ERRORS_GONE, ...ERRORS_KEPT].sort())
     expect(await pingAges()).toEqual([...PINGS_GONE, ...PINGS_KEPT].sort((a, b) => b - a))
-    expect([SESSIONS_GONE.length, ATTEMPTS_GONE.length, PHONES_CLEARED.length, ERRORS_GONE.length, PINGS_GONE.length]).toEqual([
+    expect(await usageNames()).toEqual([...USAGE_GONE, ...USAGE_KEPT].sort())
+    expect([SESSIONS_GONE.length, ATTEMPTS_GONE.length, PHONES_CLEARED.length, ERRORS_GONE.length, PINGS_GONE.length, USAGE_GONE.length]).toEqual([
       COUNTS.sessions,
       COUNTS.loginAttempts,
       COUNTS.deviceLabels,
       COUNTS.appErrors,
       COUNTS.alertPings,
+      COUNTS.apiKeyUsage,
     ])
     // The phones of the fixture hold what the lists say (a fixture without a status would make the check below an empty one).
     const phonesBefore = Object.fromEntries(before.provider_devices.map((d) => [d.id, d]))
@@ -312,6 +361,10 @@ describe('runRetention', () => {
     // building's day when it is a day ahead of the database's date) are the very same rows.
     expect(await pingAges()).toEqual([...PINGS_KEPT].sort((a, b) => b - a))
     expect(await pingRows(PINGS_KEPT)).toEqual(keptPings)
+    // The usage of the agent keys, the same way: the two minutes that are more than 90 days back are gone (one on each key), and the
+    // others (89 days, yesterday and today) are the very same rows, counts included. The keys themselves are not touched.
+    expect(await usageNames()).toEqual([...USAGE_KEPT].sort())
+    expect(await usageRows(USAGE_KEPT)).toEqual(keptUsage)
     // Phones: every row is still there. A phone that is due has its label AND everything that it reported cleared, and no other
     // column changed. A phone that is not due (an active one, one revoked 89 days ago) is the very same row, status included, and a
     // due phone that holds nothing is the same row too.
@@ -349,7 +402,7 @@ describe('runRetention', () => {
       action: 'retention.run',
       entity: null,
       entity_id: null,
-      detail: { sessions: 3, login_attempts: 2, device_labels: 3, app_errors: 2, alert_pings: 2 },
+      detail: { sessions: 3, login_attempts: 2, device_labels: 3, app_errors: 2, alert_pings: 2, api_key_usage: 2 },
     })
   })
 
@@ -359,10 +412,10 @@ describe('runRetention', () => {
     await runRetention()
     const { rows } = await db.pool.query('select * from audit_log where id > $1', [max[0].n])
     expect(rows).toHaveLength(1)
-    expect(Object.keys(rows[0].detail).sort()).toEqual(['alert_pings', 'app_errors', 'device_labels', 'login_attempts', 'sessions'])
+    expect(Object.keys(rows[0].detail).sort()).toEqual(['alert_pings', 'api_key_usage', 'app_errors', 'device_labels', 'login_attempts', 'sessions'])
     for (const value of Object.values(rows[0].detail)) expect(Number.isInteger(value)).toBe(true)
     const text = JSON.stringify(rows[0])
-    for (const secret of ['Fake Browser', 'Fake Person', 'token-', 'expired-', 'revoked-', 'attempt-', 'due-', 'kept-', 'admin@test.local', adminId, providerId]) {
+    for (const secret of ['Fake Browser', 'Fake Person', 'token-', 'expired-', 'revoked-', 'attempt-', 'due-', 'kept-', 'Retention key', 'hash-', 'admin@test.local', adminId, providerId]) {
       expect(text, secret).not.toContain(secret)
     }
   })
@@ -371,7 +424,7 @@ describe('runRetention', () => {
     await seed()
     expect(await runRetention()).toEqual(COUNTS)
     const first = await snapshot()
-    expect(await runRetention()).toEqual({ sessions: 0, loginAttempts: 0, deviceLabels: 0, appErrors: 0, alertPings: 0 })
+    expect(await runRetention()).toEqual(NOTHING_DUE)
     const second = await snapshot()
     sameExceptWhatMayChange(first, second)
     expect(second.admin_sessions).toEqual(first.admin_sessions)
@@ -379,11 +432,13 @@ describe('runRetention', () => {
     expect(second.provider_devices).toEqual(first.provider_devices)
     expect(second.app_errors).toEqual(first.app_errors)
     expect(second.alert_pings).toEqual(first.alert_pings)
+    expect(second.api_key_usage).toEqual(first.api_key_usage)
+    expect(second.api_keys).toEqual(first.api_keys)
     // The second run adds only its own audit row, with zeros.
     expect(second.audit_log.filter((r) => first.audit_log.some((b) => b.id === r.id))).toEqual(first.audit_log)
     const added = second.audit_log.filter((r) => !first.audit_log.some((b) => b.id === r.id))
     expect(added).toHaveLength(1)
-    expect(added[0].detail).toEqual({ sessions: 0, login_attempts: 0, device_labels: 0, app_errors: 0, alert_pings: 0 })
+    expect(added[0].detail).toEqual({ sessions: 0, login_attempts: 0, device_labels: 0, app_errors: 0, alert_pings: 0, api_key_usage: 0 })
   })
 
   it('does nothing to a database where nothing is due', async () => {
@@ -392,7 +447,8 @@ describe('runRetention', () => {
     await db.pool.query('delete from provider_devices')
     await db.pool.query('delete from app_errors')
     await db.pool.query('delete from alert_pings')
-    expect(await runRetention()).toEqual({ sessions: 0, loginAttempts: 0, deviceLabels: 0, appErrors: 0, alertPings: 0 })
+    await db.pool.query('delete from api_key_usage')
+    expect(await runRetention()).toEqual(NOTHING_DUE)
   })
 
   it('deletes an alert day more than 30 days back, by its day, and touches no other row', async () => {
@@ -426,6 +482,31 @@ describe('runRetention', () => {
     expect((await runRetention()).appErrors).toBe(0)
   })
 
+  it('deletes the usage of an agent key 90 days after its minute, by the minute, and touches no other row', async () => {
+    await db.pool.query('delete from api_key_usage')
+    await db.pool.query('delete from api_keys')
+    const key = (await db.pool.query(`insert into api_keys (name, key_prefix, key_hash) values ('Retention key C', 'qrk_fake', 'hash-c') returning id`)).rows[0].id
+    // Minutes just over 90 days back (due) and just under (kept), a recent one, and a key that was revoked long ago and has an old
+    // minute (the key is not what the period counts, the minute is). Refused requests are counted in the row like the rest of it.
+    await db.pool.query(
+      `insert into api_key_usage (key_id, minute, requests, refused)
+       values ($1, date_trunc('minute', now() - interval '90 days 1 hour'), 5, 1),
+              ($1, date_trunc('minute', now() - interval '89 days 23 hours'), 6, 0),
+              ($1, date_trunc('minute', now() - interval '2 days'), 60, 40),
+              ($1, date_trunc('minute', now()), 1, 0)`,
+      [key],
+    )
+    await db.pool.query(`update api_keys set revoked_at = now() - interval '200 days' where id = $1`, [key])
+    const keyBefore = (await db.pool.query('select to_jsonb(k) as row from api_keys k where id = $1', [key])).rows[0].row
+    const keptBefore = (await db.pool.query(`select to_jsonb(u) as row from api_key_usage u where minute > now() - interval '90 days' order by minute`)).rows
+    expect(keptBefore).toHaveLength(3)
+    expect((await runRetention()).apiKeyUsage).toBe(1)
+    const after = (await db.pool.query(`select to_jsonb(u) as row from api_key_usage u order by minute`)).rows
+    expect(after).toEqual(keptBefore)
+    expect((await db.pool.query('select to_jsonb(k) as row from api_keys k where id = $1', [key])).rows[0].row).toEqual(keyBefore)
+    expect((await runRetention()).apiKeyUsage).toBe(0)
+  })
+
   it('never touches an active phone: its label and everything it reported stay, however old its last report is', async () => {
     const { devices } = await seed()
     await db.pool.query(
@@ -457,7 +538,7 @@ describe('runRetention', () => {
       'overflow_total = 1',
     ]) {
       await db.pool.query(`update provider_devices set ${set} where id = $1`, [id])
-      expect(await runRetention(), set).toEqual({ sessions: 0, loginAttempts: 0, deviceLabels: 1, appErrors: 0, alertPings: 0 })
+      expect(await runRetention(), set).toEqual({ ...NOTHING_DUE, deviceLabels: 1 })
       expect(await phoneRow(id), set).toMatchObject(CLEARED)
     }
   })
@@ -587,14 +668,15 @@ describe('GET /api/cron/retention', () => {
       log.mockRestore()
     }
     expect(res.status).toBe(200)
-    expect(res.json).toEqual({ ok: true, sessions: 3, login_attempts: 2, device_labels: 3, app_errors: 2, alert_pings: 2 })
+    expect(res.json).toEqual({ ok: true, sessions: 3, login_attempts: 2, device_labels: 3, app_errors: 2, alert_pings: 2, api_key_usage: 2 })
     expect(res.headers['cache-control']).toBe('no-store')
-    expect(logged).toEqual([['retention: sessions=3 login_attempts=2 device_labels=3 app_errors=2 alert_pings=2']])
+    expect(logged).toEqual([['retention: sessions=3 login_attempts=2 device_labels=3 app_errors=2 alert_pings=2 api_key_usage=2']])
     // The job really ran: the due rows are gone, the labels are cleared, nothing else moved.
     expect(await hashes('admin_sessions', 'token_hash')).toEqual([...SESSIONS_KEPT].sort())
     expect(await hashes('auth_attempts', 'key')).toEqual([...ATTEMPTS_KEPT].sort())
     expect(await errorPlaces()).toEqual([...ERRORS_KEPT].sort())
     expect(await pingAges()).toEqual([...PINGS_KEPT].sort((a, b) => b - a))
+    expect(await usageNames()).toEqual([...USAGE_KEPT].sort())
     const labels = await labelsByName(devices)
     for (const name of LABELS_CLEARED) expect(labels[name], name).toBe('')
     for (const [name, label] of Object.entries(LABELS_KEPT)) expect(labels[name], name).toBe(label)
@@ -604,7 +686,7 @@ describe('GET /api/cron/retention', () => {
     // Called again (Vercel Cron can deliver twice), it finds nothing more.
     const again = await get({ token: SECRET })
     expect(again.status).toBe(200)
-    expect(again.json).toEqual({ ok: true, sessions: 0, login_attempts: 0, device_labels: 0, app_errors: 0, alert_pings: 0 })
+    expect(again.json).toEqual({ ok: true, sessions: 0, login_attempts: 0, device_labels: 0, app_errors: 0, alert_pings: 0, api_key_usage: 0 })
   })
 
   it('answers a method other than GET with 405 and runs nothing, even with the secret', async () => {

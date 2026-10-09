@@ -1,7 +1,7 @@
 // Self-describing contract for the agent API. Served at GET /api/agent/v1/schema and mirrored in docs/agent-api.md.
 import {
   TIMEZONE, SCAN_COOLDOWN_MINUTES, GPS_MAX_USABLE_ACCURACY_M, GPS_PIN_TOLERANCE_M, GPS_MAX_ACCURACY_CREDIT_M,
-  GPS_STALE_AFTER_S, CLOCK_MAX_AGE_MS, CLOCK_MAX_FUTURE_MS, CLOCK_SKEW_FLAG_MS,
+  GPS_STALE_AFTER_S, CLOCK_MAX_AGE_MS, CLOCK_MAX_FUTURE_MS, CLOCK_SKEW_FLAG_MS, AGENT_KEY_MAX_PER_MINUTE, AGENT_KEY_MAX_PER_DAY,
 } from './config.js'
 import { AGENT_ENDPOINTS, endpointKey } from './agentEndpoints.js'
 import {
@@ -32,13 +32,19 @@ export const schemaDoc = {
   // Built from the registry of server/agentEndpoints.js: the key (`GET /api/agent/v1/scans`) and the text of every endpoint, in
   // the order of the registry.
   endpoints: Object.fromEntries(AGENT_ENDPOINTS.map((endpoint) => [endpointKey(endpoint), endpoint.description])),
-  auth: 'Header "Authorization: Bearer qrk_…". Keys are created and revoked by the committee in the admin screen.',
+  auth:
+    'Header "Authorization: Bearer qrk_…". Keys are created and revoked by the committee in the admin screen. ' +
+    `One key may make at most ${AGENT_KEY_MAX_PER_MINUTE} requests in a minute and at most ${AGENT_KEY_MAX_PER_DAY} in a building day; see errors.rate_limited.`,
   errors: {
     shape: '{ "error": { "code": "...", "message": "..." } }, sometimes with extra keys such as field.',
     api_key_required:
       '401: no key, or the header is not a Bearer qrk_ key. The key is checked first: a request to an endpoint that exists but has no valid key gets a 401, ' +
       'whatever else is wrong with it, and every 400 below is answered only to a valid key.',
     api_key_invalid: '401: the key is unknown or revoked.',
+    rate_limited:
+      `429: the key is over a limit: at most ${AGENT_KEY_MAX_PER_MINUTE} requests in a minute and at most ${AGENT_KEY_MAX_PER_DAY} in a building day (midnight to midnight in ${TIMEZONE}). ` +
+      "The error carries window ('minute' or 'day', the limit that was reached) and retry_after_s, and the Retry-After header says the same in seconds: wait that long and ask again. " +
+      'A refused request does not count towards the limits. It is answered right after the key check, so only a valid key gets it, and before the rest of the request is looked at.',
     invalid_filter: '400: a bad from, to, point_id, provider_id, outcome, order or limit. The field key names it.',
     invalid_cursor: '400: the cursor is not one that this API returned.',
     invalid_input: '400: the database refused a value as out of range or malformed.',

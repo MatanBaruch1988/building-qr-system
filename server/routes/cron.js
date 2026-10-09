@@ -10,12 +10,12 @@ import { formatDateTime } from '../../shared/datetime.js'
 // entries in vercel.json). The router checks that secret before this handler runs (requireCron in server/auth.js, chosen by
 // the `/cron/` rule of server/access.js): a request without it, or on a deployment that has no CRON_SECRET, never gets here.
 
-// The daily retention job (server/retention.js, docs/privacy.md). The answer and the log line hold the five counts and
+// The daily retention job (server/retention.js, docs/privacy.md). The answer and the log line hold the six counts and
 // nothing else, so the runtime log (read by more people than the committee) learns nothing about a person.
 route('GET', '/cron/retention', async () => {
-  const { sessions, loginAttempts, deviceLabels, appErrors, alertPings } = await runRetention()
+  const { sessions, loginAttempts, deviceLabels, appErrors, alertPings, apiKeyUsage } = await runRetention()
   console.log(
-    `retention: sessions=${sessions} login_attempts=${loginAttempts} device_labels=${deviceLabels} app_errors=${appErrors} alert_pings=${alertPings}`,
+    `retention: sessions=${sessions} login_attempts=${loginAttempts} device_labels=${deviceLabels} app_errors=${appErrors} alert_pings=${alertPings} api_key_usage=${apiKeyUsage}`,
   )
   return {
     ok: true,
@@ -24,6 +24,7 @@ route('GET', '/cron/retention', async () => {
     device_labels: deviceLabels,
     app_errors: appErrors,
     alert_pings: alertPings,
+    api_key_usage: apiKeyUsage,
   }
 })
 

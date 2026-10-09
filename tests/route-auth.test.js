@@ -46,7 +46,7 @@
 // Random UUIDs stand in for path parameters, so even a route that was left open would find nothing to change.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
+import { setupDb, call, seedAdmin, adminCookie, putKeyAtMinuteLimit } from './helpers.js'
 import '../server/index.js' // importing it registers every route file with the router
 import { route, routeTable } from '../server/router.js'
 import { PUBLIC, accessFor } from '../server/access.js'
@@ -1259,6 +1259,60 @@ describe('the router guards every route before the handler runs', () => {
       expect(calledTwice.statements).toEqual(alone.statements)
     })
   }
+
+  // The agent guard counts and limits the key (server/auth.js, API_KEY_GUARD_SQL), so for a key it is ONE statement: the lookup, the
+  // count of the day and of the minute, and the bookkeeping (the usage row, and last_used_at when it is due) are the same
+  // statement. Before the limit it was a lookup and then, for a key that was let in, an update that nobody waited for. This is a
+  // real change of the guard, so the expectation is written out here: one statement for a key that is let in, for one that does not
+  // exist and for one that is over its limit (the text is the same, only its answer differs), and none without a key.
+  const mintKey = async (name) => (await call('POST', '/api/admin/api-keys', { ...asCookie(VALID.committee), body: { name } })).json
+  const statementsOfTheGuard = (statements) => statements.filter((text) => /^(select|insert|update|delete|with)\b/i.test(text))
+
+  it('makes one database statement for an agent key, whether the key is let in, unknown or over its limit, and none without a key', async () => {
+    const limited = await mintKey('route-auth, statements of an over-limit key')
+    await putKeyAtMinuteLimit(db.pool, limited.api_key.id)
+    const alone = guardAloneRoute('agent', 'GET')
+    const sent = {
+      'a key that is let in': await sendRequest(alone, asBearer(VALID.agent)),
+      'a key that does not exist': await sendRequest(alone, asBearer(token(API_KEY_PREFIX))),
+      'a key that is over its limit': await sendRequest(alone, asBearer(limited.key)),
+    }
+    expect(sent['a key that is let in'].res.status).toBe(200)
+    expect(sent['a key that does not exist'].res.status).toBe(401)
+    expect(sent['a key that is over its limit'].res.status).toBe(429)
+    const texts = []
+    for (const [what, { statements }] of Object.entries(sent)) {
+      const own = statementsOfTheGuard(statements)
+      expect(own.length, `the agent guard makes one statement for ${what}`).toBe(1)
+      expect(own[0], what).toMatch(/api_keys/)
+      expect(own[0], what).toMatch(/api_key_usage/)
+      texts.push(own[0])
+    }
+    expect(new Set(texts).size, 'the statement is the same whatever the key').toBe(1)
+    expect(statementsOfTheGuard((await sendRequest(alone, {})).statements), 'no key, no statement').toEqual([])
+  })
+
+  it('refuses a key that is over its limit with the 429 of the guard: no handler, no body, only the statement of the guard, and nothing recorded in app_errors', async () => {
+    const limited = await mintKey('route-auth, over the limit')
+    await putKeyAtMinuteLimit(db.pool, limited.api_key.id)
+    const c = canary('agent', 'over-the-limit', 'POST', async () => ({ ok: true }))
+    const recorded = async () => (await db.pool.query('select count(*)::int as n from app_errors')).rows[0].n
+    const before = await recorded()
+    const alone = await sendRequest(guardAloneRoute('agent', 'POST'), asBearer(limited.key))
+    const over = await sendRequest(c.r, asBearer(limited.key))
+    expect(over.res.status).toBe(429)
+    expect(over.res.json.error).toMatchObject({ code: 'rate_limited', window: 'minute' })
+    expect(over.res.headers['retry-after']).toBe(String(over.res.json.error.retry_after_s))
+    expect(c.ran, 'the handler ran for a request that its guard refused').toEqual([])
+    expect(over.touched).toEqual([])
+    expect(over.reads, 'the router read the body or built the query for a request that its guard refused').toEqual({ body: 0, query: 0 })
+    expect(over.statements, 'only the statements of the guard').toEqual(alone.statements)
+    expect(await recorded(), 'a request that its guard refused records nothing in app_errors').toBe(before)
+    // The same key is let through again by a window that has room, and the handler then runs (the canary is not a dead route).
+    await db.pool.query('delete from api_key_usage where key_id = $1', [limited.api_key.id])
+    expect((await sendRequest(c.r, asBearer(limited.key))).res.status).toBe(200)
+    expect(c.ran).toEqual(['over-the-limit'])
+  })
 
   it('reads the body and builds the query for a handler only after the guard has let the request in', async () => {
     const alone = guardAloneRoute('committee', 'POST')

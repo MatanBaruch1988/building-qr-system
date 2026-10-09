@@ -88,13 +88,15 @@ const REASON_TEXT = Object.freeze({
   signin_spike: 'sign-in spike',
 })
 
-// The five numbers that the retention job writes in its audit row (server/retention.js), and how the body says them.
+// The six numbers that the retention job writes in its audit row (server/retention.js), and how the body says them. A row
+// from before a number existed lacks it, and the body then leaves it out.
 const RETENTION_COUNTS = Object.freeze([
   ['sessions', 'sessions'],
   ['login_attempts', 'login attempts'],
   ['device_labels', 'device labels'],
   ['app_errors', 'app errors'],
   ['alert_pings', 'alert pings'],
+  ['api_key_usage', 'api key usage'],
 ])
 
 // The events of app_errors, ranked within three lists. A row belongs to one list: the server's own errors (a), a refusal or a slow

@@ -58,7 +58,7 @@
 //   api_key.create            api_key   key         { name }
 //   api_key.revoke            api_key   key         null
 //   api_key.delete            api_key   key         { name, key_prefix, was_revoked }
-//   retention.run             (null)    (null)      { sessions, login_attempts, device_labels, app_errors, alert_pings }  counts only (the system actor)
+//   retention.run             (null)    (null)      { sessions, login_attempts, device_labels, app_errors, alert_pings, api_key_usage }  counts only (the system actor)
 //
 // A sign-in and a sign-out of a committee member are recorded, a provider's are not (`provider_devices` has them). A sign-in is
 // written in the transaction that opens the session; a refused one (not on the list, switched off, another Google account, too

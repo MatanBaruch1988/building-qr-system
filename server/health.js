@@ -27,7 +27,8 @@ export function timeLeft(req) {
 
 /**
  * `requireApiKey` for GET /api/health/db. A missing, malformed or unknown key is refused exactly as by the plain guard (a
- * 401, and no query for a key that is not shaped like ours). When the lookup fails or does not finish within
+ * 401, and no query for a key that is not shaped like ours), and a key that is over its limit gets the 429 `rate_limited` of
+ * the plain guard, not a 503: the database answered. When the lookup fails or does not finish within
  * DB_HEALTH_TIMEOUT_MS, the request is answered with the 503 of this route (`{ ok: false, commit }`) and nothing of the
  * cause: its code or name goes to the log, never its message (server/logSafe.js).
  */
@@ -42,7 +43,7 @@ export async function requireApiKeyForHealth(req) {
       }),
     ])
   } catch (err) {
-    if (err instanceof ApiError) throw err // a refused key is a 401, not a database failure
+    if (err instanceof ApiError) throw err // a refused key is a 401 (or a 429), not a database failure
     console.error(`health/db failed: ${failureLabel(err)}`)
     throw new Answer({ status: 503, json: { ok: false, commit: commit() } })
   } finally {
