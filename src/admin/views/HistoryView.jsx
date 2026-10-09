@@ -307,7 +307,7 @@ export default function HistoryView() {
                 <div className="a-scan__flags">
                   {s.outcome !== OUTCOME_ACCEPTED && <Badge tone="danger">{OUTCOMES[s.outcome] ?? s.outcome}</Badge>}
                   {s.voided && <Badge tone="danger">מבוטלת{s.void_reason ? `: ${s.void_reason}` : ''}</Badge>}
-                  {s.distance_m != null && <Badge>{s.distance_m} מ׳ מהנקודה</Badge>}
+                  {s.distance_m != null && <Badge>{s.distance_m} מ׳ מהנקודה{s.gps_accuracy_m != null && `, דיוק ${s.gps_accuracy_m} מ׳`}</Badge>}
                   {s.flags.map((f) => <Badge key={f} tone={FLAGS[f]?.tone}>{FLAGS[f]?.label ?? f}</Badge>)}
                 </div>
                 <div className="a-scan__tools">
