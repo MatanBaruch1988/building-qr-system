@@ -352,8 +352,18 @@ async function fillCommittee(playwright, baseURL) {
     await post(`/api/admin/scans/${cancelled.scan.id}/void`, { reason: 'נסרק בטעות' })
   }
 
+  // The live key is used past its limit of the minute (130 calls in a row, one after the other: at most 60 are let through in a
+  // minute, so even when the run crosses the turn of a minute at least 10 are turned away). Its card on the Agent screen then
+  // shows its usage and the warning line for a key that was refused, which the other key (never used) does not have, so the
+  // scan covers a card with the warning and one without it.
+  const overuse = async (secret) => {
+    for (let i = 0; i < 130; i++) {
+      const answer = await phone.get('/api/agent/v1/health', { headers: { authorization: `Bearer ${secret}` } })
+      expect([200, 429], 'GET /api/agent/v1/health').toContain(answer.status())
+    }
+  }
   const [live, dead, member, removed, off] = await Promise.all([
-    post('/api/admin/api-keys', { name: `פעיל ${tag}` }).then((r) => r.api_key),
+    post('/api/admin/api-keys', { name: `פעיל ${tag}` }).then(async (r) => (await overuse(r.key), r.api_key)),
     post('/api/admin/api-keys', { name: `בוטל ${tag}` }).then(async (r) => (await post(`/api/admin/api-keys/${r.api_key.id}/revoke`), r.api_key)),
     post('/api/admin/admins', { email: `a11y-${tag}@example.test`, name: `חבר ${tag}` }).then((r) => r.admin),
     post('/api/admin/admins', { email: `a11y-off-${tag}@example.test`, name: `הוסר ${tag}` }).then(async (r) => (await change(`/api/admin/admins/${r.admin.id}`, { is_active: false }), r.admin)),
@@ -479,6 +489,9 @@ test.describe('committee app with the sample data filled in', () => {
     await expect(page.getByText('מהתור בטלפון').first()).toBeVisible()
     await scanBothThemes(page, 'committee phone: history, visits not counted')
     await openTab(page, 'agent', "גישה לאייג'נט")
+    // the key that was used past its limit says so, and the page says the limits once (the cards of the other keys have no such line)
+    await expect(page.getByText(/^נחסמו \d+ קריאות ב-30 הימים האחרונים בגלל מגבלת הקצב$/)).toHaveCount(1)
+    await expect(page.getByText(/^כל מפתח מוגבל ל-\d+ קריאות בדקה ול-\d+ ביום\.$/)).toHaveCount(1)
     await scanBothThemes(page, 'committee phone: agent')
     await openTab(page, 'committee', 'חברי הוועד')
     await expect(page.getByLabel('שם הבניין', { exact: true })).toHaveValue(BUILDING_NAME) // the card is loaded, with the name filled in
