@@ -1,4 +1,5 @@
 import { GPS_MODE_NONE, GPS_MODE_REQUIRED, OUTCOME_REJECTED_FAR, OUTCOME_REJECTED_NO_LOCATION } from '../../shared/contract.js'
+import { isUsableFix } from './geo.js'
 
 /** @import { PublicPoint, Scan, ScanResponse } from '../../shared/types.js' */
 /** @import { Session } from './session.js' */
@@ -40,11 +41,12 @@ export const providerLabel = (p) => (p?.contact_name ? `${p.contact_name} · ${p
  */
 
 /**
- * The answer of performCheckIn, by `kind`.
+ * The answer of performCheckIn, by `kind`. A `queued` visit says whether it is `located`: false when the point asks for a
+ * position and the saved visit has none that the server can use.
  * @typedef {{ kind: 'success' | 'duplicate', scan: Scan }
  *   | { kind: 'far', scan: Scan }
  *   | { kind: 'needLocation', scan: Scan, locationReason: string | null }
- *   | { kind: 'queued', id: string, client_time: string, persisted: boolean }
+ *   | { kind: 'queued', id: string, client_time: string, persisted: boolean, located: boolean }
  *   | { kind: 'signedOut', code: string }
  *   | { kind: 'error', code: string }} CheckInResult
  */
@@ -91,7 +93,11 @@ export async function performCheckIn({ code, point, session, deps, onPhase = () 
       // so if the server did receive it after all, the retry cannot create a second record.
       const persisted = queue.add({ id, code, client_time, gps, provider_id: session.provider.id, saved_at: client_time, point_name: point?.name })
       // persisted=false: the phone refused to store it, so it only survives while this page stays open.
-      return { kind: 'queued', id, client_time, persisted }
+      // located=false: the point asks for a position and the visit carries none that the server can use (no reception often means
+      // no fresh position either), so the screen warns that the server may refuse it when it is sent. A point that does not check
+      // the location never asked for one, so there is nothing missing to warn about.
+      const located = point?.gps_mode === GPS_MODE_NONE || isUsableFix(gps)
+      return { kind: 'queued', id, client_time, persisted, located }
     }
     return { kind: 'error', code: err.code }
   }

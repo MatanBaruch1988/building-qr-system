@@ -4,6 +4,7 @@ import { KNOWN_ERROR_CODES, errorMessageKey, isKnownError } from '../src/worker/
 import { createQueue, flushQueue } from '../src/worker/scanQueue.js'
 import { api, ApiError } from '../src/api/client.js'
 import { SAMPLE_PROVIDER_NAMES } from '../scripts/sample-data.mjs'
+import { GPS_MAX_USABLE_ACCURACY_M } from '../shared/contract.js'
 
 const memoryStorage = () => {
   const m = new Map()
@@ -80,6 +81,26 @@ describe('performCheckIn', () => {
         { id: 'scan-id-1', code: 'BQR-abc123', client_time: '2026-09-30T05:12:00.000Z', gps: { lat: 1, lng: 2, accuracy: 10 }, provider_id: 'prov-1', saved_at: '2026-09-30T05:12:00.000Z' },
       ])
     }
+  })
+
+  it('a saved visit says whether it carries a position that the server can use', async () => {
+    const offline = async () => { throw new ApiError(0, 'timeout') }
+    const usable = { fix: { lat: 1, lng: 2, accuracy: 10, age_s: 0 }, reason: null }
+    const limit = { fix: { lat: 1, lng: 2, accuracy: GPS_MAX_USABLE_ACCURACY_M, age_s: 0 }, reason: null }
+    const vague = { fix: { lat: 1, lng: 2, accuracy: GPS_MAX_USABLE_ACCURACY_M + 1, age_s: 0 }, reason: null }
+    const nothing = { fix: null, reason: 'timeout' }
+    for (const [fix, located] of [[usable, true], [limit, true], [vague, false], [nothing, false]]) {
+      for (const point of [{ gps_mode: 'required' }, { gps_mode: 'optional' }]) {
+        const r = await setup({ apiImpl: offline, fix }).run(point)
+        expect(r, `${point.gps_mode}, accuracy ${fix.fix?.accuracy}`).toMatchObject({ kind: 'queued', located })
+      }
+    }
+  })
+
+  it("a saved visit to a point that does not check the location is never 'not located': no position was asked for", async () => {
+    const t = setup({ apiImpl: async () => { throw new ApiError(0, 'timeout') }, fix: { fix: null, reason: 'timeout' } })
+    expect(await t.run({ gps_mode: 'none' })).toMatchObject({ kind: 'queued', located: true })
+    expect(t.getFix).not.toHaveBeenCalled()
   })
 
   it('expired session: signs out and does not queue', async () => {

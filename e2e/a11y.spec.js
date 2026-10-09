@@ -219,6 +219,19 @@ test.describe('provider app', () => {
     await expect(page.getByRole('heading', { name: he['checkin.queued.title'] })).toBeVisible()
     await scanBothThemes(page, 'provider he: check-in saved on the phone')
 
+    // the same screen when the visit could not be saved with a position: one more line, that the server may refuse it
+    await page.evaluate(() => localStorage.removeItem('qr.lastfix.v1')) // the check-in above kept its position, and would be used
+    await page.addInitScript(() => {
+      navigator.geolocation.getCurrentPosition = (_done, fail) => fail({ code: 2 })
+      navigator.geolocation.watchPosition = (_done, fail) => {
+        fail({ code: 2 })
+        return 1
+      }
+    })
+    await page.goto(scanLink(POINTS.lobby))
+    await expect(page.getByText(he['checkin.queued.noLocation'])).toBeVisible()
+    await scanBothThemes(page, 'provider he: check-in saved on the phone, without a position')
+
     await page.getByRole('button', { name: he['checkin.done'] }).click()
     await expect(page.getByRole('button', { name: he['home.syncNow'] })).toBeVisible() // two visits are waiting
     await scanBothThemes(page, 'provider he: home with visits waiting to be sent')
