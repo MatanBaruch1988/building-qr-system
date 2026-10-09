@@ -230,7 +230,7 @@ const ISO_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}
 /**
  * One `from` or `to` of a listing: `{ date }` for a real calendar day (the building's day) or `{ time }` for an ISO time
  * with a zone, or a 400 `invalid_filter` that names the field. Shared by the scans list, the refused visits and the audit
- * log (server/routes/audit.js).
+ * log (server/auditRead.js).
  * @param {string} name  the query parameter, for the error
  * @param {string} value
  * @returns {{ date: string, time?: undefined } | { time: string, date?: undefined }}
@@ -262,22 +262,34 @@ export function pageLimit(value, max = MAX_PAGE_SIZE) {
 }
 
 /**
- * Every query parameter that listScans reads: the one list of the filters of GET /api/agent/v1/scans (which also reads
- * `format`, in server/routes/agent.js). tests/agent-docs.test.js proves that listScans reads exactly these (a read of
- * another name, or a name here that is not read, fails) and that server/schemaDoc.js and docs/agent-api.md name
- * exactly these. A new filter goes here, in listScans, and in both documents.
+ * The query parameters that scanWhere reads: the filters of the scans themselves, without the paging. A listing that counts or
+ * groups the same scans takes its filters from here, so that it filters exactly as the list does.
  */
-export const SCAN_FILTERS = Object.freeze([
-  'from', 'to', 'point_id', 'provider_id', 'service_type', 'flag', 'outcome',
-  'include_voided', 'include_demo', 'order', 'limit', 'cursor',
+export const SCAN_WHERE_FILTERS = Object.freeze([
+  'from', 'to', 'point_id', 'provider_id', 'service_type', 'flag', 'outcome', 'include_voided', 'include_demo',
 ])
 
 /**
- * Shared by the admin history screen and the agent API.
- * Filters: see SCAN_FILTERS. from/to are YYYY-MM-DD (Israel calendar day) or a full ISO time, outcome is
- * accepted | rejected | all.
+ * Every query parameter that listScans reads: the one list of the filters of GET /api/agent/v1/scans (which also reads
+ * `format`, in server/routes/agent.js). They are the filters of scanWhere and the three that page the list.
+ * tests/agent-docs.test.js proves that listScans reads exactly these (a read of another name, or a name here that is not
+ * read, fails) and that server/agentEndpoints.js (the text that /schema serves) and docs/agent-api.md name exactly these. A
+ * new filter goes here, in listScans (or in scanWhere, and SCAN_WHERE_FILTERS) and in both documents.
  */
-export async function listScans(q = {}) {
+export const SCAN_FILTERS = Object.freeze([...SCAN_WHERE_FILTERS, 'order', 'limit', 'cursor'])
+
+/**
+ * The conditions of the scan filters, and the values of their placeholders: `{ where, params }`. `where` is a list of SQL
+ * conditions to join with ` and ` after `where`, and its placeholders are numbered from $1 over `params`. A query may add its own
+ * conditions and parameters after these (listScans adds the cursor), numbering them from `params.length + 1`. It reads exactly
+ * SCAN_WHERE_FILTERS from `q`, and a bad value is a 400 `invalid_filter` that names the field. Shared by the scans list (the
+ * committee's history and the agent) and by any listing that has to filter the same way.
+ * from/to are YYYY-MM-DD (Israel calendar day) or a full ISO time, outcome is accepted | rejected | all; the voided scans and
+ * the demo account's scans are left out unless asked for.
+ * @param {Record<string, any>} [q]  the query string of the request: every value is text, or missing
+ * @returns {{ where: string[], params: unknown[] }}
+ */
+export function scanWhere(q = {}) {
   const where = []
   const params = []
   const add = (sql, value) => {
@@ -315,6 +327,17 @@ export async function listScans(q = {}) {
   if (!truthy(q.include_voided)) where.push('voided_at is null')
   // Demo-account scans are test data: hidden unless asked for.
   if (!truthy(q.include_demo)) add('not (? = any(flags))', FLAG_DEMO)
+
+  return { where, params }
+}
+
+/**
+ * Shared by the admin history screen and the agent API.
+ * Filters: see SCAN_FILTERS (the first nine are scanWhere's). from/to are YYYY-MM-DD (Israel calendar day) or a full ISO
+ * time, outcome is accepted | rejected | all.
+ */
+export async function listScans(q = {}) {
+  const { where, params } = scanWhere(q)
 
   const order = q.order === 'asc' ? 'asc' : 'desc'
   if (q.order && !['asc', 'desc'].includes(q.order)) throw bad('invalid_filter', 'order must be asc or desc', { field: 'order' })

@@ -1,19 +1,27 @@
 // The agent API is described by hand in more than one place, and a description that nobody checks drifts: pull requests
 // #33 and #36 fixed about a dozen places where it had. This test makes the CODE the source and fails, naming what is
 // missing where, when a description no longer matches it. The descriptions are:
-//   - server/schemaDoc.js: the JSON that GET /api/agent/v1/schema serves, read by the agent on every run;
+//   - server/agentEndpoints.js: the registry of the endpoints (each one written once: id, method, path, filters, envelope and
+//     the text that /schema serves for it). server/routes/agent.js registers its routes from it;
+//   - server/schemaDoc.js: the JSON that GET /api/agent/v1/schema serves, read by the agent on every run. Its `endpoints` part is
+//     built from the registry;
 //   - docs/agent-api.md: the same contract for a person (read here by its headings and its table and list shapes);
 //   - src/admin/views/HistoryView.jsx: the Hebrew label of every flag in the committee's history screen.
 // What is compared with what (the first of each line is the truth):
 //   1. flags:          shared/flags.js = what server/ emits = schemaDoc.flags = the list in the md = FLAGS of HistoryView
 //   2. scan fields:    the real /scans answer = the real CSV header = schemaDoc (time_fields + scan_fields) = the md example
-//   3. points, providers and the envelopes of every answer: the real answers = schemaDoc = the md tables
-//   4. endpoints:      the routes under /agent/v1 in routeTable() = schemaDoc.endpoints = the md table
-//   5. filters:        what listScans really reads = SCAN_FILTERS = schemaDoc = the md (and the values they allow)
+//   3. points, providers and the envelopes of every answer: the real answers = schemaDoc = the md tables (the envelopes are
+//                      also compared with the registry)
+//   4. endpoints:      the routes under /agent/v1 in routeTable() = the registry = schemaDoc.endpoints = the md table
+//   5. filters:        what the code of each endpoint really reads = the registry = schemaDoc = the md (and the values they allow)
 //   6. outcomes and sources: the check constraints of the scans table (db/migrations) = schemaDoc = the md
 //   7. error codes:    what the real routes answer to a matrix of bad requests = schemaDoc.errors = the md table, and
 //                      the order of the checks (endpoint, then key, then the rest) that both documents state
 //   8. numbers in prose: server/config.js = the prose of schemaDoc (written from the constant) = the md (typed)
+// Where this file lists endpoints, envelopes and filters it is a table over the registry (AGENT_ENDPOINTS), so a new endpoint
+// is one more row there (and its handler in server/routes/agent.js) and these tests check its documents at once. An endpoint
+// that reads filters also needs a probe in FILTER_PROBES below, which shows what its code really reads, and a heading
+// "### `GET /path` filters" in docs/agent-api.md.
 // When a test here fails, update the document that the message names (or the code, if the code is what is wrong). A
 // document that cannot be read any more (a heading or a table that moved) fails with the shape that the test expects.
 import { describe, it, expect, beforeAll, afterAll, vi, assert } from 'vitest'
@@ -21,12 +29,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
+import { setupDb, call, seedAdmin, adminCookie, mintAgentKey, revokeAgentKey } from './helpers.js'
 import { SAMPLE_POINT } from '../scripts/sample-data.mjs'
 import '../server/index.js' // importing it registers every route file with the router
 import { routeTable } from '../server/router.js'
 import { getPool, setPool } from '../server/db.js'
 import { schemaDoc } from '../server/schemaDoc.js'
+import { AGENT_ENDPOINTS, endpointKey } from '../server/agentEndpoints.js'
 import * as config from '../server/config.js'
 import * as flagsModule from '../shared/flags.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
@@ -37,8 +46,14 @@ import { evaluateGps, resolveClock } from '../server/scanLogic.js'
 
 const MD = 'docs/agent-api.md'
 const SCHEMA = 'server/schemaDoc.js'
+const ENDPOINTS_FILE = 'server/agentEndpoints.js'
 const HISTORY = 'src/admin/views/HistoryView.jsx'
 const FLAGS_FILE = 'shared/flags.js'
+
+/** The path of an endpoint as the agent calls it under /api/agent/v1: `/scans`. */
+const pathOf = (e) => e.path.replace('/agent/v1', '')
+/** The name of an endpoint in docs/agent-api.md: `GET /scans`. */
+const mdName = (e) => `${e.method} ${pathOf(e)}`
 
 const abs = (relative) => fileURLToPath(new URL(`../${relative}`, import.meta.url))
 const read = (relative) => fs.readFileSync(abs(relative), 'utf8').replace(/\r\n/g, '\n')
@@ -49,7 +64,8 @@ const WHERE = {
   schemaFlags: `${SCHEMA} (the flags object)`,
   mdFlags: `${MD} (the list under "Flags are signals, not verdicts")`,
   historyFlags: `${HISTORY} (FLAGS)`,
-  schemaEndpoints: `${SCHEMA} (the endpoints object)`,
+  registry: `${ENDPOINTS_FILE} (AGENT_ENDPOINTS)`,
+  schemaEndpoints: `${SCHEMA} (the endpoints object, built from the registry)`,
   mdEndpoints: `${MD} (the table under "## Endpoints")`,
   mdEnvelopes: `${MD} (the table under "### Response envelopes")`,
   mdScanRow: `${MD} (the JSON example under "## A scan row")`,
@@ -58,8 +74,8 @@ const WHERE = {
   schemaProviders: `${SCHEMA} (providers_fields)`,
   mdPoints: `${MD} (the point table under "## A point and a provider")`,
   mdProviders: `${MD} (the provider table under "## A point and a provider")`,
-  schemaFilters: `${SCHEMA} (the Query list of the GET /scans endpoint)`,
-  mdFilters: `${MD} (the first paragraph under the GET /scans filters heading)`,
+  schemaFilters: (e) => `${ENDPOINTS_FILE} (the Query list in the text of ${endpointKey(e)}, served by ${SCHEMA})`,
+  mdFilters: (e) => `${MD} (the first paragraph under the "${mdName(e)}" filters heading)`,
   schemaOutcomes: `${SCHEMA} (outcomes)`,
   schemaSources: `${SCHEMA} (sources)`,
   mdOutcomes: `${MD} (the outcome table under "## Outcomes and sources")`,
@@ -191,8 +207,8 @@ const mdEnvelopes = () =>
       braceKeys(codes(r[1]).find((c) => c.startsWith('{')) ?? ''),
     ]),
   )
-const mdFilterParagraph = () => section(md, '### `GET /scans` filters').trim().split(/\n\s*\n/)[0].replace(/\s*\n\s*/g, ' ')
-const mdFilters = () => codes(stripParens(mdFilterParagraph()))
+const mdFilterParagraph = (e) => section(md, `### \`${mdName(e)}\` filters`).trim().split(/\n\s*\n/)[0].replace(/\s*\n\s*/g, ' ')
+const mdFilters = (e) => codes(stripParens(mdFilterParagraph(e)))
 function mdFlags() {
   const lines = section(md, '## How to read it').split('\n')
   const start = lines.findIndex((l) => l.startsWith('- **Flags are signals'))
@@ -233,13 +249,17 @@ const schemaPairs = () =>
       if (!m) throw new Error(`${SCHEMA}: errors.${code} does not start with "<status>:" ("${text}").`)
       return { pair: `${m[1]} ${code}`, meaning: text }
     })
-const schemaScansText = schemaDoc.endpoints['GET /api/agent/v1/scans']
-function schemaFilters() {
-  const m = /^Query: (.*?)\. Returns \{/s.exec(schemaScansText ?? '')
-  if (!m) throw new Error(`${SCHEMA}: the text of GET /api/agent/v1/scans must start with "Query: a, b (note), c ..." and continue with ". Returns {": the filters are read from that list.`)
+const schemaEndpointText = (e) => schemaDoc.endpoints[endpointKey(e)] ?? ''
+/** The filters that the text of an endpoint in schemaDoc lists after "Query:" (none for an endpoint that reads none). */
+function schemaFilters(e) {
+  const m = /^Query: (.*?)\. Returns \{/s.exec(schemaEndpointText(e))
+  if (!m) {
+    if (!e.filters.length && !schemaEndpointText(e).startsWith('Query:')) return []
+    throw new Error(`${ENDPOINTS_FILE}: the text of ${endpointKey(e)} must start with "Query: a, b (note), c ..." and continue with ". Returns {": the filters are read from that list.`)
+  }
   return stripParens(m[1]).split(',').map((s) => s.trim()).filter(Boolean)
 }
-const schemaEnvelope = (endpointKey) => braceKeys(/Returns (\{[^}]*\})/.exec(schemaDoc.endpoints[endpointKey] ?? '')?.[1] ?? '')
+const schemaEnvelope = (key) => braceKeys(/Returns (\{[^}]*\})/.exec(schemaDoc.endpoints[key] ?? '')?.[1] ?? '')
 
 // ---------- reading the code ----------
 
@@ -407,15 +427,47 @@ describe('flags: one list in shared/flags.js, and every description of it', () =
 // 4. Endpoints
 // ======================================================================================================================
 
-describe('endpoints: the routes = schemaDoc = the md table', () => {
+describe('endpoints: the routes = the registry = schemaDoc = the md table', () => {
+  it('the registry is well formed: a unique id usable as an operationId, a read-only method, a path under /agent/v1, filters and an envelope', () => {
+    const problems = []
+    const ids = new Set()
+    const keys = new Set()
+    const unique = (names) => new Set(names).size === names.length
+    if (!AGENT_ENDPOINTS.length) problems.push(`${WHERE.registry} has no endpoint.`)
+    if (!Object.isFrozen(AGENT_ENDPOINTS) || AGENT_ENDPOINTS.some((e) => !Object.isFrozen(e) || !Object.isFrozen(e.filters))) {
+      problems.push(`${WHERE.registry} is not frozen: build every row with row() in ${ENDPOINTS_FILE}.`)
+    }
+    for (const e of AGENT_ENDPOINTS) {
+      const key = endpointKey(e)
+      if (!/^[a-z][A-Za-z0-9]*$/.test(e.id)) problems.push(`${WHERE.registry}: the id "${e.id}" of ${key} cannot be an operationId (letters and digits, starting with a lower-case letter).`)
+      if (ids.has(e.id)) problems.push(`${WHERE.registry}: the id "${e.id}" is used by two rows: an id is unique.`)
+      if (keys.has(key)) problems.push(`${WHERE.registry}: ${key} is listed twice.`)
+      ids.add(e.id)
+      keys.add(key)
+      if (e.method !== 'GET') problems.push(`${WHERE.registry}: ${key} is a ${e.method}, but the agent API is read-only: only GET.`)
+      if (!/^\/agent\/v1\/[a-z_]+$/.test(e.path)) problems.push(`${WHERE.registry}: the path "${e.path}" of ${e.id} is not "/agent/v1/<name>" as the router registers it (no /api in front).`)
+      if (!Array.isArray(e.filters) || !e.filters.every((f) => typeof f === 'string' && f) || !unique(e.filters)) problems.push(`${WHERE.registry}: the filters of ${key} must be a list of different names.`)
+      if (e.envelope !== null && (!Array.isArray(e.envelope) || !e.envelope.length || !e.envelope.every((k) => typeof k === 'string' && k) || !unique(e.envelope))) {
+        problems.push(`${WHERE.registry}: the envelope of ${key} must be null or a list of different top-level keys.`)
+      }
+      if (typeof e.description !== 'string' || e.description.trim().length < 10) problems.push(`${WHERE.registry}: ${key} has no real description (the text that /schema serves).`)
+    }
+    report(problems)
+  })
+
   it('lists every /agent/v1 route, and only those', () => {
     const truth = { where: 'the routes of server/routes/agent.js (routeTable() in server/router.js)', names: agentRoutes().map((r) => toFull(r.method, r.path)) }
     report(
       diffAll('endpoint', truth, [
+        { where: WHERE.registry, names: AGENT_ENDPOINTS.map(endpointKey) },
         { where: WHERE.schemaEndpoints, names: Object.keys(schemaDoc.endpoints) },
         { where: WHERE.mdEndpoints, names: mdEndpoints().map(mdToFull) },
       ]),
     )
+  })
+
+  it('schemaDoc serves, for every row of the registry and in its order, the text of that row under its key', () => {
+    expect(Object.entries(schemaDoc.endpoints)).toEqual(AGENT_ENDPOINTS.map((e) => [endpointKey(e), e.description]))
   })
 
   it('the envelope table of the md names only real endpoints, and every endpoint text that says "Returns {" does too', () => {
@@ -492,7 +544,8 @@ describe('numbers in prose come from server/config.js', () => {
   const flat = (text) => text.replace(/\s+/g, ' ')
   const mdText = flat(md)
   const schemaText = flat(JSON.stringify(schemaDoc).replace(/\\"/g, '"'))
-  const schemaSource = flat(read(SCHEMA))
+  // The files that write the text of /schema: the text of the endpoints is in the registry, the rest in schemaDoc itself.
+  const schemaSources = [SCHEMA, ENDPOINTS_FILE].map((file) => ({ file, source: flat(read(file)) }))
 
   /** Every match of a pattern in a text must carry exactly the wanted numbers, and there must be one. */
   function check(rule, pattern, text, where) {
@@ -519,11 +572,13 @@ describe('numbers in prose come from server/config.js', () => {
     report(NUMBER_RULES.filter((r) => r.schema).flatMap((r) => check(r, r.schema, schemaText, `${SCHEMA} (as served by /schema)`)))
   })
 
-  it(`${SCHEMA} writes them from the constants and does not type them`, () => {
+  it(`${SCHEMA} and ${ENDPOINTS_FILE} write them from the constants and do not type them`, () => {
     const problems = []
     for (const rule of NUMBER_RULES.filter((r) => r.schema)) {
-      for (const m of schemaSource.matchAll(new RegExp(rule.schema.source, 'g'))) {
-        problems.push(`${SCHEMA} types the number in "${m[0]}" (${rule.what}): write it from ${[].concat(rule.constant).join(' and ')} with a template string, so that it cannot drift from server/config.js.`)
+      for (const { file, source } of schemaSources) {
+        for (const m of source.matchAll(new RegExp(rule.schema.source, 'g'))) {
+          problems.push(`${file} types the number in "${m[0]}" (${rule.what}): write it from ${[].concat(rule.constant).join(' and ')} with a template string, so that it cannot drift from server/config.js.`)
+        }
       }
     }
     report(problems)
@@ -581,11 +636,10 @@ describe('the real agent API answers what the documents say', () => {
     const online = await call('POST', '/api/scan', { token, body: { id: randomUUID(), code: lobby.qr_token, gps: { ...HOME, accuracy: 8 } } })
     const offline = await call('POST', '/api/scans/sync', { token, body: { scans: [{ id: randomUUID(), code: basement.qr_token, client_time: '2020-01-01T10:00:00Z' }] } })
     if (online.status !== 200 || offline.status !== 200 || !offline.json.results[0].ok) throw new Error('the seed scans were refused')
-    const mintKey = async (name) => (await call('POST', '/api/admin/api-keys', { cookie, body: { name } })).json
-    key = (await mintKey('agent docs')).key
-    const spare = await mintKey('agent docs, revoked')
+    key = (await mintAgentKey(cookie, 'agent docs')).key
+    const spare = await mintAgentKey(cookie, 'agent docs, revoked')
     revokedKey = spare.key
-    await call('POST', `/api/admin/api-keys/${spare.api_key.id}/revoke`, { cookie })
+    await revokeAgentKey(cookie, spare.id)
   }, 120_000)
 
   afterAll(async () => db?.teardown())
@@ -626,8 +680,6 @@ describe('the real agent API answers what the documents say', () => {
   it('points and providers: the real answers = schemaDoc = the md tables; and the envelope of every answer', async () => {
     const points = (await get('/points')).json
     const providers = (await get('/providers')).json
-    const health = (await get('/health')).json
-    const scans = (await get('/scans')).json
     expect(points.points.length).toBeGreaterThan(0)
     expect(providers.providers.length).toBeGreaterThan(0)
     const problems = [
@@ -640,15 +692,23 @@ describe('the real agent API answers what the documents say', () => {
         { where: WHERE.mdProviders, names: mdFieldTable(/\(`\/providers`\)/) },
       ]),
     ]
+    // The envelope of every endpoint of the registry that has one: the real answer = the registry = the md row = the text of /schema.
     const envelopes = mdEnvelopes()
-    for (const [endpoint, answer] of [['GET /scans', scans], ['GET /points', points], ['GET /providers', providers], ['GET /health', health]]) {
-      const real = { where: `the real ${endpoint} answer`, names: Object.keys(answer) }
+    for (const e of AGENT_ENDPOINTS) {
+      const endpoint = mdName(e)
+      if (e.envelope === null) {
+        // An answer that is not a fixed envelope of keys (the schema document itself): no document lists one for it.
+        if (envelopes[endpoint]) problems.push(`${WHERE.mdEnvelopes} has a row for ${endpoint}, but its row in ${WHERE.registry} has no envelope (null): remove the row, or give the endpoint an envelope.`)
+        continue
+      }
+      const real = { where: `the real ${endpoint} answer`, names: Object.keys((await get(pathOf(e))).json) }
+      problems.push(...diffNames('top-level key', real, { where: `${WHERE.registry}, the envelope of ${endpoint}`, names: [...e.envelope] }))
       const inMd = envelopes[endpoint]
       if (!inMd) problems.push(`${WHERE.mdEnvelopes} has no row for ${endpoint}: add one.`)
       else problems.push(...diffNames('top-level key', real, { where: `${WHERE.mdEnvelopes}, row ${endpoint}`, names: inMd }))
-      const inSchema = schemaEnvelope(mdToFull(endpoint))
-      if (!inSchema) problems.push(`${SCHEMA}: the text of ${mdToFull(endpoint)} no longer says "Returns { ... }".`)
-      else problems.push(...diffNames('top-level key', real, { where: `${WHERE.schemaEndpoints}, ${mdToFull(endpoint)}`, names: inSchema }))
+      const inSchema = schemaEnvelope(endpointKey(e))
+      if (!inSchema) problems.push(`${ENDPOINTS_FILE}: the text of ${endpointKey(e)} no longer says "Returns { ... }".`)
+      else problems.push(...diffNames('top-level key', real, { where: `${WHERE.schemaEndpoints}, ${endpointKey(e)}`, names: inSchema }))
     }
     for (const [name, rows] of [['points_fields', schemaDoc.points_fields], ['providers_fields', schemaDoc.providers_fields], ['scan_fields', schemaDoc.scan_fields], ['time_fields', schemaDoc.time_fields]]) {
       for (const [field, text] of Object.entries(rows)) {
@@ -658,49 +718,85 @@ describe('the real agent API answers what the documents say', () => {
     report(problems)
   })
 
-  it('filters: what listScans reads = SCAN_FILTERS = schemaDoc = the md, with the values they allow', async () => {
-    // The code: every property that listScans reads from its query. The values are all valid, so that no read is skipped
-    // by an early refusal (the cursor is made the way the API makes one).
-    const reads = new Set()
-    const query = new Proxy(
-      {
-        from: '2026-01-01', to: '2100-01-01', point_id: randomUUID(), provider_id: randomUUID(), service_type: 'cleaning',
-        flag: 'demo', outcome: 'all', include_voided: '1', include_demo: '1', order: 'asc', limit: '5', cursor: withCursor(),
+  // For an endpoint that reads filters from its query: how to see what its code really reads (`read`), the list that the code keeps
+  // of them (`listed`), and the names that the ROUTE reads itself, beside the function behind it (`routeReads`, proven by what
+  // the route does: `proveRouteReads`). An endpoint of the registry that lists filters needs a probe here, and a probe needs a row.
+  const FILTER_PROBES = {
+    listScans: {
+      readWhere: 'what listScans reads in server/scans.js',
+      // Every property that listScans reads from its query. The values are all valid, so that no read is skipped by an early
+      // refusal (the cursor is made the way the API makes one).
+      read: async () => {
+        const reads = new Set()
+        const query = new Proxy(
+          {
+            from: '2026-01-01', to: '2100-01-01', point_id: randomUUID(), provider_id: randomUUID(), service_type: 'cleaning',
+            flag: 'demo', outcome: 'all', include_voided: '1', include_demo: '1', order: 'asc', limit: '5', cursor: withCursor(),
+          },
+          { get: (target, prop) => (typeof prop === 'string' ? (reads.add(prop), target[prop]) : target[prop]) },
+        )
+        await listScans(query)
+        return [...reads]
       },
-      { get: (target, prop) => (typeof prop === 'string' ? (reads.add(prop), target[prop]) : target[prop]) },
-    )
-    await listScans(query)
-    const read = [...reads]
-    const problems = [
-      ...diffNames('filter', { where: 'what listScans reads in server/scans.js', names: read }, { where: 'SCAN_FILTERS in server/scans.js', names: [...SCAN_FILTERS] }),
-    ]
-    // The route also reads `format`: prove it by what it does.
-    const asCsv = await get('/scans?format=csv&limit=1')
-    const asJson = await get('/scans?format=json&limit=1')
-    const asOther = await get('/scans?format=xml&limit=1')
-    if (!/text\/csv/.test(asCsv.headers['content-type'] ?? '')) problems.push('GET /scans?format=csv does not answer text/csv: the filter "format" is documented but the route does not read it.')
-    if (!Array.isArray(asJson.json?.scans) || !Array.isArray(asOther.json?.scans)) problems.push('GET /scans with format=json or an unknown format does not answer JSON, as both documents say.')
-    const names = [...SCAN_FILTERS, 'format']
-    const truth = { where: 'SCAN_FILTERS in server/scans.js (and `format`, read by server/routes/agent.js)', names }
-    problems.push(...diffAll('filter', truth, [{ where: WHERE.schemaFilters, names: schemaFilters() }, { where: WHERE.mdFilters, names: mdFilters() }]))
+      listedWhere: 'SCAN_FILTERS in server/scans.js',
+      listed: SCAN_FILTERS,
+      routeReads: ['format'],
+      routeReadsWhere: 'read by server/routes/agent.js',
+      // The route also reads `format`: prove it by what it does.
+      proveRouteReads: async () => {
+        const problems = []
+        const asCsv = await get('/scans?format=csv&limit=1')
+        const asJson = await get('/scans?format=json&limit=1')
+        const asOther = await get('/scans?format=xml&limit=1')
+        if (!/text\/csv/.test(asCsv.headers['content-type'] ?? '')) problems.push('GET /scans?format=csv does not answer text/csv: the filter "format" is documented but the route does not read it.')
+        if (!Array.isArray(asJson.json?.scans) || !Array.isArray(asOther.json?.scans)) problems.push('GET /scans with format=json or an unknown format does not answer JSON, as both documents say.')
+        return problems
+      },
+    },
+  }
 
-    // The values: the documents list them, the route must accept each one and refuse another.
+  it('filters: what the code of each endpoint reads = the registry = schemaDoc = the md, with the values they allow', async () => {
+    const problems = []
+    for (const id of Object.keys(FILTER_PROBES)) {
+      if (!AGENT_ENDPOINTS.some((e) => e.id === id)) problems.push(`FILTER_PROBES in tests/agent-docs.test.js has a probe for "${id}", which is not a row of ${WHERE.registry}: remove it.`)
+    }
+    for (const e of AGENT_ENDPOINTS) {
+      const key = endpointKey(e)
+      const probe = FILTER_PROBES[e.id]
+      // The truth for the documents: the names that the code reads (an endpoint that reads none has none).
+      let truth = { where: `the code of ${key} (the registry lists no filter for it)`, names: [] }
+      if (probe) {
+        problems.push(...diffNames('filter', { where: probe.readWhere, names: await probe.read() }, { where: probe.listedWhere, names: [...probe.listed] }))
+        problems.push(...(await probe.proveRouteReads()))
+        truth = { where: `${probe.listedWhere} (and ${probe.routeReads.map((n) => `\`${n}\``).join(', ')}, ${probe.routeReadsWhere})`, names: [...probe.listed, ...probe.routeReads] }
+        problems.push(...diffNames('filter', truth, { where: `${WHERE.registry}, the filters of ${key}`, names: [...e.filters] }))
+      } else if (e.filters.length) {
+        problems.push(`${WHERE.registry} lists filters for ${key}, but FILTER_PROBES in tests/agent-docs.test.js has no probe that shows what its code reads: add one.`)
+      }
+      const docs = [{ where: WHERE.schemaFilters(e), names: schemaFilters(e) }]
+      if (e.filters.length) docs.push({ where: WHERE.mdFilters(e), names: mdFilters(e) })
+      problems.push(...diffAll('filter', truth, docs))
+    }
+
+    // The values of the scans filters: the documents list them, the route must accept each one and refuse another.
+    const scansRow = AGENT_ENDPOINTS.find((e) => e.id === 'listScans')
+    if (!scansRow) throw new Error(`${WHERE.registry} has no row "listScans": the values of the scans filters are read through it.`)
     const valuesIn = (name) => ({
-      md: codes(new RegExp(`\`${name}\` \\(([^)]*)\\)`).exec(mdFilterParagraph())?.[1] ?? '').filter((v) => v !== 'default'),
-      schema: (new RegExp(`${name} \\(([a-z|]+)`).exec(schemaScansText)?.[1] ?? '').split('|').filter(Boolean),
+      md: codes(new RegExp(`\`${name}\` \\(([^)]*)\\)`).exec(mdFilterParagraph(scansRow))?.[1] ?? '').filter((v) => v !== 'default'),
+      schema: (new RegExp(`${name} \\(([a-z|]+)`).exec(schemaEndpointText(scansRow))?.[1] ?? '').split('|').filter(Boolean),
     })
     for (const name of ['outcome', 'order']) {
       const { md: inMd, schema: inSchema } = valuesIn(name)
-      problems.push(...diffNames(`${name} value`, { where: WHERE.schemaFilters, names: inSchema }, { where: WHERE.mdFilters, names: inMd }))
+      problems.push(...diffNames(`${name} value`, { where: WHERE.schemaFilters(scansRow), names: inSchema }, { where: WHERE.mdFilters(scansRow), names: inMd }))
       for (const value of new Set([...inMd, ...inSchema])) {
-        const r = await get(`/scans?${name}=${value}&limit=1`)
+        const r = await get(`${pathOf(scansRow)}?${name}=${value}&limit=1`)
         if (r.status !== 200) problems.push(`A document says ${name}=${value} is allowed, but the real route answers ${r.status} ${r.json?.error?.code}.`)
       }
     }
     const csvValues = valuesIn('format').md
-    if (!csvValues.includes('csv')) problems.push(`${WHERE.mdFilters} no longer lists csv as a value of format.`)
+    if (!csvValues.includes('csv')) problems.push(`${WHERE.mdFilters(scansRow)} no longer lists csv as a value of format.`)
     // A page larger than the limit is cut, not refused.
-    const big = await get(`/scans?limit=${config.MAX_PAGE_SIZE + 1}`)
+    const big = await get(`${pathOf(scansRow)}?limit=${config.MAX_PAGE_SIZE + 1}`)
     if (big.status !== 200 || big.json.count > config.MAX_PAGE_SIZE) problems.push(`GET /scans?limit=${config.MAX_PAGE_SIZE + 1} is not cut to ${config.MAX_PAGE_SIZE} as both documents say (it answered ${big.status}).`)
     report(problems)
   }, 60_000)
@@ -788,16 +884,18 @@ describe('the real agent API answers what the documents say', () => {
     // The filters: every filter and the format, with values that are wrong in different ways. Which filters can be
     // refused is found from the answers, not written here. A refusal must name the filter that caused it.
     const refusable = new Set()
-    for (const name of [...SCAN_FILTERS, 'format']) {
-      for (const value of ['zzz', '0', '2026-02-30', '2026-06-01T10:00:00', 'a\u0000b']) {
-        const r = await get(`/scans?${name}=${encodeURIComponent(value)}`)
-        if (r.status === 200) continue
-        note(r, `a ${name} of ${JSON.stringify(value)}`)
-        if (r.status !== 400) {
-          problems.push(`GET /scans with ${name}=${JSON.stringify(value)} answered ${r.status} ${r.json?.error?.code}: a bad filter value must be a 400, never anything else.`)
-        } else if (r.json?.error?.code === 'invalid_filter') {
-          refusable.add(r.json.error.field)
-          if (r.json.error.field !== name) problems.push(`GET /scans with ${name}=${JSON.stringify(value)} answered invalid_filter with field "${r.json.error.field}", but the documents say "field names it".`)
+    for (const e of AGENT_ENDPOINTS.filter((x) => x.filters.length)) {
+      for (const name of e.filters) {
+        for (const value of ['zzz', '0', '2026-02-30', '2026-06-01T10:00:00', 'a\u0000b']) {
+          const r = await get(`${pathOf(e)}?${name}=${encodeURIComponent(value)}`)
+          if (r.status === 200) continue
+          note(r, `a ${name} of ${JSON.stringify(value)}`)
+          if (r.status !== 400) {
+            problems.push(`${mdName(e)} with ${name}=${JSON.stringify(value)} answered ${r.status} ${r.json?.error?.code}: a bad filter value must be a 400, never anything else.`)
+          } else if (r.json?.error?.code === 'invalid_filter') {
+            refusable.add(r.json.error.field)
+            if (r.json.error.field !== name) problems.push(`${mdName(e)} with ${name}=${JSON.stringify(value)} answered invalid_filter with field "${r.json.error.field}", but the documents say "field names it".`)
+          }
         }
       }
     }

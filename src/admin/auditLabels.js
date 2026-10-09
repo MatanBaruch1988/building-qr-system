@@ -34,7 +34,7 @@ export const ACTION_LABELS = Object.freeze({
 
 /**
  * The choices of the group filter, in the order of the list. `value` is what the API takes as `group` (the part of an action
- * before the dot, AUDIT_GROUPS in server/routes/audit.js); the first one is "no group".
+ * before the dot, AUDIT_GROUPS in server/auditRead.js); the first one is "no group".
  */
 export const GROUP_OPTIONS = Object.freeze([
   { value: '', label: 'הכל' },

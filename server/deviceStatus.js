@@ -145,6 +145,24 @@ export async function touchLastSync(deviceId) {
 }
 
 /**
+ * The health of a provider's ACTIVE phones, as a SQL fragment for a list of providers: `cross join lateral (...) phones`, to be
+ * written after `from providers p` (the alias `p` is what it joins on). It gives each provider three columns, which the caller
+ * selects as `phones.waiting`, `phones.oldest_waiting_at` and `phones.outdated_devices`:
+ *  - `waiting`: the sum of what the phones say waits in their queues (0 when none reported);
+ *  - `oldest_waiting_at`: the oldest of the phones that have something waiting (null when none);
+ *  - `outdated_devices`: how many phones reported a build that is not the server's own (0 when the server does not know its build).
+ * $1 is the server's build (`commit()` in server/health.js), so the caller's own values start at $2. The committee's providers
+ * list uses it (PROVIDER_SELECT in server/routes/admin.js).
+ */
+export const PHONE_HEALTH_LATERAL = `cross join lateral (
+      select coalesce(sum(d.waiting_count), 0)::int as waiting,
+             min(d.oldest_waiting_at) filter (where d.waiting_count > 0) as oldest_waiting_at,
+             (count(*) filter (where d.app_build is not null and d.app_build <> $1::text))::int as outdated_devices
+        from provider_devices d
+       where d.provider_id = p.id and d.revoked_at is null
+    ) phones`
+
+/**
  * The active phones of a provider (not revoked), the one that was used last first, or null when there is no such provider (the
  * caller answers 404). One statement: a provider with no active phone comes back as one row with no phone in it, which tells
  * "no phones" from "no provider" without a second query that could disagree. Only the columns that the committee may see.
