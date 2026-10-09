@@ -88,9 +88,14 @@ test.describe('provider app', () => {
     await expect(page.getByRole('heading', { name: he['checkin.far.title'] })).toBeVisible()
     await scanBothThemes(page, 'provider he: refused, too far')
 
-    // a phone that refuses to say where it is (the browser answers "denied" at once)
+    // a phone that refuses to say where it is (the browser answers "denied" at once, to a single request and to a watch: a
+    // point that requires the location watches the position for a precise reading)
     await page.addInitScript(() => {
       navigator.geolocation.getCurrentPosition = (_done, fail) => fail({ code: 1 })
+      navigator.geolocation.watchPosition = (_done, fail) => {
+        fail({ code: 1 })
+        return 1
+      }
     })
     await page.goto(scanLink(POINTS.gym))
     await expect(page.getByRole('heading', { name: he['checkin.needLocation.title'] })).toBeVisible()
