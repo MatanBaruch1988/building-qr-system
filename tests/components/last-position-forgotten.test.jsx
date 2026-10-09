@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// The position that the phone keeps (src/worker/geo.js) goes when the person does: on a shared phone, the next person must not
-// send what the previous one left. The real WorkerApp, with the network (`api`) answered by the test.
+// The position that the phone keeps (src/worker/geo.js) goes when the person does, and is not there when the next one signs in: on
+// a shared phone, nobody must send what the previous person left. The real WorkerApp, with the network (`api`) answered by the test.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import WorkerApp from '../../src/pages/WorkerApp.jsx'
@@ -30,6 +30,7 @@ function answerLikeTheServer(check = { provider: ploni }) {
     if (path === '/my/scans') return { scans: [] }
     if (path === '/my/device-status') return { ok: true, build: null }
     if (path === '/session' && options.method === 'DELETE') return { ok: true }
+    if (path === '/session' && options.method === 'POST') return { token: TOKEN, provider: ploni }
     if (path === '/session' && !options.method) {
       if (check instanceof Error) throw check
       return check
@@ -53,6 +54,21 @@ describe('the last position of the phone', () => {
 
     fireEvent.click(screen.getByRole('button', { name: he['home.switchWorker'] }))
     await signInHeading()
+    expect(window.localStorage.getItem(LAST_FIX_KEY)).toBeNull()
+  })
+
+  it('is deleted when somebody signs in, because the person before them may have left without signing out', async () => {
+    answerLikeTheServer()
+    keepAPosition() // nobody is signed in: the last person closed the tab
+    render(<WorkerApp />)
+    await signInHeading()
+    expect(window.localStorage.getItem(LAST_FIX_KEY), 'it is still there while nobody has signed in').not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(ploni.contact_name) }))
+    fireEvent.change(screen.getByLabelText(he['login.passwordLabel'], { selector: 'input' }), { target: { value: 'sample-pass-1' } })
+    fireEvent.click(screen.getByRole('button', { name: he['login.submit'] }))
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: /^שלום,/ })).toBeTruthy())
     expect(window.localStorage.getItem(LAST_FIX_KEY)).toBeNull()
   })
 

@@ -188,6 +188,7 @@ function WorkerShell({ session, setSession, building }) {
 
   const onSignedIn = (data, remember) => {
     saveSession(data, remember)
+    forgetLastFix() // a position kept before this person signed in (the last person left without signing out) is not theirs
     setLoginNotice(null)
     setConfirmedToken(data.token) // the server has just issued it
     setSession({ ...data, remember })
