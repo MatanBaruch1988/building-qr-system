@@ -5,6 +5,8 @@ import { bearerToken, getCookie, unauthorized, ApiError } from './http.js'
 import {
   ADMIN_COOKIE,
   ADMIN_TOKEN_PREFIX,
+  AGENT_KEY_MAX_PER_DAY,
+  AGENT_KEY_MAX_PER_MINUTE,
   API_KEY_PREFIX,
   LOGIN_MAX_FAILURES,
   LOGIN_MAX_PER_ACCOUNT,
@@ -12,6 +14,7 @@ import {
   LOGIN_WINDOW_MINUTES,
   MAX_TOKEN_LENGTH,
   PROVIDER_TOKEN_PREFIX,
+  TIMEZONE,
 } from './config.js'
 
 const TOUCH_EVERY_MS = 5 * 60 * 1000
@@ -81,19 +84,124 @@ export const requireAdmin = oncePerRequest(async function requireAdmin(req) {
   return { admin: { id: rows[0].id, email: rows[0].email, name: rows[0].name }, sessionId: rows[0].session_id }
 })
 
-/** External agent: `Authorization: Bearer qrk_…` (read-only). */
+// The whole database work of the guard of an agent key: ONE statement, so that a request costs one round trip and the lookup,
+// the count and the bookkeeping cannot disagree. (AGENTS.md, Safety, "The committee's agent is its analyst": these are the
+// only two writes that a request of an agent makes.)
+//   $1 the hash of the key   $2 the building's time zone   $3 how often last_used_at is written, in seconds
+//   $4 the most requests in a minute   $5 the most requests in a building day
+//  - `k`: the key, only when it exists and is not revoked, and locked `for key share` (see the lock order below). An unknown or
+//    revoked key leaves nothing after it, so nothing is counted and nothing is written for it (the guard answers 401
+//    api_key_invalid).
+//  - `used`: the requests that were let through (api_key_usage.requests) since the start of the building's day, and in the
+//    current minute. The day starts at midnight in the time zone of the building (`day_start`), whatever the time zone of
+//    the database session is; `day_end` is the next midnight, for Retry-After.
+//  - `verdict`: which limit the key is over, if any: 'day' first (it is the longer wait), else 'minute', else null.
+//  - `bump`: counts this request in the row of the current minute (made on the first request of the minute). A request
+//    that is let through adds 1 to `requests`; a request that is over a limit adds 1 to `refused` and nothing to `requests`,
+//    so a limited key does not keep itself limited by asking again, and a screen can show both numbers.
+//  - `touch`: writes api_keys.last_used_at, only when it is empty or older than TOUCH_EVERY_MS (the rule that provider phones
+//    use, so a busy key is not one write per request on the row of the key).
+// The lock order is the same for every request, on every serverless instance: the key row first, in the weakest mode (`k`,
+// `for key share`, which does not conflict with another request or with revoking the key), then the usage row (`bump`), then the
+// key row again in the stronger mode that an update needs (`touch` reads what `bump` returns, so its update cannot happen before
+// the usage row was written). Two requests of one key therefore queue on the usage row and never wait for each other crosswise.
+// The key comes FIRST on purpose: deleting a key (DELETE /api/admin/api-keys/:id) locks the key row and then, through the
+// cascade of the foreign key, its usage rows. A request that took the usage row first and then asked for the key row (the check
+// of the foreign key, or `touch`) would wait for the delete while the delete waits for it, and the database would end one of
+// the two with a deadlock (40P01, an answer of 500 for either). With the key first, the delete waits for the requests that are
+// in flight (milliseconds), and a request that comes after it finds no key and is answered 401.
+// The counts are read from the snapshot of the statement, before this request is added, so requests that start in the same
+// instant can each be let in: the limit is soft by about the number of requests in flight.
+const API_KEY_GUARD_SQL = `
+  with w as (
+    select date_trunc('minute', now()) as minute,
+           (date_trunc('day', now() at time zone $2::text) at time zone $2::text) as day_start,
+           ((date_trunc('day', now() at time zone $2::text) + interval '1 day') at time zone $2::text) as day_end
+  ),
+  k as (
+    select id from api_keys where key_hash = $1 and revoked_at is null for key share
+  ),
+  used as (
+    select k.id,
+           coalesce(sum(u.requests), 0)::int as today,
+           coalesce(sum(u.requests) filter (where u.minute = w.minute), 0)::int as this_minute
+      from k
+      cross join w
+      left join api_key_usage u on u.key_id = k.id and u.minute >= w.day_start
+     group by k.id
+  ),
+  verdict as (
+    select id,
+           case when today >= $5::int then 'day' when this_minute >= $4::int then 'minute' end as limited_by
+      from used
+  ),
+  bump as (
+    insert into api_key_usage as u (key_id, minute, requests, refused)
+    select v.id, w.minute, (v.limited_by is null)::int, (v.limited_by is not null)::int
+      from verdict v
+      cross join w
+    on conflict (key_id, minute) do update
+      set requests = u.requests + excluded.requests, refused = u.refused + excluded.refused
+    returning key_id
+  ),
+  touch as (
+    update api_keys a
+       set last_used_at = now()
+      from bump b
+     where a.id = b.key_id
+       and (a.last_used_at is null or a.last_used_at < now() - make_interval(secs => $3::double precision))
+    returning a.id
+  )
+  select v.id,
+         v.limited_by,
+         case v.limited_by
+           when 'day' then ceil(extract(epoch from w.day_end - now()))::int
+           when 'minute' then ceil(extract(epoch from w.minute + interval '1 minute' - now()))::int
+         end as retry_after_s
+    from verdict v
+    cross join w
+`
+
+/**
+ * External agent: `Authorization: Bearer qrk_…` (read-only). Three answers:
+ *  - 401 `api_key_required` (no key, or not shaped like ours) and 401 `api_key_invalid` (unknown or revoked), the shape check
+ *    first and without a query;
+ *  - 429 `rate_limited` when the key is over AGENT_KEY_MAX_PER_MINUTE (in the current minute) or AGENT_KEY_MAX_PER_DAY (in the
+ *    building's day): the body names the `window` ('minute' or 'day') and `retry_after_s`, and the Retry-After header says the
+ *    same. It is part of the guard, so the router answers it before any handler runs and records nothing in app_errors;
+ *  - otherwise the key's id. The request was counted (API_KEY_GUARD_SQL), once: the guard answers once per request.
+ */
 export const requireApiKey = oncePerRequest(async function requireApiKey(req) {
   const token = bearerToken(req)
   if (!token || !token.startsWith(API_KEY_PREFIX)) throw unauthorized('api_key_required', 'API key required')
   // Too long to be one of ours: the answer an unknown key gets, without a query.
   if (token.length > MAX_TOKEN_LENGTH) throw unauthorized('api_key_invalid', 'API key is invalid or revoked')
-  const { rows } = await query(
-    'select id from api_keys where key_hash = $1 and revoked_at is null',
-    [sha256(token)],
-  )
+  let rows
+  try {
+    ;({ rows } = await query(API_KEY_GUARD_SQL, [
+      sha256(token),
+      TIMEZONE,
+      TOUCH_EVERY_MS / 1000,
+      AGENT_KEY_MAX_PER_MINUTE,
+      AGENT_KEY_MAX_PER_DAY,
+    ]))
+  } catch (err) {
+    // The committee deleted the key between the lookup and the count of this very statement: the foreign key of
+    // api_key_usage refuses the row. For the caller that is a key that is gone, not a conflict.
+    if (err?.code === '23503') throw unauthorized('api_key_invalid', 'API key is invalid or revoked')
+    throw err
+  }
   if (!rows.length) throw unauthorized('api_key_invalid', 'API key is invalid or revoked')
-  query('update api_keys set last_used_at = now() where id = $1', [rows[0].id]).catch(() => {})
-  return { apiKeyId: rows[0].id }
+  const { id, limited_by: window, retry_after_s: retryAfter } = rows[0]
+  if (window) {
+    const wait = `Try again in ${retryAfter} second${retryAfter === 1 ? '' : 's'}.`
+    const message =
+      window === 'day'
+        ? `Daily limit reached: at most ${AGENT_KEY_MAX_PER_DAY} requests per building day for one key. ${wait}`
+        : `Rate limit reached: at most ${AGENT_KEY_MAX_PER_MINUTE} requests per minute for one key. ${wait}`
+    throw new ApiError(429, 'rate_limited', message, { window, retry_after_s: retryAfter }, { 'Retry-After': String(retryAfter) })
+  }
+  return { apiKeyId: id }
 })
 
 /**

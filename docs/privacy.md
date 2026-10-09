@@ -5,8 +5,8 @@ it is, how long it is kept, and who can see it. It is the basis for a notice to 
 the gardener), which is still to be written. The rules for the code are in `AGENTS.md` (Safety); the periods below are
 constants in `server/config.js`, and a daily job applies them (`server/retention.js`).
 
-Retention periods were decided by the owner on 04/10/2026, and the periods of the recorded errors and of the alert days on
-05/10/2026. Three things have no period yet: the scans, the refused visits and the audit log wait for a legal decision, and
+Retention periods were decided by the owner on 04/10/2026, the periods of the recorded errors and of the alert days on
+05/10/2026, and the period of the usage of the agent keys on 08/10/2026. Three things have no period yet: the scans, the refused visits and the audit log wait for a legal decision, and
 until then they are kept (see the table).
 
 The dates of the owner's decisions above are the first installation's record: a copy writes the dates of its own decisions, or
@@ -27,11 +27,12 @@ removes them. The periods themselves are the constants in `server/config.js`, wh
 | Login attempts (`auth_attempts`) | When someone tried to sign in, with the network (IP) address of the request. A committee attempt holds the IP address only (no e-mail, because the e-mail is not known before Google has been asked). A provider attempt holds the provider's id and the IP address (no name and no password). They are only used to slow down guessing | Deleted after 1 day |
 | Recorded errors (`app_errors`) | Nothing about a person, by construction. When the server fails with an error that it did not expect, or when the provider app or the committee app reports a crash (see "What the two apps report"), one row per kind of failure per hour: the route as it is written in the code (for example `/admin/points/:id`, never the address that was asked for) or, for an app, the screen key (for example `provider:home`), the method, the status, the error's code or name (never its message), the version of the app, how many times it happened, the first and the last time, and the request id that the host (Vercel) gave to the latest request, so that the failure can be found in the host's own log within the hour (an error that an app reports has none). The same table also counts, by route, the requests that the server refused after the caller had been let in (a 4xx, with the code of the refusal, for example a sync that was too big) and the requests that took more than 5 seconds: the same fields, a count, and nothing about the person who made the request. A request that was refused at the door (not signed in), a sign-in attempt and a path that does not exist record nothing. No message, no name, no e-mail, no IP address, no QR code, no position, nothing from the body of a request | Deleted 90 days after the last time it happened |
 | Alert days (`alert_pings`) | Nothing about a person, by construction. One date (a day in the building's time zone) for each day on which the server had an unexpected error, or an app reported a crash, and told the owner, and the moment the row was made. It is what lets the server send one alert for a day and not one for every error. Nothing about the error is in it | Deleted 30 days after the day |
-| Agent keys (`api_keys`) | The name the committee gave the key, a fingerprint of the key, when it was last used. No personal data unless the committee puts a name in the key's name | Until the committee deletes the key |
+| Agent keys (`api_keys`) | The name the committee gave the key, a fingerprint of the key, when it was last used (written at most every 5 minutes, so it can be up to 5 minutes behind). No personal data unless the committee puts a name in the key's name | Until the committee deletes the key |
+| Usage of the agent keys (`api_key_usage`) | Nothing about a person, by construction. For each agent key and each minute in which the key made a request: how many requests were let through and how many were refused because the key had made too many (a key may make 60 requests in a minute and 2000 in a building day, and then gets a `429`). It is what limits a key. No address, no request path, no content of any request | Deleted 90 days after the minute. A deleted key takes its usage with it |
 | The provider's phone (on the device, not in the database) | One position at most: the last usable reading of the phone's location that a scan got (latitude, longitude, the accuracy and the time of the reading). It is used only for a scan made within 5 minutes of the time of the reading, when the phone cannot get a fresh position (for example in a basement without reception). It is sent only with a scan, as any other reading is, and the server then uses it for the distance and stores neither latitude nor longitude (see "Scans"). A visit that waits on the phone to be uploaded holds the reading it was made with until it is uploaded | Deleted when the person signs out or is signed out, and when the app finds it older than 5 minutes. The next usable reading replaces it. A phone that nobody opens again keeps it in the browser's storage until the site's data is cleared, but it is never used after 5 minutes |
 
 The daily job never deletes or changes a scan, a refused visit, the audit log, an active session or an active phone. A
-session, a phone, a recorded error or an alert day that is not yet past its period is left as it is. The job's own log line and its audit
+session, a phone, a recorded error, an alert day or a minute of the usage of an agent key that is not yet past its period is left as it is. The job's own log line and its audit
 entry hold counts only (a number for each kind of row, nothing else).
 
 ## What the two apps report
@@ -59,7 +60,9 @@ The server cuts every report to a fixed list of fields (`shared/contract.js`) an
 ## Who can see it
 
 - **The committee**, in the committee app (`/admin`), after signing in with Google and only if the e-mail is on the committee
-  list: the providers, the scans and their history (also as a CSV file), the points and the agent keys. The visits that the
+  list: the providers, the scans and their history (also as a CSV file), the points and the agent keys. Each agent key's card
+  shows how many requests the key made today and in the last 7 days, and how many were refused in the last 30 days because
+  the key was over a limit (`GET /api/admin/api-keys`, counts only, from `api_key_usage` in the table above). The visits that the
   server refused are listed in the History tab when its type is set to ("לא נקלטו"), read only and not part of the CSV
   file, and through the committee's own API (`GET /api/admin/scan-refusals`). The active phones of a provider, and what
   each reported about itself, can be read through the committee's own API too (`GET /api/admin/providers/:id/devices`: the
@@ -83,7 +86,8 @@ The server cuts every report to a fixed list of fields (`shared/contract.js`) an
   waits on them and since when, the totals, never a phone's label or browser string and never a row per phone), and the
   audit log with the names, e-mail addresses and reasons that it holds. The parts beyond the points, the providers and
   the scans reach the agent with release 2.3.0. It cannot write anything: the only thing that its requests change is the
-  record of its own key (when it was last used, and how many requests it made). It never sees a QR code, a password or a
+  record of its own key (when it was last used, at most every 5 minutes, and how many requests it made and how many were
+  refused: a key that makes too many gets a `429`). It never sees a QR code, a password or a
   hash of one, a token, a key or a hash of one, the label of a phone, the sessions, the login attempts, a network (IP)
   address, the recorded errors or the alert days.
 - **Whoever runs the services under the app**: the owner of the project and the services that host it (the database is a

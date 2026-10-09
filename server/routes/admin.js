@@ -13,7 +13,9 @@ import { listScans, listAllScans, scanJson, COMMITTEE_CSV_COLUMNS, committeeCsvR
 import { audit, adminActor, changesOf, idsChanged } from '../audit.js'
 import { commit } from '../health.js'
 import { PHONE_HEALTH_LATERAL } from '../deviceStatus.js'
-import { ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, API_KEY_PREFIX } from '../config.js'
+import {
+  ADMIN_COOKIE, ADMIN_SESSION_DAYS, ADMIN_TOKEN_PREFIX, AGENT_KEY_MAX_PER_DAY, AGENT_KEY_MAX_PER_MINUTE, API_KEY_PREFIX, TIMEZONE,
+} from '../config.js'
 import {
   GPS_MODES, GPS_MODE_REQUIRED, DEFAULT_GPS_MODE,
   POINT_RADIUS_MIN_M, POINT_RADIUS_MAX_M,
@@ -682,12 +684,49 @@ route('POST', '/admin/scans/:id/unvoid', ({ req, params, body }) => setVoid(req,
 
 // ---------- API keys for the agent ----------
 
+// The list of keys with how much each was used, for the Agent screen. The numbers come from api_key_usage (one row per key per
+// minute, written by the guard of the agent API: requests that were let through in `requests`, requests turned away because the
+// key was over a limit in `refused`) and are read in the same statement as the keys:
+//  - requests_today: the requests of the building's day so far. The day starts at midnight in the building's time zone ($1), worked
+//    out the way the guard works it out (API_KEY_GUARD_SQL in server/auth.js), so the number here is the one the daily limit counts.
+//  - requests_7d: the requests of the last 7 building days, today included (the midnight of 6 days ago on).
+//  - refused_30d: the requests that were refused in the last 30 building days, today included (the midnight of 29 days ago on). The
+//    retention job keeps the usage for 90 days, so the window is always whole.
+// The midnights are worked out on the building's local date (a timestamp without a zone) and only then put back in the zone, so a
+// change of summer time inside the window moves nothing: "6 days ago" is the midnight of that building day, never 144 hours.
+// A key with no usage gets zeros (the lateral join over a plain aggregate always has one row, and coalesce covers the sum of nothing).
+// The lateral reads one range of the primary key (key_id, minute) per key, from the oldest midnight on; the three numbers are
+// filtered aggregates of that one read, so a key costs one index range, not three.
+const API_KEYS_SQL = `
+  with w as (
+    select date_trunc('day', now() at time zone $1::text) as local_today
+  ),
+  b as (
+    select (local_today at time zone $1::text) as today_start,
+           ((local_today - interval '6 days') at time zone $1::text) as week_start,
+           ((local_today - interval '29 days') at time zone $1::text) as month_start
+      from w
+  )
+  select k.id, k.name, k.key_prefix, k.created_at, k.last_used_at, k.revoked_at,
+         coalesce(u.requests_today, 0)::int as requests_today,
+         coalesce(u.requests_7d, 0)::int as requests_7d,
+         coalesce(u.refused_30d, 0)::int as refused_30d
+    from api_keys k
+    cross join b
+    left join lateral (
+      select sum(x.requests) filter (where x.minute >= b.today_start) as requests_today,
+             sum(x.requests) filter (where x.minute >= b.week_start) as requests_7d,
+             sum(x.refused) as refused_30d
+        from api_key_usage x
+       where x.key_id = k.id and x.minute >= b.month_start
+    ) u on true
+   order by k.created_at desc
+`
+
 route('GET', '/admin/api-keys', async ({ req }) => {
   await requireAdmin(req)
-  const { rows } = await query(
-    'select id, name, key_prefix, created_at, last_used_at, revoked_at from api_keys order by created_at desc',
-  )
-  return { api_keys: rows }
+  const { rows } = await query(API_KEYS_SQL, [TIMEZONE])
+  return { api_keys: rows, limits: { per_minute: AGENT_KEY_MAX_PER_MINUTE, per_day: AGENT_KEY_MAX_PER_DAY } }
 })
 
 // The secret is shown exactly once, here.

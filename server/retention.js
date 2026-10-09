@@ -14,7 +14,9 @@
 //     RETENTION_APP_ERROR_DAYS,
 //   - deletes the days of the alert throttle (alert_pings: one date each, no personal data: server/alerts.js) that are older
 //     than RETENTION_ALERT_PING_DAYS,
-//   - writes one audit_log row (`retention.run`, actor `system`) that holds the five counts and nothing else.
+//   - deletes the minutes of the usage of the agent keys (api_key_usage: a key, a minute and two counts, no personal data: the
+//     guard in server/auth.js writes them) that are older than RETENTION_API_KEY_USAGE_DAYS,
+//   - writes one audit_log row (`retention.run`, actor `system`) that holds the six counts and nothing else.
 // What it never touches: a scan, the audit log, a session that is active or expired less than the period ago, a phone that
 // is not revoked or was revoked less than the period ago. Their retention waits for a legal decision (docs/privacy.md).
 //
@@ -28,12 +30,13 @@ import {
   RETENTION_DEVICE_LABEL_DAYS,
   RETENTION_APP_ERROR_DAYS,
   RETENTION_ALERT_PING_DAYS,
+  RETENTION_API_KEY_USAGE_DAYS,
 } from './config.js'
 
 /**
- * Runs the job once and returns what it removed: `{ sessions, loginAttempts, deviceLabels, appErrors, alertPings }` (numbers of
- * rows; `deviceLabels` is the number of phones that were cleared, the label and the reported status together). The five statements
- * and the audit row are one transaction, so the audit row says what really happened: all of it or none of it.
+ * Runs the job once and returns what it removed: `{ sessions, loginAttempts, deviceLabels, appErrors, alertPings, apiKeyUsage }`
+ * (numbers of rows; `deviceLabels` is the number of phones that were cleared, the label and the reported status together). The
+ * six statements and the audit row are one transaction, so the audit row says what really happened: all of it or none of it.
  * Each statement still has the 15 second limit of the app (server/db.js). A failure is thrown as it is and the router
  * answers 500 and logs only its code (server/router.js); nothing here logs an error or a row.
  */
@@ -64,12 +67,18 @@ export async function runRetention() {
     ])
     // The day is a building day (a date), so the period counts in whole days: a day is due once it is more than the period back.
     const pings = await c.query('delete from alert_pings where day < current_date - $1::int', [RETENTION_ALERT_PING_DAYS])
+    // By the minute of the row (a point in time): a minute is due once it is more than the period back. The index on `minute`
+    // (migration 013) serves it, and an agent key that was deleted took its rows with it already.
+    const usage = await c.query('delete from api_key_usage where minute < now() - make_interval(days => $1::int)', [
+      RETENTION_API_KEY_USAGE_DAYS,
+    ])
     const counts = {
       sessions: sessions.rowCount,
       loginAttempts: attempts.rowCount,
       deviceLabels: labels.rowCount,
       appErrors: errors.rowCount,
       alertPings: pings.rowCount,
+      apiKeyUsage: usage.rowCount,
     }
     // Counts only: no id, no name, no label. The audit log has no end date. The committee reads it (GET /api/admin/audit);
     // the agent API and the exports do not have it, and whoever holds the database or a backup can read it too.
@@ -83,6 +92,7 @@ export async function runRetention() {
         device_labels: counts.deviceLabels,
         app_errors: counts.appErrors,
         alert_pings: counts.alertPings,
+        api_key_usage: counts.apiKeyUsage,
       },
     })
     return counts
