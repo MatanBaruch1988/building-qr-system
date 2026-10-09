@@ -18,6 +18,8 @@
 //   7. error codes:    what the real routes answer to a matrix of bad requests = schemaDoc.errors = the md table, and
 //                      the order of the checks (endpoint, then key, then the rest) that both documents state
 //   8. numbers in prose: server/config.js = the prose of schemaDoc (written from the constant) = the md (typed)
+//   9. refused visits: the real /refusals answer = schemaDoc.refusal_fields = the md table and example; the codes of a refusal
+//                      = SYNC_PERMANENT_ERROR_CODES (shared/contract.js) = schemaDoc.refusal_codes = the md table
 // Where this file lists endpoints, envelopes and filters it is a table over the registry (AGENT_ENDPOINTS), so a new endpoint
 // is one more row there (and its handler in server/routes/agent.js) and these tests check its documents at once. An endpoint
 // that reads filters also needs a probe in FILTER_PROBES below, which shows what its code really reads, and a heading
@@ -40,7 +42,9 @@ import * as config from '../server/config.js'
 import * as flagsModule from '../shared/flags.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
 import { SCAN_FILTERS, SCAN_CSV_COLUMNS, AGENT_SCAN_CSV_COLUMNS, listAgentScans } from '../server/scans.js'
+import { REFUSAL_FILTERS, listAgentRefusals } from '../server/scanRefusals.js'
 import { evaluateGps, resolveClock } from '../server/scanLogic.js'
+import { SYNC_PERMANENT_ERROR_CODES, SCAN_ERROR_POINT_INACTIVE } from '../shared/contract.js'
 
 // ---------- where the documents are ----------
 
@@ -76,6 +80,11 @@ const WHERE = {
   mdProviders: `${MD} (the provider table under "## A point and a provider")`,
   schemaBuilding: `${SCHEMA} (building_fields)`,
   mdBuilding: `${MD} (the table under "## The building")`,
+  schemaRefusalFields: `${SCHEMA} (refusal_fields)`,
+  schemaRefusalCodes: `${SCHEMA} (refusal_codes)`,
+  mdRefusalFields: `${MD} (the field table under "## A refused visit")`,
+  mdRefusalExample: `${MD} (the JSON example under "## A refused visit")`,
+  mdRefusalCodes: `${MD} (the code table under "## A refused visit")`,
   schemaFilters: (e) => `${ENDPOINTS_FILE} (the Query list in the text of ${endpointKey(e)}, served by ${SCHEMA})`,
   mdFilters: (e) => `${MD} (the first paragraph under the "${mdName(e)}" filters heading)`,
   schemaOutcomes: `${SCHEMA} (outcomes)`,
@@ -231,6 +240,14 @@ const mdScanRowKeys = () => {
 const mdFieldTable = (before) =>
   tableOf(section(md, '## A point and a provider'), `of fields under "## A point and a provider"`, before).rows.flatMap((r) => codes(r[0]))
 const mdBuildingFields = () => tableOf(section(md, '## The building'), 'of the building fields under "## The building"').rows.flatMap((r) => codes(r[0]))
+const mdRefusalTable = (before) => tableOf(section(md, '## A refused visit'), 'under "## A refused visit"', before).rows.flatMap((r) => codes(r[0]))
+const mdRefusalFields = () => mdRefusalTable(/\(`\/refusals`\)/)
+const mdRefusalCodes = () => mdRefusalTable(/`code` of a refusal/)
+const mdRefusalRowKeys = () => {
+  const block = /```json\n([\s\S]*?)\n```/.exec(section(md, '## A refused visit'))?.[1]
+  if (!block) throw new Error(`${MD} has no \`\`\`json block under "## A refused visit": the refusal fields are read from its keys.`)
+  return Object.keys(JSON.parse(block))
+}
 const mdValueTable = (header) => {
   const t = tables(section(md, '## Outcomes and sources')).find((x) => x.header[0] === header)
   if (!t) throw new Error(`${MD} has no table whose first column is ${header} under "## Outcomes and sources": the outcomes and the sources are read from it.`)
@@ -542,6 +559,8 @@ const NUMBER_RULES = [
   { what: 'how old an offline phone time may be', constant: 'CLOCK_MAX_AGE_MS', want: [config.CLOCK_MAX_AGE_MS / DAY], md: /older than (\d+) days/, schema: /older than (\d+) days/ },
   { what: 'the limit range of a page', constant: ['MAX_PAGE_SIZE', 'DEFAULT_PAGE_SIZE'], want: [config.MAX_PAGE_SIZE, config.DEFAULT_PAGE_SIZE], md: /`limit` \(1 to (\d+), default (\d+)\)/, schema: /limit \(1-(\d+), default (\d+);/ },
   { what: 'where a larger limit is cut', constant: 'MAX_PAGE_SIZE', want: [config.MAX_PAGE_SIZE, config.MAX_PAGE_SIZE], md: /`limit` above (\d+) is cut to (\d+)/, schema: /a larger number is cut to (\d+), not refused/ },
+  { what: 'the page of the refused visits', constant: ['DEFAULT_PAGE_SIZE', 'MAX_REFUSAL_PAGE_SIZE'], want: [config.DEFAULT_PAGE_SIZE, config.MAX_REFUSAL_PAGE_SIZE], md: /`limit` \(default (\d+), at most (\d+)\)/, schema: /limit \(default (\d+), at most (\d+):/ },
+  { what: 'where a larger limit of the refused visits is cut', constant: 'MAX_REFUSAL_PAGE_SIZE', want: [config.MAX_REFUSAL_PAGE_SIZE, config.MAX_REFUSAL_PAGE_SIZE], md: /`limit` over (\d+) is cut to (\d+)/, schema: /a bigger number is cut to (\d+), not refused/ },
   { what: 'the length of a text filter', constant: 'FILTER_TEXT_MAX_LENGTH', want: [config.FILTER_TEXT_MAX_LENGTH], md: /are cut to (\d+) characters/, schema: /cut to (\d+) characters/ },
   { what: 'the requests a key may make in a minute', constant: 'AGENT_KEY_MAX_PER_MINUTE', want: [config.AGENT_KEY_MAX_PER_MINUTE], md: /(\d+) requests in (?:a|the current) minute/, schema: /(\d+) requests in (?:a|the current) minute/ },
   { what: 'the requests a key may make in a building day', constant: 'AGENT_KEY_MAX_PER_DAY', want: [config.AGENT_KEY_MAX_PER_DAY], md: /(\d+) (?:requests )?in (?:a|the) building(?:'s)? day/, schema: /(\d+) (?:requests )?in a building day/ },
@@ -657,6 +676,12 @@ describe('the real agent API answers what the documents say', () => {
     const online = await call('POST', '/api/scan', { token, body: { id: randomUUID(), code: lobby.qr_token, gps: { ...HOME, accuracy: 8 } } })
     const offline = await call('POST', '/api/scans/sync', { token, body: { scans: [{ id: randomUUID(), code: basement.qr_token, client_time: '2020-01-01T10:00:00Z' }] } })
     if (online.status !== 200 || offline.status !== 200 || !offline.json.results[0].ok) throw new Error('the seed scans were refused')
+    // A visit that the server refuses for good: the point is switched off, so the visit leaves a refusal (it is not a scan).
+    const roof = await point({ name: 'Roof', gps_mode: 'none', is_active: false })
+    const refused = await call('POST', '/api/scans/sync', {
+      token, body: { scans: [{ id: randomUUID(), code: roof.qr_token, client_time: new Date(Date.now() - 3_600_000).toISOString() }] },
+    })
+    if (refused.status !== 200 || refused.json.results[0].ok || refused.json.results[0].error.code !== SCAN_ERROR_POINT_INACTIVE) throw new Error('the seed refusal was not made')
     key = (await mintAgentKey(cookie, 'agent docs')).key
     const spare = await mintAgentKey(cookie, 'agent docs, revoked')
     revokedKey = spare.key
@@ -697,6 +722,40 @@ describe('the real agent API answers what the documents say', () => {
       const cell = row?.[header.indexOf('flags')]
       if (cell !== example) problems.push(`${MD} gives "${example}" as an example of the CSV flags cell, but the code writes "${cell}" for a scan with the flags ${flagged.flags.join(' and ')}.`)
     }
+    report(problems)
+  })
+
+  it('refused visits: the real answer = schemaDoc = the md (the fields, the example and the codes), and the codes are the permanent codes of the sync contract', async () => {
+    const answer = (await get('/refusals')).json
+    const { refusals } = answer
+    expect(refusals.length).toBeGreaterThanOrEqual(1)
+    const real = Object.keys(refusals[0])
+    const problems = []
+    for (const r of refusals) {
+      if (Object.keys(r).join() !== real.join()) problems.push('The /refusals answer does not give every refusal the same keys in the same order (agentRefusalJson in server/scanRefusals.js).')
+    }
+    const truth = { where: 'the real /refusals answer (agentRefusalJson in server/scanRefusals.js)', names: real }
+    problems.push(
+      ...diffAll('refusal field', truth, [
+        { where: WHERE.schemaRefusalFields, names: Object.keys(schemaDoc.refusal_fields) },
+        { where: WHERE.mdRefusalFields, names: mdRefusalFields() },
+        { where: WHERE.mdRefusalExample, names: mdRefusalRowKeys() },
+      ]),
+    )
+    problems.push(
+      ...diffAll('refusal code', { where: 'SYNC_PERMANENT_ERROR_CODES in shared/contract.js (the codes that a refused visit carries)', names: [...SYNC_PERMANENT_ERROR_CODES] }, [
+        { where: WHERE.schemaRefusalCodes, names: Object.keys(schemaDoc.refusal_codes) },
+        { where: WHERE.mdRefusalCodes, names: mdRefusalCodes() },
+      ]),
+    )
+    for (const [name, rows] of [['refusal_fields', schemaDoc.refusal_fields], ['refusal_codes', schemaDoc.refusal_codes]]) {
+      for (const [field, text] of Object.entries(rows)) {
+        if (typeof text !== 'string' || text.trim().length < 10) problems.push(`${SCHEMA}: ${name}.${field} has no real description.`)
+      }
+    }
+    // The envelope, and the refusal that the seed made.
+    expect(Object.keys(answer)).toEqual(['refusals', 'count', 'next_cursor'])
+    expect(refusals.some((r) => r.code === SCAN_ERROR_POINT_INACTIVE && r.point_name === 'Roof')).toBe(true)
     report(problems)
   })
 
@@ -781,6 +840,28 @@ describe('the real agent API answers what the documents say', () => {
         return problems
       },
     },
+    listRefusals: {
+      readWhere: 'what listAgentRefusals reads in server/scanRefusals.js (the function behind the route)',
+      // Every property that listAgentRefusals reads from its query (all values valid; the cursor is made the way the API makes one).
+      read: async () => {
+        const reads = new Set()
+        const query = new Proxy(
+          {
+            from: '2026-01-01', to: '2100-01-01', point_id: randomUUID(), provider_id: randomUUID(), limit: '5',
+            cursor: Buffer.from(JSON.stringify({ t: new Date().toISOString(), id: 5 })).toString('base64url'),
+          },
+          { get: (target, prop) => (typeof prop === 'string' ? (reads.add(prop), target[prop]) : target[prop]) },
+        )
+        await listAgentRefusals(query)
+        return [...reads]
+      },
+      listedWhere: 'REFUSAL_FILTERS in server/scanRefusals.js',
+      listed: REFUSAL_FILTERS,
+      routeReads: [],
+      routeReadsWhere: 'read by server/routes/agent.js',
+      // The route reads nothing beside the function behind it.
+      proveRouteReads: async () => [],
+    },
   }
 
   it('filters: what the code of each endpoint reads = the registry = schemaDoc = the md, with the values they allow', async () => {
@@ -796,7 +877,8 @@ describe('the real agent API answers what the documents say', () => {
       if (probe) {
         problems.push(...diffNames('filter', { where: probe.readWhere, names: await probe.read() }, { where: probe.listedWhere, names: [...probe.listed] }))
         problems.push(...(await probe.proveRouteReads()))
-        truth = { where: `${probe.listedWhere} (and ${probe.routeReads.map((n) => `\`${n}\``).join(', ')}, ${probe.routeReadsWhere})`, names: [...probe.listed, ...probe.routeReads] }
+        const alsoRead = probe.routeReads.length ? ` (and ${probe.routeReads.map((n) => `\`${n}\``).join(', ')}, ${probe.routeReadsWhere})` : ''
+        truth = { where: `${probe.listedWhere}${alsoRead}`, names: [...probe.listed, ...probe.routeReads] }
         problems.push(...diffNames('filter', truth, { where: `${WHERE.registry}, the filters of ${key}`, names: [...e.filters] }))
       } else if (e.filters.length) {
         problems.push(`${WHERE.registry} lists filters for ${key}, but FILTER_PROBES in tests/agent-docs.test.js has no probe that shows what its code reads: add one.`)
@@ -826,6 +908,11 @@ describe('the real agent API answers what the documents say', () => {
     // A page larger than the limit is cut, not refused.
     const big = await get(`${pathOf(scansRow)}?limit=${config.MAX_PAGE_SIZE + 1}`)
     if (big.status !== 200 || big.json.count > config.MAX_PAGE_SIZE) problems.push(`GET /scans?limit=${config.MAX_PAGE_SIZE + 1} is not cut to ${config.MAX_PAGE_SIZE} as both documents say (it answered ${big.status}).`)
+    // The same for the refused visits, whose page is cut at its own size.
+    const refusalsRow = AGENT_ENDPOINTS.find((e) => e.id === 'listRefusals')
+    if (!refusalsRow) throw new Error(`${WHERE.registry} has no row "listRefusals": the page of the refused visits is read through it.`)
+    const bigRefusals = await get(`${pathOf(refusalsRow)}?limit=${config.MAX_REFUSAL_PAGE_SIZE + 1}`)
+    if (bigRefusals.status !== 200 || bigRefusals.json.count > config.MAX_REFUSAL_PAGE_SIZE) problems.push(`GET /refusals?limit=${config.MAX_REFUSAL_PAGE_SIZE + 1} is not cut to ${config.MAX_REFUSAL_PAGE_SIZE} as both documents say (it answered ${bigRefusals.status}).`)
     report(problems)
   }, 60_000)
 

@@ -19,6 +19,7 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 | Endpoint | What it returns |
 |---|---|
 | `GET /scans` | Scan records, newest first. Filters below. |
+| `GET /refusals` | The visits that the server refused and did not count, newest first. They are not scans. Filters below. |
 | `GET /points` | Every service point, including inactive ones, with assigned providers. |
 | `GET /providers` | Every provider, including inactive and demo ones, with `last_scan_at` and the health of the provider's phones as numbers. |
 | `GET /building` | The name and the address of the building. |
@@ -31,6 +32,7 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 | Endpoint | Top level of the JSON answer |
 |---|---|
 | `GET /scans` | `{ scans, count, next_cursor }`. `count` is the number of scans in this page, not the total. `next_cursor` is `null` on the last page. |
+| `GET /refusals` | `{ refusals, count, next_cursor }`. `count` is the number of refusals in this page, not the total. `next_cursor` is `null` on the last page. |
 | `GET /points` | `{ points }` |
 | `GET /providers` | `{ providers }` |
 | `GET /building` | `{ building }`, an object with the `name` and the `address` |
@@ -64,10 +66,27 @@ curl -H "Authorization: Bearer $KEY" \
   "https://<your-domain>/api/agent/v1/scans?from=2026-09-01&to=2026-09-30&limit=500"
 ```
 
+### `GET /refusals` filters
+
+`from`, `to` (`YYYY-MM-DD` = Israel calendar day, or a full ISO date-time that carries `Z` or an offset such as `+03:00`; they bound
+the time at which the server refused the visit), `point_id`, `provider_id` (uuids), `limit` (default 100, at most 200), `cursor`.
+
+How they really behave:
+
+- They are the filters of the committee's own list of these visits, with the same checks and the same errors as `GET /scans`
+  (`400 invalid_filter` with `field`, `400 invalid_cursor`). A date-time without `Z` or an offset is refused.
+- A `limit` over 200 is cut to 200, not refused. Zero, negative or not a whole number is `400 invalid_filter`.
+- `point_id` matches the refusals that name that point. A refusal whose code named no point (see "A refused visit") is matched by no
+  `point_id`, so look for those without the filter.
+- There is no `outcome`, `order` or `format`: the answer is always JSON, newest first.
+
+Paging: the response has `next_cursor`; pass it back as `cursor`, with the other filters unchanged. A cursor of `GET /scans` is not
+one of this list.
+
 ### OpenAPI
 
 `GET /openapi.json` answers one OpenAPI 3.1 document (JSON). It lists every endpoint of this page with its parameters (types, formats,
-allowed values and limits), the shape of every answer (the JSON of a scan, a point, a provider and the building, the CSV variant of `GET /scans`
+allowed values and limits), the shape of every answer (the JSON of a scan, a refused visit, a point, a provider and the building, the CSV variant of `GET /scans`
 and its `X-Next-Cursor` header), the errors of the table under "Errors", and the Bearer key. It needs the key like every other endpoint.
 Give it to a tool that imports OpenAPI (an agent platform, a client generator). It is built from the same list of endpoints as
 `GET /schema`, so the two name the same endpoints; the prose (what a field, a flag or a rule means) stays in `GET /schema`, which
@@ -124,7 +143,61 @@ again), and it cannot show the same physical phone across providers, because two
 | `online` | The phone had a signal and the scan arrived at once. |
 | `offline_sync` | The phone had no signal and uploaded the scan later. |
 
-Refused attempts are kept for the record. `GET /scans` returns only `accepted` unless the `outcome` filter says otherwise.
+Refused attempts are kept for the record. `GET /scans` returns only `accepted` unless the `outcome` filter says otherwise. A visit that
+the server turned away before it became a scan at all is not an outcome of a scan: it is a refusal (see "A refused visit").
+
+## A refused visit
+
+`GET /refusals` lists the visits that the server refused for good, so that a visit that was not counted can be seen: a point that the
+committee had switched off, a person who is not assigned to the point, a code that names nothing. **A refusal is not a scan.** It never
+counts as attendance, it is never in `GET /scans`, and it is not a scan with an `outcome` of `rejected_far` or `rejected_no_location`
+(those are scans, and `GET /scans?outcome=rejected` returns them). It is a visit that did not become a scan at all, so count the two
+lists apart and never add a refusal to the attendance. Visits that were refused before the server began to keep this record are not
+there.
+
+```json
+{
+  "id": 41,
+  "at": "2026-09-30T06:12:44.318Z",
+  "scan_id": "uuid",
+  "source": "offline_sync",
+  "code": "point_inactive",
+  "provider_id": "uuid", "provider_name": "Sparkle Cleaning – Dana",
+  "point_id": "uuid", "point_name": "Roof",
+  "client_time": "2026-09-30T05:58:02.000Z"
+}
+```
+
+A refused visit (`/refusals`):
+
+| Key | Meaning |
+|---|---|
+| `id` | A whole number that identifies the refusal. It is not the id of any scan |
+| `at` | UTC ISO time at which the server refused the visit (the server's clock). The list is in this order, newest first |
+| `scan_id` | The phone's own id of the check-in, or null when the phone sent none that was valid. Usually not the id of a row of `/scans`, because the visit was not counted; for `scan_id_conflict` it is the id of a scan of another provider. The same visit sent again is one refusal |
+| `source` | `online` (the phone had a signal and the visit arrived at once) or `offline_sync` (the phone uploaded it later from its queue). The same two words as the source of a scan |
+| `code` | Why the server refused the visit: one of the codes below |
+| `provider_id` | uuid of the service provider who scanned. A provider can be deleted by the committee: its refusals stay, so this can be an id that `/providers` no longer lists |
+| `provider_name` | Company – contact name at the time of the visit (kept even if the provider is renamed or deleted) |
+| `point_id` | uuid of the service point that the scanned code named, or null when the visit was refused before its code could be matched to a point. A deleted point keeps its refusals, so this can be an id that `/points` no longer lists |
+| `point_name` | Name of the point at the time of the visit, or null when `point_id` is null |
+| `client_time` | UTC ISO time on the phone's own clock when the person scanned, or null when the phone sent no believable time (a real date between the years 2000 and 2100). The time at which the server refused the visit is `at` |
+
+The `code` of a refusal:
+
+| `code` | Meaning |
+|---|---|
+| `point_inactive` | The committee had switched the point off when the visit reached the server. The point is named |
+| `not_assigned` | The point is assigned to other providers and not to this one (a point with no assignment may be scanned by anyone, and the demo account may scan every point). The point is named |
+| `unknown_code` | The scanned text has the shape of a QR code of this system, but no point has it (a point that was deleted, or a code that was never issued). No point is named |
+| `invalid_code` | The scanned text is not a QR code of this system at all. No point is named |
+| `invalid_scan_id` | The phone's id of the check-in was not a valid id. `scan_id` is then null, and no point is named |
+| `scan_id_conflict` | The phone's id of the check-in was already the id of a scan of another provider. `scan_id` is that id; no point is named |
+| `invalid_item` | The database refused the data of the visit as out of range or malformed, when a phone uploaded it from its queue (`source` is `offline_sync`). Nothing the committee can mend. A point is named when the code had named one |
+
+What a refusal holds is only the provider's name as it was, the point when the code named one, the two clocks, the code and the id of
+the check-in. It never shows the QR code that was scanned or a position (the server does not keep either), and never which phone sent
+it.
 
 ## A point and a provider
 
@@ -181,6 +254,8 @@ committee app. Nothing else about the building is there (not who saved it or whe
 ## How to read it
 
 - `outcome: accepted` is a real check-in. Every other outcome (`rejected_*`) is a refused attempt, kept for the record (see "Outcomes and sources").
+- A visit can also be missing from `/scans` because the server refused it before it became a scan. Those are in `/refusals`, never
+  counted as attendance (see "A refused visit"). A visit that waits on a phone is in neither list yet.
 - **Flags are signals, not verdicts.** Report them, weigh them, but do not treat one as proof of anything:
   - `location_unverified`: no usable GPS fix. Normal in basements and stairwells.
   - `location_outside_radius`: a good fix slightly outside the point's radius (within the 15 m pin tolerance).

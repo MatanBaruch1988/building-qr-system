@@ -3,6 +3,7 @@ import { query } from '../db.js'
 import { toCsv } from '../http.js'
 import { requireApiKey } from '../auth.js'
 import { listAgentScans, AGENT_SCAN_CSV_COLUMNS, toLocal } from '../scans.js'
+import { listAgentRefusals } from '../scanRefusals.js'
 import { readBuilding } from '../building.js'
 import { PHONE_HEALTH_LATERAL } from '../deviceStatus.js'
 import { commit } from '../health.js'
@@ -92,8 +93,17 @@ async function listScansHandler({ req, query: q }) {
   return { scans, count: scans.length, next_cursor }
 }
 
+// The visits that the server refused (a point that was switched off, a person who is not assigned, a code that names nothing, ...):
+// not scans, never attendance. The filters, the validation and the paging are the committee's own (server/scanRefusals.js reads
+// them once for both), and the answer is built field by field there: no phone, no QR code, no position.
+async function listRefusalsHandler({ req, query: q }) {
+  await requireApiKey(req)
+  const { refusals, next_cursor } = await listAgentRefusals(q)
+  return { refusals, count: refusals.length, next_cursor }
+}
+
 /** The handler of every endpoint of the registry, by its id. */
-const HANDLERS = { getBuilding, getHealth, getOpenApi, getSchema, listPoints, listProviders, listScans: listScansHandler }
+const HANDLERS = { getBuilding, getHealth, getOpenApi, getSchema, listPoints, listProviders, listRefusals: listRefusalsHandler, listScans: listScansHandler }
 
 const registered = new Set(AGENT_ENDPOINTS.map((endpoint) => endpoint.id))
 for (const id of Object.keys(HANDLERS)) {

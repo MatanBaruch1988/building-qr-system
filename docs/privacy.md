@@ -81,7 +81,8 @@ The server cuts every report to a fixed list of fields (`shared/contract.js`) an
   building's name and address, the points, the providers (company, contact name, kind of service, whether active, the
   time of the last scan), the scans (provider name, point, times, distance, accuracy, flags, which phone sent it as a
   random id, when the server received it, and who voided it and when), counts of the scans per day, provider, point or
-  service, the visits that the server refused, the health of each provider's phones as numbers (how many phones, what
+  service, the visits that the server refused (the provider's name, the point, the times and the reason, and never which
+  phone sent them), the health of each provider's phones as numbers (how many phones, what
   waits on them and since when, the totals, the time of the last upload, never a phone's label or browser string and never a row per phone), and the
   audit log with the names, e-mail addresses and reasons that it holds. The parts beyond the points, the providers and
   the scans reach the agent with release 2.3.0. It cannot write anything: the only thing that its requests change is the

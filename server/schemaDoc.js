@@ -10,6 +10,8 @@ import {
 } from '../shared/flags.js'
 import {
   OUTCOME_ACCEPTED, OUTCOME_REJECTED_FAR, OUTCOME_REJECTED_NO_LOCATION, SOURCE_ONLINE, SOURCE_OFFLINE_SYNC,
+  SCAN_ERROR_INVALID_SCAN_ID, SCAN_ERROR_INVALID_CODE, SCAN_ERROR_UNKNOWN_CODE, SCAN_ERROR_POINT_INACTIVE, SCAN_ERROR_NOT_ASSIGNED,
+  SCAN_ERROR_SCAN_ID_CONFLICT, SCAN_ERROR_INVALID_ITEM,
 } from '../shared/contract.js'
 
 // Every number that the prose below quotes from config.js is written from the constant (never typed), so a change of
@@ -106,6 +108,27 @@ export const schemaDoc = {
     voided_by: 'The name of the committee member who voided the scan (their e-mail when they have no name), as it was when they did it, or null when the scan is not voided or no record names who',
     received_at: 'UTC ISO time the server received the scan. The server clock, which cannot be wrong: unlike checked_in_at it is not an estimate, so for an offline_sync scan it is the time of the upload',
     device_id: "A random uuid for the sign-in of the phone that sent the scan, or null when it is not known (the old import has none). A sign-in belongs to one provider, and a phone that signs in again, or as another provider, gets a new id: so it tells apart the phones that one provider's scans came from, and it does not recognise the same physical phone across sign-ins or providers. Nothing else about the phone is available",
+  },
+  refusal_fields: {
+    id: 'A whole number that identifies the refusal. It is not the id of any scan.',
+    at: 'UTC ISO time at which the server refused the visit (the server clock). The list is in this order, newest first.',
+    scan_id: "The phone's own id of the check-in, or null when the phone sent none that was valid. Usually not the id of a row of /scans, because the visit was not counted; for scan_id_conflict it is the id of a scan of another provider.",
+    source: "'online' (the phone had a signal and the visit arrived at once) or 'offline_sync' (the phone had no signal and uploaded the visit later from its queue). The same two words as the source of a scan.",
+    code: 'Why the server refused the visit: one of the codes of refusal_codes.',
+    provider_id: 'uuid of the service provider who scanned. A provider can be deleted by the committee: its refusals stay, so an old refusal can carry a provider_id that /providers no longer lists. provider_name then still says who it was.',
+    provider_name: 'Company – contact name at the time of the visit (kept even if the provider is renamed or deleted)',
+    point_id: 'uuid of the service point that the scanned code named, or null when the visit was refused before its code could be matched to a point (see refusal_codes). A point can be deleted by the committee: its refusals stay, so this can be an id that /points no longer lists.',
+    point_name: 'Name of the point at the time of the visit, or null when point_id is null',
+    client_time: "UTC ISO time on the phone's own clock when the person scanned, or null when the phone sent no believable time (a real date between the years 2000 and 2100). The time at which the server refused the visit is at.",
+  },
+  refusal_codes: {
+    [SCAN_ERROR_POINT_INACTIVE]: 'The committee had switched the point off when the visit reached the server. The point is named (point_id, point_name).',
+    [SCAN_ERROR_NOT_ASSIGNED]: 'The point is assigned to other providers and not to this one (a point with no assignment may be scanned by anyone, and the demo account may scan every point). The point is named.',
+    [SCAN_ERROR_UNKNOWN_CODE]: 'The scanned text has the shape of a QR code of this system, but no point has it (a point that was deleted, or a code that was never issued). No point is named.',
+    [SCAN_ERROR_INVALID_CODE]: 'The scanned text is not a QR code of this system at all. No point is named.',
+    [SCAN_ERROR_INVALID_SCAN_ID]: "The phone's id of the check-in was not a valid id. scan_id is then null, and no point is named.",
+    [SCAN_ERROR_SCAN_ID_CONFLICT]: "The phone's id of the check-in was already the id of a scan of another provider. scan_id is that id; no point is named.",
+    [SCAN_ERROR_INVALID_ITEM]: 'The database refused the data of the visit as out of range or malformed, when a phone uploaded it from its queue (source offline_sync). Nothing the committee can mend. A point is named when the code had named one.',
   },
   outcomes: {
     [OUTCOME_ACCEPTED]: 'Recorded as attendance.',
