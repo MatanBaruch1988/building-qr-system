@@ -59,7 +59,9 @@ The server cuts every report to a fixed list of fields (`shared/contract.js`) an
 ## Who can see it
 
 - **The committee**, in the committee app (`/admin`), after signing in with Google and only if the e-mail is on the committee
-  list: the providers, the scans and their history (also as a CSV file), the points and the agent keys. The visits that the
+  list: the providers, the scans and their history (also as a CSV file), the points and the agent keys. Each agent key's card
+  shows how many requests the key made today and in the last 7 days, and how many were refused in the last 30 days because
+  the key was over a limit (`GET /api/admin/api-keys`, counts only, from `api_key_usage` in the table above). The visits that the
   server refused are listed in the History tab when its type is set to ("לא נקלטו"), read only and not part of the CSV
   file, and through the committee's own API (`GET /api/admin/scan-refusals`). The active phones of a provider, and what
   each reported about itself, can be read through the committee's own API too (`GET /api/admin/providers/:id/devices`: the

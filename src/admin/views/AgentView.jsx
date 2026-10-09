@@ -49,6 +49,14 @@ function NewKeyDialog({ onClose, onCreated }) {
   )
 }
 
+// How much each key is used (GET /api/admin/api-keys): the requests of the building's day and of the last 7 building days, and the
+// requests that the server turned away in the last 30 days because the key was over a limit. The server writes the three numbers
+// and the limits; an older server does not, and then the card simply has no usage lines.
+const hasUsage = (k) => typeof k.requests_today === 'number' && typeof k.requests_7d === 'number'
+const refusedNote = (n) =>
+  n === 1 ? 'נחסמה קריאה אחת ב-30 הימים האחרונים בגלל מגבלת הקצב' : `נחסמו ${n} קריאות ב-30 הימים האחרונים בגלל מגבלת הקצב`
+const limitsNote = ({ per_minute: perMinute, per_day: perDay }) => `כל מפתח מוגבל ל-${perMinute} קריאות בדקה ול-${perDay} ביום.`
+
 export default function AgentView() {
   const toast = useToast()
   const confirm = useConfirm()
@@ -56,6 +64,7 @@ export default function AgentView() {
   const [creating, setCreating] = useState(false)
   const [busy, run] = useAction(toast, errorText)
   const list = keys.data?.api_keys ?? []
+  const limits = keys.data?.limits
   const base = `${window.location.origin}/api/agent/v1`
 
   const revoke = async (k) => {
@@ -92,6 +101,7 @@ Times are Israel time (checked_in_local, local_date). When you report to people,
         <div>
           <h1>גישה לאייג'נט</h1>
           <p>נתוני הנוכחות זמינים לקריאה בלבד לכל אייג'נט שמחזיק במפתח. האפליקציה עצמה לא מנתחת כלום.</p>
+          {limits && <p>{limitsNote(limits)}</p>}
         </div>
         <div className="a-actions"><IconButton icon={IconPlus} label="מפתח חדש" tone="primary" onClick={() => setCreating(true)} /></div>
       </div>
@@ -121,7 +131,9 @@ Times are Israel time (checked_in_local, local_date). When you report to people,
               <dt>מפתח</dt><dd className="a-code">{k.key_prefix}…</dd>
               <dt>נוצר</dt><dd>{formatDateTime(k.created_at)}</dd>
               <dt>שימוש אחרון</dt><dd>{k.last_used_at ? formatDateTime(k.last_used_at) : 'עוד לא נעשה בו שימוש'}</dd>
+              {hasUsage(k) && <><dt>קריאות היום</dt><dd>{k.requests_today}</dd><dt>קריאות ב-7 ימים</dt><dd>{k.requests_7d}</dd></>}
             </dl>
+            {k.refused_30d > 0 && <p className="a-warn-line"><IconAlert size={18} />{refusedNote(k.refused_30d)}</p>}
           </article>
         ))}
       </div>
