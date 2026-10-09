@@ -10,14 +10,19 @@
 // What is compared with what (the first of each line is the truth):
 //   1. flags:          shared/flags.js = what server/ emits = schemaDoc.flags = the list in the md = FLAGS of HistoryView
 //   2. scan fields:    the real /scans answer = the real CSV header = schemaDoc (time_fields + scan_fields) = the md example
-//   3. points, providers and the envelopes of every answer: the real answers = schemaDoc = the md tables (the envelopes are
-//                      also compared with the registry)
+//   3. points, providers, the building and the envelopes of every answer: the real answers = schemaDoc = the md tables (the
+//                      envelopes are also compared with the registry)
 //   4. endpoints:      the routes under /agent/v1 in routeTable() = the registry = schemaDoc.endpoints = the md table
 //   5. filters:        what the code of each endpoint really reads = the registry = schemaDoc = the md (and the values they allow)
 //   6. outcomes and sources: the check constraints of the scans table (db/migrations) = schemaDoc = the md
 //   7. error codes:    what the real routes answer to a matrix of bad requests = schemaDoc.errors = the md table, and
 //                      the order of the checks (endpoint, then key, then the rest) that both documents state
 //   8. numbers in prose: server/config.js = the prose of schemaDoc (written from the constant) = the md (typed)
+//   9. refused visits: the real /refusals answer = schemaDoc.refusal_fields = the md table and example; the codes of a refusal
+//                      = SYNC_PERMANENT_ERROR_CODES (shared/contract.js) = schemaDoc.refusal_codes = the md table
+//  10. the audit log:  the real /audit answer = schemaDoc.audit_fields = the md table and example; the groups = AUDIT_GROUPS
+//                      (server/auditRead.js) = schemaDoc.audit_groups = the md table; the actions, their entity and the keys of
+//                      their detail = AUDIT_DETAIL_ALLOW (server/audit.js) = schemaDoc.audit_actions = the md table
 // Where this file lists endpoints, envelopes and filters it is a table over the registry (AGENT_ENDPOINTS), so a new endpoint
 // is one more row there (and its handler in server/routes/agent.js) and these tests check its documents at once. An endpoint
 // that reads filters also needs a probe in FILTER_PROBES below, which shows what its code really reads, and a heading
@@ -39,8 +44,12 @@ import { AGENT_ENDPOINTS, endpointKey } from '../server/agentEndpoints.js'
 import * as config from '../server/config.js'
 import * as flagsModule from '../shared/flags.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
-import { SCAN_FILTERS, SCAN_CSV_COLUMNS, listScans } from '../server/scans.js'
+import { SCAN_FILTERS, SCAN_CSV_COLUMNS, AGENT_SCAN_CSV_COLUMNS, listAgentScans } from '../server/scans.js'
+import { REFUSAL_FILTERS, listAgentRefusals } from '../server/scanRefusals.js'
+import { AUDIT_FILTERS, AUDIT_GROUPS, AGENT_AUDIT_FIELDS, listAgentAudit } from '../server/auditRead.js'
+import { AUDIT_DETAIL_ALLOW } from '../server/audit.js'
 import { evaluateGps, resolveClock } from '../server/scanLogic.js'
+import { SYNC_PERMANENT_ERROR_CODES, SCAN_ERROR_POINT_INACTIVE } from '../shared/contract.js'
 
 // ---------- where the documents are ----------
 
@@ -74,6 +83,20 @@ const WHERE = {
   schemaProviders: `${SCHEMA} (providers_fields)`,
   mdPoints: `${MD} (the point table under "## A point and a provider")`,
   mdProviders: `${MD} (the provider table under "## A point and a provider")`,
+  schemaBuilding: `${SCHEMA} (building_fields)`,
+  mdBuilding: `${MD} (the table under "## The building")`,
+  schemaRefusalFields: `${SCHEMA} (refusal_fields)`,
+  schemaRefusalCodes: `${SCHEMA} (refusal_codes)`,
+  mdRefusalFields: `${MD} (the field table under "## A refused visit")`,
+  mdRefusalExample: `${MD} (the JSON example under "## A refused visit")`,
+  mdRefusalCodes: `${MD} (the code table under "## A refused visit")`,
+  schemaAuditFields: `${SCHEMA} (audit_fields)`,
+  schemaAuditGroups: `${SCHEMA} (audit_groups)`,
+  schemaAuditActions: `${SCHEMA} (audit_actions)`,
+  mdAuditFields: `${MD} (the field table under "## The audit log")`,
+  mdAuditExample: `${MD} (the JSON example under "## The audit log")`,
+  mdAuditGroups: `${MD} (the group table under "## The audit log")`,
+  mdAuditActions: `${MD} (the action table under "## The audit log")`,
   schemaFilters: (e) => `${ENDPOINTS_FILE} (the Query list in the text of ${endpointKey(e)}, served by ${SCHEMA})`,
   mdFilters: (e) => `${MD} (the first paragraph under the "${mdName(e)}" filters heading)`,
   schemaOutcomes: `${SCHEMA} (outcomes)`,
@@ -228,6 +251,26 @@ const mdScanRowKeys = () => {
 }
 const mdFieldTable = (before) =>
   tableOf(section(md, '## A point and a provider'), `of fields under "## A point and a provider"`, before).rows.flatMap((r) => codes(r[0]))
+const mdBuildingFields = () => tableOf(section(md, '## The building'), 'of the building fields under "## The building"').rows.flatMap((r) => codes(r[0]))
+const mdRefusalTable = (before) => tableOf(section(md, '## A refused visit'), 'under "## A refused visit"', before).rows.flatMap((r) => codes(r[0]))
+const mdRefusalFields = () => mdRefusalTable(/\(`\/refusals`\)/)
+const mdRefusalCodes = () => mdRefusalTable(/`code` of a refusal/)
+const mdRefusalRowKeys = () => {
+  const block = /```json\n([\s\S]*?)\n```/.exec(section(md, '## A refused visit'))?.[1]
+  if (!block) throw new Error(`${MD} has no \`\`\`json block under "## A refused visit": the refusal fields are read from its keys.`)
+  return Object.keys(JSON.parse(block))
+}
+const mdAuditTable = (before) => tableOf(section(md, '## The audit log'), 'under "## The audit log"', before)
+const mdAuditFields = () => mdAuditTable(/^An entry \(`\/audit`\):/).rows.flatMap((r) => codes(r[0]))
+const mdAuditGroups = () => mdAuditTable(/`group` filter takes one of these/).rows.flatMap((r) => codes(r[0]))
+/** The rows of the action table: { action, entity (null for "none"), keys }. */
+const mdAuditActions = () =>
+  mdAuditTable(/^The `action` of an entry/).rows.map((r) => ({ action: codes(r[0])[0], entity: codes(r[1])[0] ?? null, keys: codes(r[3]) }))
+const mdAuditRowKeys = () => {
+  const block = /```json\n([\s\S]*?)\n```/.exec(section(md, '## The audit log'))?.[1]
+  if (!block) throw new Error(`${MD} has no \`\`\`json block under "## The audit log": the audit fields are read from its keys.`)
+  return Object.keys(JSON.parse(block))
+}
 const mdValueTable = (header) => {
   const t = tables(section(md, '## Outcomes and sources')).find((x) => x.header[0] === header)
   if (!t) throw new Error(`${MD} has no table whose first column is ${header} under "## Outcomes and sources": the outcomes and the sources are read from it.`)
@@ -539,6 +582,10 @@ const NUMBER_RULES = [
   { what: 'how old an offline phone time may be', constant: 'CLOCK_MAX_AGE_MS', want: [config.CLOCK_MAX_AGE_MS / DAY], md: /older than (\d+) days/, schema: /older than (\d+) days/ },
   { what: 'the limit range of a page', constant: ['MAX_PAGE_SIZE', 'DEFAULT_PAGE_SIZE'], want: [config.MAX_PAGE_SIZE, config.DEFAULT_PAGE_SIZE], md: /`limit` \(1 to (\d+), default (\d+)\)/, schema: /limit \(1-(\d+), default (\d+);/ },
   { what: 'where a larger limit is cut', constant: 'MAX_PAGE_SIZE', want: [config.MAX_PAGE_SIZE, config.MAX_PAGE_SIZE], md: /`limit` above (\d+) is cut to (\d+)/, schema: /a larger number is cut to (\d+), not refused/ },
+  { what: 'the page of the refused visits', constant: ['DEFAULT_PAGE_SIZE', 'MAX_REFUSAL_PAGE_SIZE'], want: [config.DEFAULT_PAGE_SIZE, config.MAX_REFUSAL_PAGE_SIZE], md: /`limit` \(default (\d+), at most (\d+)\)/, schema: /limit \(default (\d+), at most (\d+):/ },
+  { what: 'where a larger limit of the refused visits is cut', constant: 'MAX_REFUSAL_PAGE_SIZE', want: [config.MAX_REFUSAL_PAGE_SIZE, config.MAX_REFUSAL_PAGE_SIZE], md: /`limit` over (\d+) is cut to (\d+)/, schema: /a bigger number is cut to (\d+), not refused/ },
+  { what: 'the page of the audit log', constant: ['DEFAULT_PAGE_SIZE', 'MAX_AUDIT_PAGE_SIZE'], want: [config.DEFAULT_PAGE_SIZE, config.MAX_AUDIT_PAGE_SIZE], md: /`limit` \(default (\d+), up to (\d+) entries\)/, schema: /limit \(default (\d+), up to (\d+) entries:/ },
+  { what: 'where a larger limit of the audit log is cut', constant: 'MAX_AUDIT_PAGE_SIZE', want: [config.MAX_AUDIT_PAGE_SIZE, config.MAX_AUDIT_PAGE_SIZE], md: /`limit` over (\d+) entries is cut to (\d+)/, schema: /more than that is cut to (\d+), not refused/ },
   { what: 'the length of a text filter', constant: 'FILTER_TEXT_MAX_LENGTH', want: [config.FILTER_TEXT_MAX_LENGTH], md: /are cut to (\d+) characters/, schema: /cut to (\d+) characters/ },
   { what: 'the requests a key may make in a minute', constant: 'AGENT_KEY_MAX_PER_MINUTE', want: [config.AGENT_KEY_MAX_PER_MINUTE], md: /(\d+) requests in (?:a|the current) minute/, schema: /(\d+) requests in (?:a|the current) minute/ },
   { what: 'the requests a key may make in a building day', constant: 'AGENT_KEY_MAX_PER_DAY', want: [config.AGENT_KEY_MAX_PER_DAY], md: /(\d+) (?:requests )?in (?:a|the) building(?:'s)? day/, schema: /(\d+) (?:requests )?in a building day/ },
@@ -654,6 +701,12 @@ describe('the real agent API answers what the documents say', () => {
     const online = await call('POST', '/api/scan', { token, body: { id: randomUUID(), code: lobby.qr_token, gps: { ...HOME, accuracy: 8 } } })
     const offline = await call('POST', '/api/scans/sync', { token, body: { scans: [{ id: randomUUID(), code: basement.qr_token, client_time: '2020-01-01T10:00:00Z' }] } })
     if (online.status !== 200 || offline.status !== 200 || !offline.json.results[0].ok) throw new Error('the seed scans were refused')
+    // A visit that the server refuses for good: the point is switched off, so the visit leaves a refusal (it is not a scan).
+    const roof = await point({ name: 'Roof', gps_mode: 'none', is_active: false })
+    const refused = await call('POST', '/api/scans/sync', {
+      token, body: { scans: [{ id: randomUUID(), code: roof.qr_token, client_time: new Date(Date.now() - 3_600_000).toISOString() }] },
+    })
+    if (refused.status !== 200 || refused.json.results[0].ok || refused.json.results[0].error.code !== SCAN_ERROR_POINT_INACTIVE) throw new Error('the seed refusal was not made')
     key = (await mintAgentKey(cookie, 'agent docs')).key
     const spare = await mintAgentKey(cookie, 'agent docs, revoked')
     revokedKey = spare.key
@@ -668,21 +721,23 @@ describe('the real agent API answers what the documents say', () => {
     const real = Object.keys(json.scans[0])
     const problems = []
     for (const s of json.scans) {
-      if (Object.keys(s).join() !== real.join()) problems.push('The /scans answer does not give every scan the same keys in the same order (scanJson in server/scans.js).')
+      if (Object.keys(s).join() !== real.join()) problems.push('The /scans answer does not give every scan the same keys in the same order (agentScanJson in server/scans.js).')
     }
     const csv = await get('/scans?outcome=all&format=csv&limit=500')
     const lines = csv.text.split('\r\n')
     const header = lines[0].split(',')
-    const truth = { where: 'the real /scans answer (scanJson in server/scans.js)', names: real }
+    const truth = { where: 'the real /scans answer (agentScanJson in server/scans.js)', names: real }
     problems.push(
       ...diffAll('scan field', truth, [
-        { where: `the CSV header of the real /scans?format=csv answer (SCAN_CSV_COLUMNS in server/scans.js)`, names: header },
+        { where: `the CSV header of the real /scans?format=csv answer (AGENT_SCAN_CSV_COLUMNS in server/scans.js)`, names: header },
         { where: WHERE.schemaScanFields, names: [...Object.keys(schemaDoc.time_fields), ...Object.keys(schemaDoc.scan_fields)] },
         { where: WHERE.mdScanRow, names: mdScanRowKeys() },
       ]),
     )
     if (header.join() !== real.join()) problems.push(`The CSV columns (${header.join(',')}) are not in the order of a scan row (${real.join(',')}), but ${MD} says "the same columns as a scan row, in the same order".`)
-    if (SCAN_CSV_COLUMNS.join() !== real.join()) problems.push('SCAN_CSV_COLUMNS in server/scans.js is not in the order of scanJson.')
+    if (AGENT_SCAN_CSV_COLUMNS.join() !== real.join()) problems.push('AGENT_SCAN_CSV_COLUMNS in server/scans.js is not in the order of agentScanJson.')
+    // The agent's columns are the committee's, in the same order, and then the ones that only the agent has.
+    if (AGENT_SCAN_CSV_COLUMNS.slice(0, SCAN_CSV_COLUMNS.length).join() !== SCAN_CSV_COLUMNS.join()) problems.push('AGENT_SCAN_CSV_COLUMNS in server/scans.js does not begin with SCAN_CSV_COLUMNS, in order: a reader that took the first columns by position would read something else.')
     // The example of the md for the flags cell is what the code writes for a scan that has two flags.
     const example = /\(for example `([a-z_;]+)`\)/.exec(section(md, '### CSV').replace(/\s*\n\s*/g, ' '))?.[1]
     const flagged = json.scans.find((s) => s.flags.length === 2)
@@ -695,9 +750,100 @@ describe('the real agent API answers what the documents say', () => {
     report(problems)
   })
 
-  it('points and providers: the real answers = schemaDoc = the md tables; and the envelope of every answer', async () => {
+  it('refused visits: the real answer = schemaDoc = the md (the fields, the example and the codes), and the codes are the permanent codes of the sync contract', async () => {
+    const answer = (await get('/refusals')).json
+    const { refusals } = answer
+    expect(refusals.length).toBeGreaterThanOrEqual(1)
+    const real = Object.keys(refusals[0])
+    const problems = []
+    for (const r of refusals) {
+      if (Object.keys(r).join() !== real.join()) problems.push('The /refusals answer does not give every refusal the same keys in the same order (agentRefusalJson in server/scanRefusals.js).')
+    }
+    const truth = { where: 'the real /refusals answer (agentRefusalJson in server/scanRefusals.js)', names: real }
+    problems.push(
+      ...diffAll('refusal field', truth, [
+        { where: WHERE.schemaRefusalFields, names: Object.keys(schemaDoc.refusal_fields) },
+        { where: WHERE.mdRefusalFields, names: mdRefusalFields() },
+        { where: WHERE.mdRefusalExample, names: mdRefusalRowKeys() },
+      ]),
+    )
+    problems.push(
+      ...diffAll('refusal code', { where: 'SYNC_PERMANENT_ERROR_CODES in shared/contract.js (the codes that a refused visit carries)', names: [...SYNC_PERMANENT_ERROR_CODES] }, [
+        { where: WHERE.schemaRefusalCodes, names: Object.keys(schemaDoc.refusal_codes) },
+        { where: WHERE.mdRefusalCodes, names: mdRefusalCodes() },
+      ]),
+    )
+    for (const [name, rows] of [['refusal_fields', schemaDoc.refusal_fields], ['refusal_codes', schemaDoc.refusal_codes]]) {
+      for (const [field, text] of Object.entries(rows)) {
+        if (typeof text !== 'string' || text.trim().length < 10) problems.push(`${SCHEMA}: ${name}.${field} has no real description.`)
+      }
+    }
+    // The envelope, and the refusal that the seed made.
+    expect(Object.keys(answer)).toEqual(['refusals', 'count', 'next_cursor'])
+    expect(refusals.some((r) => r.code === SCAN_ERROR_POINT_INACTIVE && r.point_name === 'Roof')).toBe(true)
+    report(problems)
+  })
+
+  it('the audit log: the real answer = schemaDoc = the md (the fields, the example, the groups, the actions and the keys of their detail)', async () => {
+    const answer = (await get('/audit')).json
+    const { entries } = answer
+    expect(entries.length).toBeGreaterThanOrEqual(1)
+    expect(Object.keys(answer)).toEqual(['entries', 'count', 'next_cursor'])
+    const real = Object.keys(entries[0])
+    const problems = []
+    for (const e of entries) {
+      if (Object.keys(e).join() !== real.join()) problems.push('The /audit answer does not give every entry the same keys in the same order (agentAuditEntry in server/auditRead.js).')
+    }
+    if (AGENT_AUDIT_FIELDS.join() !== real.join()) problems.push('AGENT_AUDIT_FIELDS in server/auditRead.js is not the keys of an entry of the real answer, in order.')
+    problems.push(
+      ...diffAll('audit field', { where: 'the real /audit answer (agentAuditEntry in server/auditRead.js)', names: real }, [
+        { where: WHERE.schemaAuditFields, names: Object.keys(schemaDoc.audit_fields) },
+        { where: WHERE.mdAuditFields, names: mdAuditFields() },
+        { where: WHERE.mdAuditExample, names: mdAuditRowKeys() },
+      ]),
+    )
+    problems.push(
+      ...diffAll('audit group', { where: 'AUDIT_GROUPS in server/auditRead.js', names: [...AUDIT_GROUPS] }, [
+        { where: WHERE.schemaAuditGroups, names: Object.keys(schemaDoc.audit_groups) },
+        { where: WHERE.mdAuditGroups, names: mdAuditGroups() },
+      ]),
+    )
+    const allowed = Object.keys(AUDIT_DETAIL_ALLOW)
+    const mdActions = mdAuditActions()
+    problems.push(
+      ...diffAll('audit action', { where: 'AUDIT_DETAIL_ALLOW in server/audit.js', names: allowed }, [
+        { where: WHERE.schemaAuditActions, names: Object.keys(schemaDoc.audit_actions) },
+        { where: WHERE.mdAuditActions, names: mdActions.map((a) => a.action) },
+      ]),
+    )
+    for (const action of allowed) {
+      const keys = Object.keys(AUDIT_DETAIL_ALLOW[action])
+      const described = schemaDoc.audit_actions[action]
+      const inMd = mdActions.find((a) => a.action === action)
+      if (described) {
+        problems.push(...diffNames(`detail key of ${action}`, { where: 'AUDIT_DETAIL_ALLOW in server/audit.js', names: keys }, { where: `${WHERE.schemaAuditActions}, the detail of ${action}`, names: Object.keys(described.detail) }))
+        if (typeof described.meaning !== 'string' || described.meaning.trim().length < 10) problems.push(`${SCHEMA}: audit_actions.${action} has no real meaning.`)
+        for (const [key, text] of Object.entries(described.detail)) {
+          if (typeof text !== 'string' || text.trim().length < 10) problems.push(`${SCHEMA}: audit_actions.${action}.detail.${key} has no real description.`)
+        }
+      }
+      if (inMd) {
+        problems.push(...diffNames(`detail key of ${action}`, { where: 'AUDIT_DETAIL_ALLOW in server/audit.js (the keys of the flat, older shape included)', names: keys }, { where: `${WHERE.mdAuditActions}, row ${action}`, names: inMd.keys }))
+        if (described && inMd.entity !== described.entity) problems.push(`${WHERE.mdAuditActions} says the entity of ${action} is ${inMd.entity}, ${SCHEMA} says ${described.entity}.`)
+      }
+    }
+    for (const [name, rows] of [['audit_fields', schemaDoc.audit_fields], ['audit_groups', schemaDoc.audit_groups]]) {
+      for (const [field, text] of Object.entries(rows)) {
+        if (typeof text !== 'string' || text.trim().length < 10) problems.push(`${SCHEMA}: ${name}.${field} has no real description.`)
+      }
+    }
+    report(problems)
+  })
+
+  it('points, providers and the building: the real answers = schemaDoc = the md tables; and the envelope of every answer', async () => {
     const points = (await get('/points')).json
     const providers = (await get('/providers')).json
+    const building = (await get('/building')).json
     expect(points.points.length).toBeGreaterThan(0)
     expect(providers.providers.length).toBeGreaterThan(0)
     const problems = [
@@ -708,6 +854,10 @@ describe('the real agent API answers what the documents say', () => {
       ...diffAll('provider field', { where: 'the real /providers answer (server/routes/agent.js)', names: Object.keys(providers.providers[0]) }, [
         { where: WHERE.schemaProviders, names: Object.keys(schemaDoc.providers_fields) },
         { where: WHERE.mdProviders, names: mdFieldTable(/\(`\/providers`\)/) },
+      ]),
+      ...diffAll('building field', { where: 'the real /building answer (server/routes/agent.js)', names: Object.keys(building.building ?? {}) }, [
+        { where: WHERE.schemaBuilding, names: Object.keys(schemaDoc.building_fields) },
+        { where: WHERE.mdBuilding, names: mdBuildingFields() },
       ]),
     ]
     // The envelope of every endpoint of the registry that has one: the real answer = the registry = the md row = the text of /schema.
@@ -728,7 +878,7 @@ describe('the real agent API answers what the documents say', () => {
       if (!inSchema) problems.push(`${ENDPOINTS_FILE}: the text of ${endpointKey(e)} no longer says "Returns { ... }".`)
       else problems.push(...diffNames('top-level key', real, { where: `${WHERE.schemaEndpoints}, ${endpointKey(e)}`, names: inSchema }))
     }
-    for (const [name, rows] of [['points_fields', schemaDoc.points_fields], ['providers_fields', schemaDoc.providers_fields], ['scan_fields', schemaDoc.scan_fields], ['time_fields', schemaDoc.time_fields]]) {
+    for (const [name, rows] of [['points_fields', schemaDoc.points_fields], ['providers_fields', schemaDoc.providers_fields], ['building_fields', schemaDoc.building_fields], ['scan_fields', schemaDoc.scan_fields], ['time_fields', schemaDoc.time_fields]]) {
       for (const [field, text] of Object.entries(rows)) {
         if (typeof text !== 'string' || !text.trim()) problems.push(`${SCHEMA}: ${name}.${field} has no description.`)
       }
@@ -741,8 +891,8 @@ describe('the real agent API answers what the documents say', () => {
   // the route does: `proveRouteReads`). An endpoint of the registry that lists filters needs a probe here, and a probe needs a row.
   const FILTER_PROBES = {
     listScans: {
-      readWhere: 'what listScans reads in server/scans.js',
-      // Every property that listScans reads from its query. The values are all valid, so that no read is skipped by an early
+      readWhere: 'what listAgentScans reads in server/scans.js (the function behind the route)',
+      // Every property that listAgentScans reads from its query. The values are all valid, so that no read is skipped by an early
       // refusal (the cursor is made the way the API makes one).
       read: async () => {
         const reads = new Set()
@@ -753,7 +903,7 @@ describe('the real agent API answers what the documents say', () => {
           },
           { get: (target, prop) => (typeof prop === 'string' ? (reads.add(prop), target[prop]) : target[prop]) },
         )
-        await listScans(query)
+        await listAgentScans(query)
         return [...reads]
       },
       listedWhere: 'SCAN_FILTERS in server/scans.js',
@@ -771,6 +921,50 @@ describe('the real agent API answers what the documents say', () => {
         return problems
       },
     },
+    listAudit: {
+      readWhere: 'what listAgentAudit reads in server/auditRead.js (the function behind the route)',
+      // Every property that listAgentAudit reads from its query (all values valid; the cursor is made the way the API makes one).
+      read: async () => {
+        const reads = new Set()
+        const query = new Proxy(
+          {
+            from: '2026-01-01', to: '2100-01-01', group: 'point', actor_id: randomUUID(), entity: 'point', entity_id: randomUUID(), limit: '5',
+            cursor: Buffer.from(JSON.stringify({ t: '2026-05-01T08:00:00.000000Z', id: '5' })).toString('base64url'),
+          },
+          { get: (target, prop) => (typeof prop === 'string' ? (reads.add(prop), target[prop]) : target[prop]) },
+        )
+        await listAgentAudit(query)
+        return [...reads]
+      },
+      listedWhere: 'AUDIT_FILTERS in server/auditRead.js',
+      listed: AUDIT_FILTERS,
+      routeReads: [],
+      routeReadsWhere: 'read by server/routes/agent.js',
+      // The route reads nothing beside the function behind it.
+      proveRouteReads: async () => [],
+    },
+    listRefusals: {
+      readWhere: 'what listAgentRefusals reads in server/scanRefusals.js (the function behind the route)',
+      // Every property that listAgentRefusals reads from its query (all values valid; the cursor is made the way the API makes one).
+      read: async () => {
+        const reads = new Set()
+        const query = new Proxy(
+          {
+            from: '2026-01-01', to: '2100-01-01', point_id: randomUUID(), provider_id: randomUUID(), limit: '5',
+            cursor: Buffer.from(JSON.stringify({ t: new Date().toISOString(), id: 5 })).toString('base64url'),
+          },
+          { get: (target, prop) => (typeof prop === 'string' ? (reads.add(prop), target[prop]) : target[prop]) },
+        )
+        await listAgentRefusals(query)
+        return [...reads]
+      },
+      listedWhere: 'REFUSAL_FILTERS in server/scanRefusals.js',
+      listed: REFUSAL_FILTERS,
+      routeReads: [],
+      routeReadsWhere: 'read by server/routes/agent.js',
+      // The route reads nothing beside the function behind it.
+      proveRouteReads: async () => [],
+    },
   }
 
   it('filters: what the code of each endpoint reads = the registry = schemaDoc = the md, with the values they allow', async () => {
@@ -786,7 +980,8 @@ describe('the real agent API answers what the documents say', () => {
       if (probe) {
         problems.push(...diffNames('filter', { where: probe.readWhere, names: await probe.read() }, { where: probe.listedWhere, names: [...probe.listed] }))
         problems.push(...(await probe.proveRouteReads()))
-        truth = { where: `${probe.listedWhere} (and ${probe.routeReads.map((n) => `\`${n}\``).join(', ')}, ${probe.routeReadsWhere})`, names: [...probe.listed, ...probe.routeReads] }
+        const alsoRead = probe.routeReads.length ? ` (and ${probe.routeReads.map((n) => `\`${n}\``).join(', ')}, ${probe.routeReadsWhere})` : ''
+        truth = { where: `${probe.listedWhere}${alsoRead}`, names: [...probe.listed, ...probe.routeReads] }
         problems.push(...diffNames('filter', truth, { where: `${WHERE.registry}, the filters of ${key}`, names: [...e.filters] }))
       } else if (e.filters.length) {
         problems.push(`${WHERE.registry} lists filters for ${key}, but FILTER_PROBES in tests/agent-docs.test.js has no probe that shows what its code reads: add one.`)
@@ -816,6 +1011,11 @@ describe('the real agent API answers what the documents say', () => {
     // A page larger than the limit is cut, not refused.
     const big = await get(`${pathOf(scansRow)}?limit=${config.MAX_PAGE_SIZE + 1}`)
     if (big.status !== 200 || big.json.count > config.MAX_PAGE_SIZE) problems.push(`GET /scans?limit=${config.MAX_PAGE_SIZE + 1} is not cut to ${config.MAX_PAGE_SIZE} as both documents say (it answered ${big.status}).`)
+    // The same for the refused visits, whose page is cut at its own size.
+    const refusalsRow = AGENT_ENDPOINTS.find((e) => e.id === 'listRefusals')
+    if (!refusalsRow) throw new Error(`${WHERE.registry} has no row "listRefusals": the page of the refused visits is read through it.`)
+    const bigRefusals = await get(`${pathOf(refusalsRow)}?limit=${config.MAX_REFUSAL_PAGE_SIZE + 1}`)
+    if (bigRefusals.status !== 200 || bigRefusals.json.count > config.MAX_REFUSAL_PAGE_SIZE) problems.push(`GET /refusals?limit=${config.MAX_REFUSAL_PAGE_SIZE + 1} is not cut to ${config.MAX_REFUSAL_PAGE_SIZE} as both documents say (it answered ${bigRefusals.status}).`)
     report(problems)
   }, 60_000)
 
@@ -898,12 +1098,14 @@ describe('the real agent API answers what the documents say', () => {
       expectPair(await call(method, `/api/agent/v1${rel}?limit=abc`, { token: spent.key }), `${method} ${rel} with a key that is over its limit for the minute`, 429, 'rate_limited')
     }
 
-    // A failure of the server itself: a database that cannot be reached, through the real route and the real router.
+    // A failure of the server itself: a database that cannot be reached, through the real route and the real router. The key is taken
+    // before the database is broken: the rotation of keys (currentKey) mints a new one through the database when the old one is used up.
+    const brokenKey = await currentKey()
     const pool = getPool()
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     setPool({ query: async () => { throw Object.assign(new Error('connection lost'), { code: 'ECONNRESET' }) } })
     try {
-      expectPair(await get('/scans'), 'GET /scans while the database cannot be reached', 500, 'server_error')
+      expectPair(await call('GET', '/api/agent/v1/scans', { token: brokenKey }), 'GET /scans while the database cannot be reached', 500, 'server_error')
     } finally {
       setPool(pool)
       logged.mockRestore()

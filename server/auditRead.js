@@ -8,17 +8,22 @@
 // filter on one thing (`entity` with `entity_id`) is what audit_log_entity_idx is for (db/migrations/007). The page is cut
 // from the log first and joined with the names (`admins`, and the point, provider, member or key that the entry is about)
 // after that, so the joins cost a few rows, not the table.
+//
+// Two readers use the one statement: the committee's (listAudit, the entry as it was stored) and the committee's agent (listAgentAudit,
+// GET /api/agent/v1/audit). The agent's entry is written field by field, and its detail goes through the allow-list of its action
+// (AUDIT_DETAIL_ALLOW in server/audit.js) with any text that looks like a secret turned into null: see agentAuditDetail below.
 import { query } from './db.js'
 import { bad, isUuid } from './http.js'
 import { pageLimit, parseBound, providerSnapshotName } from './scans.js'
+import { AUDIT_DETAIL_ALLOW } from './audit.js'
 import { TIMEZONE, FILTER_TEXT_MAX_LENGTH, MAX_AUDIT_PAGE_SIZE } from './config.js'
+import { looksSecret } from '../shared/secretLike.js'
 
 /** @import { AuditEntry, AuditPage } from '../shared/types.js' */
 
 /**
  * The values of `group`: the part of an action before the dot (`point.update` is in `point`). An exact list, so that no
- * text of the request ever reaches the SQL. `session` is reserved for the sign-in rows that a later change writes, so
- * today it answers an empty page.
+ * text of the request ever reaches the SQL. `session` is the sign-in and sign-out of a committee member.
  */
 export const AUDIT_GROUPS = Object.freeze(['admin', 'building', 'point', 'provider', 'scan', 'api_key', 'retention', 'session'])
 
@@ -165,17 +170,173 @@ function auditEntry(r) {
   }
 }
 
+// ---------- the agent's reading ----------
+
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+
+/**
+ * A text that may be shown to the agent, or null. A word of it that looks like a key, a hash, a token or an id (shared/secretLike.js)
+ * makes the whole text null, so a sentence that holds a pasted key does not get through, and neither does a text that is one. (The
+ * test is made word by word because looksSecret judges a whole text, and a key inside a sentence has spaces around it.)
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+const safeText = (value) => (typeof value === 'string' && !value.split(/\s+/).some(looksSecret) ? value : null)
+
+/** A moment as an ISO 8601 text in UTC, or null. */
+function momentText(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return null
+  const when = new Date(value)
+  return Number.isNaN(when.getTime()) ? null : when.toISOString()
+}
+
+/** A list of ids, in lower case: what is not an id is left out. Null when the value is not a list. */
+const idList = (value) => (Array.isArray(value) ? value.filter(isUuid).map((id) => id.toLowerCase()) : null)
+
+/** `{ added, removed }`: two lists of ids. Null when the value is not an object. */
+const idsChange = (value) => (isObject(value) ? { added: idList(value.added) ?? [], removed: idList(value.removed) ?? [] } : null)
+
+/** What an update changed: the listed fields, each as `{ from, to }`, each value of its kind. Null when none of them is there. */
+function changedFields(fields, value) {
+  if (!isObject(value)) return null
+  const out = {}
+  for (const [field, kind] of Object.entries(fields)) {
+    const pair = value[field]
+    if (!Object.hasOwn(value, field) || !isObject(pair)) continue
+    out[field] = { from: kindValue(kind, pair.from), to: kindValue(kind, pair.to) }
+  }
+  return Object.keys(out).length ? out : null
+}
+
+/**
+ * One value of a detail, as its kind says (the kinds are explained in server/audit.js, AUDIT_DETAIL_ALLOW): the value, or null when
+ * it is not of that kind or when it is a text that looks like a secret. Nothing that is not rebuilt here goes out.
+ * @param {any} kind
+ * @param {any} value
+ * @returns {unknown}
+ */
+function kindValue(kind, value) {
+  if (value === null || value === undefined) return null
+  switch (typeof kind === 'string' ? kind : kind.kind) {
+    case 'text': return safeText(value)
+    case 'count': return Number.isSafeInteger(value) && value >= 0 ? value : null
+    case 'integer': return Number.isSafeInteger(value) ? value : null
+    case 'number': return typeof value === 'number' && Number.isFinite(value) ? value : null
+    case 'boolean': return typeof value === 'boolean' ? value : null
+    case 'timestamp': return momentText(value)
+    case 'uuids': return idList(value)
+    case 'ids_change': return idsChange(value)
+    case 'ids_or_change': return Array.isArray(value) ? idList(value) : idsChange(value)
+    case 'enum': return typeof value === 'string' && kind.values.includes(value) ? value : null
+    case 'changes': return changedFields(kind.fields, value)
+    default: return null
+  }
+}
+
+/** The kinds that kindValue knows: the allow-list is checked against them when the server starts. */
+const KINDS = ['text', 'count', 'integer', 'number', 'boolean', 'timestamp', 'uuids', 'ids_change', 'ids_or_change', 'enum', 'changes']
+
+/** Throws when the keys of one entry of the allow-list name a kind that kindValue does not know (a typo would otherwise show as a null for ever). */
+function checkKinds(allow, where) {
+  for (const [key, kind] of Object.entries(allow)) {
+    const name = typeof kind === 'string' ? kind : kind?.kind
+    if (!KINDS.includes(name)) throw new Error(`server/audit.js: ${where}.${key} has the kind "${name}", which server/auditRead.js does not know.`)
+    if (name === 'enum' && !(Array.isArray(kind.values) && kind.values.length)) throw new Error(`server/audit.js: ${where}.${key} is an enum with no values.`)
+    if (name === 'changes') checkKinds(kind.fields, `${where}.${key}`)
+  }
+}
+
+/**
+ * Throws when the allow-list is not one that agentAuditDetail can read: an action that is not `<group>.<verb>` with a group of
+ * AUDIT_GROUPS, or a key of a kind that kindValue does not know. It runs when this file is loaded, so a mistake in the list stops the
+ * server from starting, and it is exported so that tests/agent-audit.test.js can prove that it does.
+ * @param {Record<string, Record<string, any>>} list
+ */
+export function checkAuditAllowList(list) {
+  for (const [action, allow] of Object.entries(list)) {
+    if (!/^[a-z_]+\.[a-z_]+$/.test(action) || !AUDIT_GROUPS.includes(/** @type {any} */ (action.split('.')[0]))) {
+      throw new Error(`server/audit.js: the action "${action}" of AUDIT_DETAIL_ALLOW is not "<group>.<verb>" with a group of AUDIT_GROUPS.`)
+    }
+    checkKinds(allow, action)
+  }
+}
+checkAuditAllowList(AUDIT_DETAIL_ALLOW)
+
+/**
+ * The detail of an entry as the agent may read it: only the keys that AUDIT_DETAIL_ALLOW lists for the action, in the order of that
+ * list, each rebuilt as its kind says (a text that looks like a secret, or a value of the wrong kind, is null). Null when the
+ * action is not in the list (nothing of its detail goes out), when the stored detail is not an object, and when none of the listed
+ * keys is in it. The first characters of a key, a token, a hash and any other key that is not listed never get here.
+ * @param {string} action
+ * @param {unknown} detail  as it was stored
+ * @returns {Record<string, unknown> | null}
+ */
+export function agentAuditDetail(action, detail) {
+  const allow = Object.hasOwn(AUDIT_DETAIL_ALLOW, action) ? AUDIT_DETAIL_ALLOW[/** @type {keyof typeof AUDIT_DETAIL_ALLOW} */ (action)] : null
+  if (!allow || !isObject(detail)) return null
+  const stored = /** @type {Record<string, unknown>} */ (detail)
+  const out = {}
+  for (const [key, kind] of Object.entries(allow)) {
+    if (Object.hasOwn(stored, key)) out[key] = kindValue(kind, stored[key])
+  }
+  return Object.keys(out).length ? out : null
+}
+
+/** The fields of an entry of the agent's audit log, in the order the answer writes them. */
+export const AGENT_AUDIT_FIELDS = Object.freeze([
+  'id', 'at', 'action', 'entity', 'entity_id', 'entity_name', 'actor_type', 'actor_id', 'actor_name', 'actor_deleted', 'detail',
+])
+
+/**
+ * One entry as the committee's agent reads it (GET /api/agent/v1/audit): the fields of the committee's entry (auditEntry), written one
+ * by one from the row, with the two names filtered like a text of a detail and the detail through the allow-list of its action.
+ * @param {Record<string, any>} r  a row of the statement of auditQuery
+ */
+export function agentAuditEntry(r) {
+  return {
+    id: Number(r.id),
+    at: new Date(r.at).toISOString(),
+    action: r.action,
+    entity: r.entity ?? null,
+    entity_id: r.entity_id ?? null,
+    entity_name: safeText(entityName(r)),
+    actor_type: r.actor_type,
+    actor_id: r.actor_id ?? null,
+    actor_name: safeText(r.actor_name ?? null),
+    actor_deleted: r.actor_deleted === true,
+    detail: agentAuditDetail(r.action, r.detail),
+  }
+}
+
+/**
+ * One page of the log, newest first, with each row turned into an entry by `toEntry`.
+ * @param {Record<string, unknown>} q
+ * @param {(row: Record<string, any>) => any} toEntry
+ */
+async function auditPage(q, toEntry) {
+  const { sql, params, limit } = auditQuery(q)
+  const { rows } = await query(sql, params)
+  const page = rows.slice(0, limit)
+  return {
+    entries: page.map(toEntry),
+    next_cursor: rows.length > limit ? encodeCursor(page[page.length - 1]) : null,
+  }
+}
+
 /**
  * One page of the audit log.
  * @param {Record<string, unknown>} [q]
  * @returns {Promise<AuditPage>}
  */
 export async function listAudit(q = {}) {
-  const { sql, params, limit } = auditQuery(q)
-  const { rows } = await query(sql, params)
-  const page = rows.slice(0, limit)
-  return {
-    entries: page.map(auditEntry),
-    next_cursor: rows.length > limit ? encodeCursor(page[page.length - 1]) : null,
-  }
+  return auditPage(q, auditEntry)
+}
+
+/**
+ * One page of the audit log for the agent API (GET /api/agent/v1/audit): the filters, the validation, the order, the paging and the
+ * cursor of listAudit (one statement, auditQuery), the entries of agentAuditEntry.
+ * @param {Record<string, unknown>} [q]
+ */
+export async function listAgentAudit(q = {}) {
+  return auditPage(q, agentAuditEntry)
 }

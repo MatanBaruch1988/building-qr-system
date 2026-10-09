@@ -331,7 +331,13 @@ export function ResultView({ result, pointName, provider, onDone, onRetry }) {
       break
     case 'queued':
       // persisted=false: the phone refused to store it, so it survives only while this page stays open.
-      v = { tone: 'warn', Icon: IconCloudOff, title: t('checkin.queued.title'), body: t(result.persisted === false ? 'checkin.queuedTemp.body' : 'checkin.queued.body'), done: true }
+      v = {
+        tone: 'warn', Icon: IconCloudOff, title: t('checkin.queued.title'), done: true,
+        body: t(result.persisted === false ? 'checkin.queuedTemp.body' : 'checkin.queued.body'),
+        // located=false: no position the server can use was saved with the visit, and a point that checks the location may refuse
+        // it when it is sent, so the person is told while they are still standing at the point.
+        warning: result.located === false ? t('checkin.queued.noLocation') : '',
+      }
       break
     case 'far':
       v = { tone: 'danger', Icon: IconPinOff, title: t('checkin.far.title'), body: t('checkin.far.body', { distance: distance(result.scan.distance_m ?? 0), point }), retry: true }
@@ -352,6 +358,7 @@ export function ResultView({ result, pointName, provider, onDone, onRetry }) {
       <div className="w-ring w-pop"><v.Icon /></div>
       <h1 tabIndex={-1} ref={headingRef}>{v.title}</h1>
       {v.body && <p className="w-result__body">{v.body}</p>}
+      {v.warning && <p className="w-result__body w-result__warning">{v.warning}</p>}
       {v.done && point && (
         <span className="w-chip"><IconPin size={18} />{point}</span>
       )}

@@ -26,6 +26,9 @@
 // the transaction under the row's lock, so `from` is what the row held when the change was made. Only the changed fields are
 // there, and a field that holds a secret is never a key (changesOf refuses it): a password is `password_changed: true`.
 //
+// The committee's agent reads this log too, and sees a detail only through AUDIT_DETAIL_ALLOW (below the imports): a new action, or a
+// new key of a detail, is not shown to the agent until it has its place in that list (tests/agent-audit.test.js fails until it has).
+//
 //   action                    entity    entity_id   detail
 //   admin.add                 admin     member      { email }                                    a new member; the first one of a deployment can also be
 //                                                                                                  added by the `system` actor (FIRST_ADMIN_EMAIL, below)
@@ -76,6 +79,7 @@
 // `admins` has no row at all, so that member is the first one of the deployment's committee list.
 import pg from 'pg'
 import { AUDIT_ACTOR_NAME_MAX_LENGTH } from './config.js'
+import { GPS_MODES, SCAN_OUTCOMES } from '../shared/contract.js'
 
 /**
  * Who did it. `type` is `admin` (a committee member, built by adminActor), `system` (the daily retention job, and the first
@@ -91,6 +95,77 @@ import { AUDIT_ACTOR_NAME_MAX_LENGTH } from './config.js'
 /** @typedef {{ query: (text: string, params?: unknown[]) => Promise<unknown> }} TransactionClient */
 
 const ACTOR_TYPES = ['admin', 'system', 'script']
+
+/** The kinds of actor that an entry can name (the values of `actor_type`), for the readers of the log. */
+export const AUDIT_ACTOR_TYPES = Object.freeze([...ACTOR_TYPES])
+
+// ---------- what of a detail may leave the server for the committee's agent ----------
+//
+// The committee's agent reads the audit log (GET /api/agent/v1/audit, owner decision of 08/10/2026: the agent is the committee's
+// analyst), and a detail goes out only through the list below: for each action, the keys of its detail that the agent may be shown,
+// each with the KIND of value that the key holds. A key that is not here is never shown, whatever it holds (the first characters of
+// a key in `api_key.delete`, for one, and any key that a later change adds to a detail). An action that is not here shows no
+// detail at all, so a new action leaks nothing by default; tests/agent-audit.test.js fails until every action that the code writes
+// has its entry, and until the table at the top of this file and this list name the same actions. A value that is not of its kind
+// (a number where a text should be) is shown as null, and so is a text that looks like a secret (shared/secretLike.js). The reading
+// is `agentAuditDetail` in server/auditRead.js, and `GET /api/agent/v1/schema` and the OpenAPI document are written from this list.
+//
+// The kinds are: 'text', 'count' (a whole number, 0 or more), 'integer', 'number', 'boolean', 'timestamp' (an ISO 8601 moment),
+// 'uuids' (a list of ids), `oneOf(values)`, `changes(fields)` (what an update changed: `{ <field>: { from, to } }` for the fields
+// listed, each value of the kind given) and 'ids_change' (`{ added, removed }`, two lists of ids). 'ids_or_change' is the list of
+// ids of an older entry or the `{ added, removed }` of today's.
+//
+// The fields of a point and of a provider are listed once and used for a create, for `changes` and for the flat shape of the
+// entries written before 05/10/2026 (#78), which the committee's screen still reads.
+
+/** A value that is one of the listed words. @param {readonly string[]} values */
+const oneOf = (values) => Object.freeze({ kind: 'enum', values: Object.freeze([...values]) })
+/** What an update changed: the listed fields, each as `{ from, to }`. @param {Record<string, unknown>} fields */
+const changes = (fields) => Object.freeze({ kind: 'changes', fields: Object.freeze({ ...fields }) })
+
+/** How a committee member signed in (`session.sign_in`): through Google, or the local development shortcut. */
+export const AUDIT_SIGN_IN_METHODS = Object.freeze(['google', 'dev'])
+
+const POINT_FIELDS = Object.freeze({
+  name: 'text', description: 'text', service_type: 'text', gps_mode: oneOf(GPS_MODES), lat: 'number', lng: 'number',
+  radius_m: 'integer', is_active: 'boolean',
+})
+const PROVIDER_FIELDS = Object.freeze({
+  company: 'text', contact_name: 'text', service_type: 'text', is_active: 'boolean', is_demo: 'boolean',
+})
+
+/**
+ * The detail of each action that the agent may be shown: `{ <action>: { <key>: <kind> } }`. An empty entry is an action whose
+ * detail is null (or that has nothing to show). See the comment above for the kinds.
+ */
+export const AUDIT_DETAIL_ALLOW = Object.freeze({
+  'admin.add': Object.freeze({ email: 'text' }),
+  'admin.enable': Object.freeze({ email: 'text', changes: changes({ is_active: 'boolean' }) }),
+  'admin.disable': Object.freeze({ changes: changes({ is_active: 'boolean' }) }),
+  'admin.delete': Object.freeze({ email: 'text', name: 'text' }),
+  'session.sign_in': Object.freeze({ method: oneOf(AUDIT_SIGN_IN_METHODS) }),
+  'session.sign_out': Object.freeze({}),
+  'building.update': Object.freeze({ changes: changes({ address: 'text', name: 'text' }) }),
+  'point.create': Object.freeze({ ...POINT_FIELDS, provider_ids: 'uuids' }),
+  'point.update': Object.freeze({ ...POINT_FIELDS, changes: changes(POINT_FIELDS), provider_ids: 'ids_or_change' }),
+  'point.delete': Object.freeze({ name: 'text', scans_kept: 'count' }),
+  'point.regenerate_qr': Object.freeze({}),
+  'provider.create': Object.freeze({ company: 'text' }),
+  'provider.update': Object.freeze({ ...PROVIDER_FIELDS, changes: changes(PROVIDER_FIELDS), password_changed: 'boolean' }),
+  'provider.delete': Object.freeze({ company: 'text', contact_name: 'text', scans_kept: 'count' }),
+  'provider.revoke_devices': Object.freeze({ devices: 'count' }),
+  'scan.void': Object.freeze({ reason: 'text' }),
+  'scan.unvoid': Object.freeze({ previous_reason: 'text' }),
+  'scan.delete': Object.freeze({
+    point_name: 'text', provider_name: 'text', checked_in_at: 'timestamp', outcome: oneOf(SCAN_OUTCOMES), voided: 'boolean',
+  }),
+  'api_key.create': Object.freeze({ name: 'text' }),
+  'api_key.revoke': Object.freeze({}),
+  'api_key.delete': Object.freeze({ name: 'text', was_revoked: 'boolean' }), // not `key_prefix`: the first characters of a key
+  'retention.run': Object.freeze({
+    sessions: 'count', login_attempts: 'count', device_labels: 'count', app_errors: 'count', alert_pings: 'count', api_key_usage: 'count',
+  }),
+})
 
 /**
  * The actor of a committee member, from what requireAdmin returns (`{ id, email, name }`): the name is the member's name, or

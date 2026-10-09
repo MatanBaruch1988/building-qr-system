@@ -7,28 +7,38 @@
 // already lives, so that a change there changes this document with it:
 //   - the paths, the operationIds, the summaries, the descriptions and the query parameters (by name, in order) come from the
 //     registry of server/agentEndpoints.js, so an endpoint that is a row there is in this document;
-//   - the enums come from shared/ (the flags, the outcomes, the sources, the GPS modes), the page size, the longest text filter
-//     and the key prefix from server/config.js, the CSV columns from server/scans.js;
-//   - the description of every field of a point, a provider and a scan comes from server/schemaDoc.js, and the errors (the status,
-//     the codes and what they mean) are built from schemaDoc.errors, so a new error code there is in every error response here.
+//   - the enums come from shared/ (the flags, the outcomes, the sources, the GPS modes, the codes of a refused visit), the page
+//     sizes, the longest text filter and the key prefix from server/config.js, the CSV columns (the agent's) from server/scans.js;
+//   - the description of every field of a point, a provider, a scan, a refused visit and the building comes from server/schemaDoc.js,
+//     and the errors (the status, the codes and what they mean) are built from schemaDoc.errors, so a new error code there is in
+//     every error response here.
 //
 // What is written here: the type of every field (a field that schemaDoc describes and this file does not type, or the other way
 // round, stops the server from starting), the description of every query parameter (a filter in the registry without one stops it
-// too, and so does an endpoint without an answer below), and the few values that only server/scans.js knows (the values of the
-// `outcome`, `order` and `format` filters). tests/agent-openapi.test.js proves all of it: the document is valid OpenAPI 3.1, its
+// too, and so does an endpoint without an answer below; an endpoint whose filter of the same name means something else, such as
+// the page size of the refused visits, has its own description of it), and the few values that only server/scans.js knows (the
+// values of the `outcome`, `order` and `format` filters). tests/agent-openapi.test.js proves all of it: the document is valid OpenAPI 3.1, its
 // paths are the routes, its parameters the filters, its enums and limits the constants, and every real answer fits its schema.
 //
 // Every object that an answer holds lists all its fields as required: the keys are always there (a value that can be missing is
 // null, written as a type list). The document does not close the objects (`additionalProperties: false`), so that a client that
 // validates answers with it does not break when a field is added; the test closes them, so that a field that an answer gains
 // fails there until this file types it.
+//
+// The one exception is the detail of an entry of the audit log: its keys depend on the action, and an entry holds only the keys that
+// its action wrote. So there is one schema for each action that has a detail (AuditDetail<Action>, written from AUDIT_DETAIL_ALLOW of
+// server/audit.js, the list of the keys of each action that the agent may be shown, and from schemaDoc.audit_actions, which says what
+// each key means), its keys are all optional, and the `detail` of an entry is null or any one of them. A key that the list does not
+// have is not in the schema, so the closed check of the test fails on a key that an answer gains.
 import { STATUS_CODES } from 'node:http'
-import { TIMEZONE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH, API_KEY_PREFIX } from './config.js'
+import { TIMEZONE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_REFUSAL_PAGE_SIZE, MAX_AUDIT_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH, API_KEY_PREFIX } from './config.js'
 import { AGENT_ENDPOINTS } from './agentEndpoints.js'
-import { SCAN_CSV_COLUMNS } from './scans.js'
+import { AGENT_SCAN_CSV_COLUMNS } from './scans.js'
+import { AUDIT_GROUPS } from './auditRead.js'
+import { AUDIT_ACTOR_TYPES, AUDIT_DETAIL_ALLOW } from './audit.js'
 import { schemaDoc } from './schemaDoc.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
-import { SCAN_OUTCOMES, SCAN_SOURCES, GPS_MODES, OUTCOME_ACCEPTED } from '../shared/contract.js'
+import { SCAN_OUTCOMES, SCAN_SOURCES, GPS_MODES, OUTCOME_ACCEPTED, SYNC_PERMANENT_ERROR_CODES } from '../shared/contract.js'
 
 const FILE = 'server/agentOpenApi.js'
 
@@ -84,7 +94,107 @@ function plainObject(/** @type {Record<string, object>} */ fields, /** @type {st
   return { type: 'object', description, required: names, properties: fields }
 }
 
+// ---------- the audit log ----------
+
+/** "api_key.delete" -> "AuditDetailApiKeyDelete": the name of the schema of the detail of an action. @param {string} action */
+export const auditDetailSchemaName = (action) =>
+  `AuditDetail${action.split(/[._]/).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join('')}`
+
+const idArray = { type: 'array', items: uuid }
+const idsChangeSchema = {
+  type: ['object', 'null'],
+  required: ['added', 'removed'],
+  properties: {
+    added: { ...idArray, description: 'The ids that the update added.' },
+    removed: { ...idArray, description: 'The ids that the update removed.' },
+  },
+}
+
+/**
+ * The schema of one value of a detail, from its kind in AUDIT_DETAIL_ALLOW (server/audit.js explains the kinds). Every value can be
+ * null: a text that looks like a secret, or a value of the wrong kind, is shown as null.
+ * @param {any} kind
+ * @returns {Record<string, any>}
+ */
+function kindSchema(kind) {
+  const name = typeof kind === 'string' ? kind : kind.kind
+  switch (name) {
+    case 'text': return orNull(string)
+    case 'count': // a whole number, 0 or more
+    case 'integer': return orNull(integer)
+    case 'number': return orNull(number)
+    case 'boolean': return orNull(boolean)
+    case 'timestamp': return orNull(dateTime)
+    case 'uuids': return orNull(idArray)
+    case 'ids_change': return idsChangeSchema
+    case 'ids_or_change': return { anyOf: [orNull(idArray), idsChangeSchema] }
+    case 'enum': return { type: ['string', 'null'], enum: [...kind.values, null] }
+    case 'changes':
+      return {
+        type: ['object', 'null'],
+        properties: Object.fromEntries(
+          Object.entries(kind.fields).map(([field, fieldKind]) => [
+            field,
+            {
+              type: 'object',
+              description: `The field ${field}, before and after the update.`,
+              required: ['from', 'to'],
+              properties: {
+                from: { ...kindSchema(fieldKind), description: 'The value before the update (null: it was empty).' },
+                to: { ...kindSchema(fieldKind), description: 'The value after the update (null: it is empty now).' },
+              },
+            },
+          ]),
+        ),
+      }
+    default:
+      throw new Error(`${FILE}: the kind "${name}" in AUDIT_DETAIL_ALLOW (server/audit.js) is not one that this file can type.`)
+  }
+}
+
+/**
+ * The schema of the detail of every action that has a detail, by the name of the schema: an object whose keys are the keys that
+ * AUDIT_DETAIL_ALLOW allows for the action, all optional, each typed from its kind and described by schemaDoc.audit_actions. The
+ * actions and the keys of AUDIT_DETAIL_ALLOW and of schemaDoc must be the same, or the server does not start. An action whose detail is
+ * always null has no schema.
+ */
+function auditDetailSchemas() {
+  const described = schemaDoc.audit_actions
+  const problems = []
+  for (const action of Object.keys(AUDIT_DETAIL_ALLOW)) {
+    if (!Object.hasOwn(described, action)) problems.push(`the action "${action}" is in AUDIT_DETAIL_ALLOW but server/schemaDoc.js does not describe it (audit_actions)`)
+  }
+  for (const action of Object.keys(described)) {
+    if (!Object.hasOwn(AUDIT_DETAIL_ALLOW, action)) problems.push(`the action "${action}" is described in server/schemaDoc.js (audit_actions) but has no entry in AUDIT_DETAIL_ALLOW (server/audit.js)`)
+  }
+  for (const group of AUDIT_GROUPS) {
+    if (!Object.hasOwn(schemaDoc.audit_groups, group)) problems.push(`the group "${group}" is a value of the group filter but server/schemaDoc.js does not describe it (audit_groups)`)
+  }
+  for (const group of Object.keys(schemaDoc.audit_groups)) {
+    if (!AUDIT_GROUPS.includes(/** @type {any} */ (group))) problems.push(`the group "${group}" is described in server/schemaDoc.js (audit_groups) but is not a value of the group filter`)
+  }
+  /** @type {Record<string, object>} */
+  const schemas = {}
+  for (const [action, allow] of Object.entries(AUDIT_DETAIL_ALLOW)) {
+    const row = described[/** @type {keyof typeof described} */ (action)]
+    if (!row) continue // already in the problems
+    const keys = Object.keys(allow)
+    const texts = row.detail
+    for (const key of keys) if (!Object.hasOwn(texts, key)) problems.push(`the key "${key}" of ${action} is allowed in AUDIT_DETAIL_ALLOW but server/schemaDoc.js does not describe it`)
+    for (const key of Object.keys(texts)) if (!keys.includes(key)) problems.push(`the key "${key}" of ${action} is described in server/schemaDoc.js but is not allowed in AUDIT_DETAIL_ALLOW`)
+    if (!keys.length) continue
+    schemas[auditDetailSchemaName(action)] = {
+      type: 'object',
+      description: `The detail of ${action}: ${row.meaning} Every key is optional: an entry holds the keys that its action wrote, and no others.`,
+      properties: Object.fromEntries(keys.map((key) => [key, { ...kindSchema(/** @type {any} */ (allow)[key]), description: /** @type {any} */ (texts)[key] ?? '' }])),
+    }
+  }
+  if (problems.length) throw new Error(`${FILE}: the audit actions of server/audit.js and server/schemaDoc.js differ: ${problems.join('; ')}.`)
+  return schemas
+}
+
 function componentSchemas() {
+  const auditDetails = auditDetailSchemas()
   return {
     Health: plainObject(
       {
@@ -128,12 +238,25 @@ function componentSchemas() {
         is_demo: boolean,
         created_at: dateTime,
         last_scan_at: orNull(dateTime),
+        active_devices: integer,
+        waiting: integer,
+        oldest_waiting_at: orNull(dateTime),
+        outdated_devices: integer,
+        last_sync_at: orNull(dateTime),
+        not_accepted_total: integer,
+        overflow_total: integer,
       },
       schemaDoc.providers_fields,
     ),
     ProviderList: plainObject(
       { providers: { type: 'array', items: ref('schemas', 'Provider'), description: 'Every service provider, including inactive ones.' } },
       'The answer of the providers endpoint.',
+    ),
+
+    Building: describedObject('Building', { name: string, address: string }, schemaDoc.building_fields),
+    BuildingAnswer: plainObject(
+      { building: { ...ref('schemas', 'Building'), description: 'The name and the address of the building, as the committee typed them.' } },
+      'The answer of the building endpoint.',
     ),
 
     Scan: describedObject(
@@ -155,6 +278,10 @@ function componentSchemas() {
         flags: { type: 'array', items: oneOf(SCAN_FLAGS) },
         voided: boolean,
         void_reason: orNull(string),
+        voided_at: orNull(dateTime),
+        voided_by: orNull(string),
+        received_at: dateTime,
+        device_id: orNull(uuid),
       },
       { ...schemaDoc.time_fields, ...schemaDoc.scan_fields },
     ),
@@ -166,6 +293,61 @@ function componentSchemas() {
       },
       'One page of scans (the JSON answer; with format=csv the answer is CSV).',
     ),
+
+    Refusal: describedObject(
+      'Refusal',
+      {
+        id: integer,
+        at: dateTime,
+        scan_id: orNull(uuid),
+        source: oneOf(SCAN_SOURCES),
+        code: oneOf(SYNC_PERMANENT_ERROR_CODES),
+        provider_id: uuid,
+        provider_name: string,
+        point_id: orNull(uuid),
+        point_name: orNull(string),
+        client_time: orNull(dateTime),
+      },
+      schemaDoc.refusal_fields,
+    ),
+    RefusalList: plainObject(
+      {
+        refusals: { type: 'array', items: ref('schemas', 'Refusal'), description: 'One page of refused visits, newest first.' },
+        count: { type: 'integer', minimum: 0, description: 'The number of refusals in this page (not the total).' },
+        next_cursor: { ...orNull(string), description: 'Pass it as the cursor to get the next page. Null on the last page.' },
+      },
+      'One page of the visits that the server refused (they are not scans and never count as attendance). What each code means:\n' +
+        Object.entries(schemaDoc.refusal_codes).map(([code, meaning]) => `- ${code}: ${meaning}`).join('\n'),
+    ),
+
+    AuditEntry: describedObject(
+      'AuditEntry',
+      {
+        id: integer,
+        at: dateTime,
+        action: string,
+        entity: orNull(string),
+        entity_id: orNull(string),
+        entity_name: orNull(string),
+        actor_type: oneOf(AUDIT_ACTOR_TYPES),
+        actor_id: orNull(string),
+        actor_name: orNull(string),
+        actor_deleted: boolean,
+        detail: { anyOf: [{ type: 'null' }, ...Object.keys(auditDetails).map((name) => ref('schemas', name))] },
+      },
+      schemaDoc.audit_fields,
+    ),
+    AuditList: plainObject(
+      {
+        entries: { type: 'array', items: ref('schemas', 'AuditEntry'), description: 'One page of the audit log, newest first.' },
+        count: { type: 'integer', minimum: 0, description: 'The number of entries in this page (not the total).' },
+        next_cursor: { ...orNull(string), description: 'Pass it as the cursor to get the next page. Null on the last page.' },
+      },
+      'One page of the audit log of the committee: what the committee changed and who signed in, one entry for each. The log is append-only. ' +
+        'The detail of an entry is null or has the keys that its action allows (the schemas AuditDetail<Action>), never a secret. ' +
+        `What each action means:\n${Object.entries(schemaDoc.audit_actions).map(([action, row]) => `- ${action}: ${row.meaning}`).join('\n')}`,
+    ),
+    ...auditDetails,
 
     SchemaDocument: {
       type: 'object',
@@ -271,6 +453,96 @@ const PARAMETERS = {
   },
 }
 
+/**
+ * The parameters whose name is also a filter of another endpoint but whose meaning here is another one (a refused visit is not a scan,
+ * and its page is cut at its own size), by the id of the endpoint and then by name. A name that is not here is described by PARAMETERS.
+ * @type {Record<string, Record<string, { description: string, schema: object }>>}
+ */
+const ENDPOINT_PARAMETERS = {
+  listRefusals: {
+    from: {
+      description:
+        `The oldest refused visit to include, by the time at which the server refused it. A calendar day (YYYY-MM-DD) means that day in the building time zone (${TIMEZONE}). ` +
+        'An ISO 8601 date-time that carries Z or an offset is an exact moment. A date-time without Z or an offset is refused.',
+      schema: DAY_OR_MOMENT,
+    },
+    to: {
+      description:
+        `The newest refused visit to include, in the same two forms as from. A calendar day (YYYY-MM-DD) includes that whole day in ${TIMEZONE}.`,
+      schema: DAY_OR_MOMENT,
+    },
+    point_id: {
+      description: 'Only the visits refused at this service point. A deleted point keeps its refusals, and its id still works here. A refusal that named no point is matched by no point_id.',
+      schema: uuid,
+    },
+    provider_id: {
+      description: 'Only the refused visits of this service provider. A deleted provider keeps its refusals, and its id still works here.',
+      schema: uuid,
+    },
+    limit: {
+      description:
+        `The most refusals in one page. A bigger number is cut to ${MAX_REFUSAL_PAGE_SIZE}, not refused. Zero, a negative number or a value ` +
+        'that is not a whole number is refused.',
+      schema: { type: 'integer', minimum: 1, maximum: MAX_REFUSAL_PAGE_SIZE, default: DEFAULT_PAGE_SIZE },
+    },
+    cursor: {
+      description:
+        'The next_cursor of the previous page, to get the page after it. Keep every other parameter the same. A value that this endpoint ' +
+        'did not return is refused (the cursor of /scans is not one).',
+      schema: string,
+    },
+  },
+  listAudit: {
+    from: {
+      description:
+        `The oldest entry to include, by the time of the change. A calendar day (YYYY-MM-DD) means that day in the building time zone (${TIMEZONE}). ` +
+        'An ISO 8601 date-time that carries Z or an offset is an exact moment. A date-time without Z or an offset is refused.',
+      schema: DAY_OR_MOMENT,
+    },
+    to: {
+      description:
+        `The newest entry to include, in the same two forms as from. A calendar day (YYYY-MM-DD) includes that whole day in ${TIMEZONE}.`,
+      schema: DAY_OR_MOMENT,
+    },
+    group: {
+      description:
+        'Only the entries of one group: the part of the action before the dot (point.update is in point). What each group is:\n' +
+        Object.entries(schemaDoc.audit_groups).map(([name, meaning]) => `- ${name}: ${meaning}`).join('\n'),
+      schema: oneOf(AUDIT_GROUPS),
+    },
+    actor_id: {
+      description:
+        'Only the changes made by this committee member (the actor_id of an entry). The daily job and the commands of the owner have no id, ' +
+        'so no actor_id matches them: look for them by the actor_type of the entries.',
+      schema: uuid,
+    },
+    entity: {
+      description:
+        'Only the entries about this kind of thing: point, provider, admin (a committee member), api_key, scan or building. ' +
+        `Use it with entity_id for the history of one thing. ${TEXT_FILTER_NOTE}`,
+      schema: string,
+    },
+    entity_id: {
+      description:
+        'Only the entries about the thing with this id (the entity_id of an entry). A deleted point, provider, member, key or scan keeps ' +
+        `its entries, and its id still works here. ${TEXT_FILTER_NOTE}`,
+      schema: string,
+    },
+    limit: {
+      description:
+        `The most entries in one page. A larger number is cut to ${MAX_AUDIT_PAGE_SIZE}, not refused. Zero, a negative number or a value ` +
+        'that is not a whole number is refused.',
+      schema: { type: 'integer', minimum: 1, maximum: MAX_AUDIT_PAGE_SIZE, default: DEFAULT_PAGE_SIZE },
+    },
+    cursor: {
+      description:
+        'The next_cursor of the previous page, to get the page after it. Keep every other parameter the same. A value that this endpoint ' +
+        'did not return is refused (the cursor of /scans or of /refusals is not one).',
+      schema: string,
+    },
+  },
+}
+
 // ---------- the answers ----------
 
 const json = (/** @type {string} */ schema) => ({ 'application/json': { schema: ref('schemas', schema) } })
@@ -296,14 +568,17 @@ const ANSWERS = {
         schema: {
           type: 'string',
           description:
-            `A header line and then one scan per line, with these columns in this order: ${SCAN_CSV_COLUMNS.join(', ')}. The flags ` +
+            `A header line and then one scan per line, with these columns in this order: ${AGENT_SCAN_CSV_COLUMNS.join(', ')}. The flags ` +
             'are joined with ";", booleans are the text true or false, a null is an empty cell. There is no byte-order mark.',
         },
       },
     },
   },
+  listRefusals: { description: 'A page of the visits that the server refused.', content: json('RefusalList') },
+  listAudit: { description: 'A page of the audit log of the committee.', content: json('AuditList') },
   listPoints: { description: 'Every service point.', content: json('PointList') },
   listProviders: { description: 'Every service provider.', content: json('ProviderList') },
+  getBuilding: { description: 'The name and the address of the building.', content: json('BuildingAnswer') },
   getSchema: { description: 'The contract of this API.', content: json('SchemaDocument') },
   getOpenApi: { description: 'This document.', content: json('OpenApiDocument') },
   getHealth: { description: 'The API is alive.', content: json('Health') },
@@ -365,7 +640,7 @@ function buildPaths(/** @type {Record<number, object>} */ attached) {
   for (const endpoint of AGENT_ENDPOINTS) {
     if (!endpoint.path.startsWith(`${BASE_PATH}/`)) throw new Error(`${FILE}: the path ${endpoint.path} of ${endpoint.id} is not under ${BASE_PATH}.`)
     const parameters = endpoint.filters.map((name) => {
-      const parameter = PARAMETERS[name]
+      const parameter = ENDPOINT_PARAMETERS[endpoint.id]?.[name] ?? PARAMETERS[name]
       if (!parameter) throw new Error(`${FILE}: the filter "${name}" of ${endpoint.id} has no description in PARAMETERS: add it.`)
       return { name, in: 'query', description: parameter.description, schema: parameter.schema }
     })

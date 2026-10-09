@@ -13,8 +13,10 @@
 //
 // The text of a row is what an agent reads in /schema. Every number it quotes from server/config.js is written from the constant
 // (never typed), as in server/schemaDoc.js: tests/agent-docs.test.js reads this file for typed numbers too.
-import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH } from './config.js'
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_REFUSAL_PAGE_SIZE, MAX_AUDIT_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH } from './config.js'
 import { SCAN_FILTERS } from './scans.js'
+import { REFUSAL_FILTERS } from './scanRefusals.js'
+import { AUDIT_FILTERS, AUDIT_GROUPS } from './auditRead.js'
 
 /**
  * One endpoint of the agent API.
@@ -58,6 +60,23 @@ export const AGENT_ENDPOINTS = Object.freeze([
       '(absent on the last page). CSV: flags are joined with ";", booleans are the text true/false, null is an empty cell.',
   }),
   row({
+    id: 'listRefusals',
+    summary: 'List the visits that were not counted',
+    method: 'GET',
+    path: '/agent/v1/refusals',
+    filters: [...REFUSAL_FILTERS],
+    envelope: ['refusals', 'count', 'next_cursor'],
+    description:
+      'Query: from, to (YYYY-MM-DD = a calendar day in Israel time, or an ISO date-time that carries Z or an offset; they bound the ' +
+      'time at which the server refused the visit), point_id, provider_id (uuids), ' +
+      `limit (default ${DEFAULT_PAGE_SIZE}, at most ${MAX_REFUSAL_PAGE_SIZE}: a bigger number is cut to ${MAX_REFUSAL_PAGE_SIZE}, not refused), ` +
+      'cursor (from next_cursor). ' +
+      'Returns { refusals, count, next_cursor }: the visits that the server turned away for good, newest first. A refusal is not a ' +
+      'scan and never counts as attendance, and it is not a scan with an outcome of rejected_far or rejected_no_location (those are ' +
+      'in /scans): it is a visit that did not become a scan at all. count is the number of refusals in this page (not the total), ' +
+      'next_cursor is null on the last page. See refusal_fields and refusal_codes.',
+  }),
+  row({
     id: 'listPoints',
     summary: 'List service points',
     method: 'GET',
@@ -74,7 +93,40 @@ export const AGENT_ENDPOINTS = Object.freeze([
     filters: [],
     envelope: ['providers'],
     description:
-      'Returns { providers } with every service provider, including inactive ones, with last_scan_at. See providers_fields.',
+      'Returns { providers } with every service provider, including inactive ones, with last_scan_at and the health of the ' +
+      "provider's phones as numbers over all of them (never a row per phone). See providers_fields.",
+  }),
+  row({
+    id: 'getBuilding',
+    summary: 'Read the building',
+    method: 'GET',
+    path: '/agent/v1/building',
+    filters: [],
+    envelope: ['building'],
+    description:
+      'Returns { building } with the name and the address of the building, as the committee typed them. A text the committee has ' +
+      'not set is an empty string. See building_fields.',
+  }),
+  row({
+    id: 'listAudit',
+    summary: 'List the audit log',
+    method: 'GET',
+    path: '/agent/v1/audit',
+    filters: [...AUDIT_FILTERS],
+    envelope: ['entries', 'count', 'next_cursor'],
+    description:
+      'Query: from, to (YYYY-MM-DD = a calendar day in Israel time, or an ISO date-time that carries Z or an offset; they bound the ' +
+      'time of the entry), ' +
+      `group (${AUDIT_GROUPS.join('|')}: the part of the action before the dot), ` +
+      'actor_id (a uuid: the committee member who did it), ' +
+      `entity, entity_id (both text, cut to ${FILTER_TEXT_MAX_LENGTH} characters: what the entry is about, for example entity=point with the id of a point), ` +
+      `limit (default ${DEFAULT_PAGE_SIZE}, up to ${MAX_AUDIT_PAGE_SIZE} entries: more than that is cut to ${MAX_AUDIT_PAGE_SIZE}, not refused), ` +
+      'cursor (from next_cursor). ' +
+      'Returns { entries, count, next_cursor }: the audit log of the committee, newest first. An entry is one change that the committee ' +
+      '(or the daily job, or a command of the owner) made, or one sign-in or sign-out of a committee member, with who did it, what it was ' +
+      'about and a detail. The log is append-only: an entry is never changed or deleted, so a correction is a new entry. count is the ' +
+      'number of entries in this page (not the total), next_cursor is null on the last page. A detail holds only the keys that audit_actions ' +
+      'lists for its action, and never a secret. See audit_fields, audit_actions, audit_groups and audit_detail.',
   }),
   row({
     id: 'getSchema',
