@@ -4,6 +4,7 @@ import { toCsv } from '../http.js'
 import { requireApiKey } from '../auth.js'
 import { listAgentScans, AGENT_SCAN_CSV_COLUMNS, toLocal } from '../scans.js'
 import { listAgentRefusals } from '../scanRefusals.js'
+import { listAgentAudit } from '../auditRead.js'
 import { readBuilding } from '../building.js'
 import { PHONE_HEALTH_LATERAL } from '../deviceStatus.js'
 import { commit } from '../health.js'
@@ -102,8 +103,21 @@ async function listRefusalsHandler({ req, query: q }) {
   return { refusals, count: refusals.length, next_cursor }
 }
 
+// The audit log of the committee (owner decision of 08/10/2026: the agent is the committee's analyst, AGENTS.md "Safety"). The filters,
+// the validation, the paging and the cursor are the committee's own (server/auditRead.js reads them once for both). The entry is written
+// field by field there, and its detail goes out only through the allow-list of its action (AUDIT_DETAIL_ALLOW in server/audit.js) with a
+// text that looks like a secret turned into null: never the first characters of a key, a token, a hash, a phone's label or an address.
+async function listAuditHandler({ req, query: q }) {
+  await requireApiKey(req)
+  const { entries, next_cursor } = await listAgentAudit(q)
+  return { entries, count: entries.length, next_cursor }
+}
+
 /** The handler of every endpoint of the registry, by its id. */
-const HANDLERS = { getBuilding, getHealth, getOpenApi, getSchema, listPoints, listProviders, listRefusals: listRefusalsHandler, listScans: listScansHandler }
+const HANDLERS = {
+  getBuilding, getHealth, getOpenApi, getSchema, listAudit: listAuditHandler, listPoints, listProviders, listRefusals: listRefusalsHandler,
+  listScans: listScansHandler,
+}
 
 const registered = new Set(AGENT_ENDPOINTS.map((endpoint) => endpoint.id))
 for (const id of Object.keys(HANDLERS)) {

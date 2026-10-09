@@ -20,6 +20,7 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 |---|---|
 | `GET /scans` | Scan records, newest first. Filters below. |
 | `GET /refusals` | The visits that the server refused and did not count, newest first. They are not scans. Filters below. |
+| `GET /audit` | The audit log of the committee: what it changed and who signed in, newest first. Append-only. Filters below. |
 | `GET /points` | Every service point, including inactive ones, with assigned providers. |
 | `GET /providers` | Every provider, including inactive and demo ones, with `last_scan_at` and the health of the provider's phones as numbers. |
 | `GET /building` | The name and the address of the building. |
@@ -33,6 +34,7 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 |---|---|
 | `GET /scans` | `{ scans, count, next_cursor }`. `count` is the number of scans in this page, not the total. `next_cursor` is `null` on the last page. |
 | `GET /refusals` | `{ refusals, count, next_cursor }`. `count` is the number of refusals in this page, not the total. `next_cursor` is `null` on the last page. |
+| `GET /audit` | `{ entries, count, next_cursor }`. `count` is the number of entries in this page, not the total. `next_cursor` is `null` on the last page. |
 | `GET /points` | `{ points }` |
 | `GET /providers` | `{ providers }` |
 | `GET /building` | `{ building }`, an object with the `name` and the `address` |
@@ -83,10 +85,30 @@ How they really behave:
 Paging: the response has `next_cursor`; pass it back as `cursor`, with the other filters unchanged. A cursor of `GET /scans` is not
 one of this list.
 
+### `GET /audit` filters
+
+`from`, `to` (`YYYY-MM-DD` = Israel calendar day, or a full ISO date-time that carries `Z` or an offset such as `+03:00`; they bound
+the time of the entry), `group` (one of `admin`, `building`, `point`, `provider`, `scan`, `api_key`, `retention`, `session`),
+`actor_id` (a uuid), `entity`, `entity_id` (text, cut to 60 characters), `limit` (default 100, up to 200 entries), `cursor`.
+
+How they really behave:
+
+- They are the filters of the committee's own audit log, with the same checks and the same errors as `GET /scans`
+  (`400 invalid_filter` with `field`, `400 invalid_cursor`). A date-time without `Z` or an offset is refused.
+- `group` must be one of the values above, in lower case: anything else is `400 invalid_filter`. `actor_id` must be an id. The daily
+  job and the owner's commands have no id, so no `actor_id` matches them.
+- `entity` with `entity_id` is the history of one thing (for example `entity=point` and the id of a point). A deleted thing keeps its
+  entries, and its id still works. An `entity` or `entity_id` that matches nothing is an empty page, not an error.
+- A `limit` over 200 entries is cut to 200, not refused. Zero, negative or not a whole number is `400 invalid_filter`.
+- There is no `order` or `format`: the answer is always JSON, newest first.
+
+Paging: the response has `next_cursor`; pass it back as `cursor`, with the other filters unchanged. A cursor of `GET /scans` or of
+`GET /refusals` is not one of this list.
+
 ### OpenAPI
 
 `GET /openapi.json` answers one OpenAPI 3.1 document (JSON). It lists every endpoint of this page with its parameters (types, formats,
-allowed values and limits), the shape of every answer (the JSON of a scan, a refused visit, a point, a provider and the building, the CSV variant of `GET /scans`
+allowed values and limits), the shape of every answer (the JSON of a scan, a refused visit, an entry of the audit log with the keys that the detail of each action may hold, a point, a provider and the building, the CSV variant of `GET /scans`
 and its `X-Next-Cursor` header), the errors of the table under "Errors", and the Bearer key. It needs the key like every other endpoint.
 Give it to a tool that imports OpenAPI (an agent platform, a client generator). It is built from the same list of endpoints as
 `GET /schema`, so the two name the same endpoints; the prose (what a field, a flag or a rule means) stays in `GET /schema`, which
@@ -251,9 +273,116 @@ committee app. Nothing else about the building is there (not who saved it or whe
 | `name` | The name of the building, as the committee typed it, or an empty string when none was set |
 | `address` | The address of the building, as the committee typed it, or an empty string when none was set |
 
+## The audit log
+
+`GET /audit` lists what the committee changed, one entry for each change, and the sign-ins and sign-outs of the committee members,
+newest first. It is the committee's own log, the one that its app shows on the Committee screen. Use it to explain a change in the
+data: a point that was switched off, a scan that was voided, the phones of a provider that were signed out. It is not attendance and
+not a scan.
+
+- **The log is append-only.** The database refuses to change or delete an entry, so a correction is a new entry, and an entry that
+  you read once is the same later.
+- An entry says who did it (`actor_type`, `actor_id`, `actor_name`), what it is about (`entity`, `entity_id` and the **current** name,
+  `entity_name`) and, in `detail`, what happened. The thing may be gone since: a deleted point, provider, member, key or scan keeps its
+  entries, with `entity_name` null, and the detail of its delete holds what it was called.
+- The daily clean-up job writes one entry a day (`retention.run`, counts only, `actor_type` `system`). A member that the owner added
+  with a command is `admin.add` or `admin.enable` with `actor_type` `script`.
+
+```json
+{
+  "id": 1042,
+  "at": "2026-09-30T06:21:07.512Z",
+  "action": "point.update",
+  "entity": "point",
+  "entity_id": "uuid",
+  "entity_name": "Roof",
+  "actor_type": "admin",
+  "actor_id": "uuid",
+  "actor_name": "Dana Levi",
+  "actor_deleted": false,
+  "detail": { "changes": { "is_active": { "from": true, "to": false } } }
+}
+```
+
+An entry (`/audit`):
+
+| Key | Meaning |
+|---|---|
+| `id` | A whole number that identifies the entry. It is not the id of anything the entry is about |
+| `at` | UTC ISO time at which the change was made (the server's clock). The list is in this order, newest first |
+| `action` | What was done, as `<group>.<verb>`: one of the actions below. An entry of a newer version can carry an action that is not listed here, and its detail is then null |
+| `entity` | What the entry is about: `point`, `provider`, `admin` (a committee member), `api_key`, `scan` or `building`, or null for `retention.run` |
+| `entity_id` | uuid of the thing the entry is about, as text, or null when there is none (the building, the daily job) |
+| `entity_name` | The current name of the point, provider (the company, and the contact when there is one), committee member (the name, or the e-mail) or agent key. Null for any other entity, and when that thing no longer exists |
+| `actor_type` | `admin` (a committee member), `system` (the daily job, and the first member of a deployment, added by the system) or `script` (a command that the owner ran) |
+| `actor_id` | uuid of the committee member, or null for the system and for a command. Use it as the `actor_id` filter |
+| `actor_name` | The name of the member as it was when they made the change (their e-mail when they had no name), or, for an older entry without one, their current name or e-mail. Null for the system and for a command |
+| `actor_deleted` | true when the actor is a member who is no longer on the committee list (`actor_name` is still what they were called) |
+| `detail` | Null, or an object with only the keys that the action below lists |
+
+The `group` filter takes one of these, the part of the action before the dot:
+
+| `group` | Meaning |
+|---|---|
+| `admin` | The committee list: a member was added, switched on, switched off or deleted |
+| `building` | The building's name or address was saved with a new value |
+| `point` | A service point was created, changed, had its QR code replaced, or was deleted |
+| `provider` | A service provider was created, changed, had its phones signed out, or was deleted |
+| `scan` | A committee member voided a scan, restored a voided one, or deleted one for good |
+| `api_key` | An agent key was created, revoked or deleted |
+| `retention` | The daily clean-up job ran (counts only) |
+| `session` | A committee member signed in or out |
+
+The `action` of an entry, the `entity` it is about, and the only keys that its `detail` may hold:
+
+| `action` | `entity` | Meaning | Keys of the `detail` |
+|---|---|---|---|
+| `admin.add` | `admin` | A member was added to the committee list | `email` |
+| `admin.enable` | `admin` | A member who was switched off was switched on again | `email`, `changes` |
+| `admin.disable` | `admin` | A member was switched off: they cannot sign in, and their open sessions were ended | `changes` |
+| `admin.delete` | `admin` | A member was removed from the committee list for good | `email`, `name` |
+| `session.sign_in` | `admin` | A committee member signed in (the entity is that member) | `method` |
+| `session.sign_out` | `admin` | A committee member signed out (the detail is always null) | none |
+| `building.update` | `building` | The building's address or name was saved with a new value | `changes` |
+| `point.create` | `point` | A service point was created | `name`, `description`, `service_type`, `gps_mode`, `lat`, `lng`, `radius_m`, `is_active`, `provider_ids` |
+| `point.update` | `point` | A service point was changed, or the list of providers who may scan there was | `changes`, `provider_ids`, and (older entries) `name`, `description`, `service_type`, `gps_mode`, `lat`, `lng`, `radius_m`, `is_active` |
+| `point.delete` | `point` | A service point was deleted; its scans stay | `name`, `scans_kept` |
+| `point.regenerate_qr` | `point` | The QR code of a point was replaced (the code is never recorded; the detail is always null) | none |
+| `provider.create` | `provider` | A service provider was created | `company` |
+| `provider.update` | `provider` | A service provider was changed, or its password was replaced | `changes`, `password_changed`, and (older entries) `company`, `contact_name`, `service_type`, `is_active`, `is_demo` |
+| `provider.delete` | `provider` | A service provider was deleted; its scans stay | `company`, `contact_name`, `scans_kept` |
+| `provider.revoke_devices` | `provider` | All the phones of a provider were signed out | `devices` |
+| `scan.void` | `scan` | A committee member voided a scan | `reason` |
+| `scan.unvoid` | `scan` | A committee member restored a voided scan | `previous_reason` |
+| `scan.delete` | `scan` | A committee member deleted a scan for good (the entry keeps a copy of its main fields) | `point_name`, `provider_name`, `checked_in_at`, `outcome`, `voided` |
+| `api_key.create` | `api_key` | An agent key was created (the key itself is never recorded) | `name` |
+| `api_key.revoke` | `api_key` | An agent key was revoked (the detail is always null) | none |
+| `api_key.delete` | `api_key` | An agent key was deleted for good | `name`, `was_revoked` |
+| `retention.run` | none | The daily clean-up job ran: the number of rows it deleted of each kind | `sessions`, `login_attempts`, `device_labels`, `app_errors`, `alert_pings`, `api_key_usage` |
+
+### What a detail holds
+
+A `detail` is null or an object, and its keys depend on the `action`: the table above lists the only keys that each action may have,
+and `GET /schema` says what each one means (`audit_actions`). The server shows a detail through that list, not as it was stored, so a
+key that is not in the table is never there, whatever the log holds.
+
+- `changes` is what an update changed: `{ "<field>": { "from": ..., "to": ... } }` for each field that really changed, and only for
+  those (null is an empty value). `provider_ids` of `point.update` is `{ "added": [...], "removed": [...] }`, two lists of provider
+  ids, and only when the list changed. An update written before 05/10/2026 holds the fields that were sent, flat, and the whole
+  list of `provider_ids`.
+- A text in a detail that looks like a key, a hash, a token or an id, or that has a word like that in it, is null, and so is a value
+  that is not of the kind of its key.
+- An action that is not in the table (an entry of a newer version) has no detail, and neither has an entry whose stored detail holds
+  none of the listed keys: the `detail` is null.
+- A detail never holds a key (not even its first characters, which the log keeps for a deleted key), a token, a hash, a password, a QR
+  code, the label or the browser of a phone, a network address, or the position of a person. It does hold what the committee typed
+  and sees in its app: names, the e-mail addresses of committee members, the reason typed for a voided scan, the building's address
+  and name.
+
 ## How to read it
 
 - `outcome: accepted` is a real check-in. Every other outcome (`rejected_*`) is a refused attempt, kept for the record (see "Outcomes and sources").
+- The data can change because the committee changed it: a point switched off, a scan voided or deleted, the phones of a provider signed out. The audit log (`/audit`) says who did it and when, and it is not attendance (see "The audit log").
 - A visit can also be missing from `/scans` because the server refused it before it became a scan. Those are in `/refusals`, never
   counted as attendance (see "A refused visit"). A visit that waits on a phone is in neither list yet.
 - **Flags are signals, not verdicts.** Report them, weigh them, but do not treat one as proof of anything:
@@ -293,7 +422,7 @@ Right after the key, and before anything else about the request, the limit of th
 | `401 api_key_required` | No key, or the header is not a `Bearer qrk_…` key |
 | `401 api_key_invalid` | The key is unknown or revoked |
 | `429 rate_limited` | The key has used up a limit: 60 requests in the current minute, or 2000 in the building's day. `window` says which one, and `retry_after_s` (and the `Retry-After` header) how long to wait. Only a valid key gets this answer |
-| `400 invalid_filter` | A bad `from`, `to`, `point_id`, `provider_id`, `outcome`, `order` or `limit` (`field` names it) |
+| `400 invalid_filter` | A bad `from`, `to`, `point_id`, `provider_id`, `group`, `actor_id`, `outcome`, `order` or `limit` (`field` names it) |
 | `400 invalid_cursor` | The `cursor` is not one that this API returned |
 | `400 invalid_input` | The database refused a value as out of range or malformed |
 | `400 invalid_json` | The request carries a body that is not valid JSON (these endpoints read no body: send none). Only a valid key gets this answer; without one it is the `401` |
