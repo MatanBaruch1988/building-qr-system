@@ -42,10 +42,10 @@ describe('performCheckIn', () => {
     expect(t.apiFn.mock.calls[0][1].body.gps).toBeNull()
   })
 
-  it("asks for a fresh position (no remembered one) only on points that 'require' location", async () => {
+  it("waits for a precise position (never a remembered one) only on points that 'require' location", async () => {
     const t = setup({ apiImpl: async () => scanRes() })
     await t.run({ gps_mode: 'required' })
-    expect(t.getFix).toHaveBeenLastCalledWith({ maxAgeMs: 0 })
+    expect(t.getFix).toHaveBeenLastCalledWith({ precise: true })
     await t.run({ gps_mode: 'optional' })
     expect(t.getFix).toHaveBeenLastCalledWith(undefined) // the default (a position up to 5 minutes old is fine)
   })
