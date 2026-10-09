@@ -7,7 +7,9 @@ like before installing anything. Both apps are in Hebrew, in the light theme (on
 invented providers, four points on an invented position, and sixteen visits that `scripts/screenshots/seed-history.mjs`
 adds). No real name, address, phone number or coordinate is in them, and none may be: look at every picture before you
 commit it. The dates and times in them are relative to the day that they were taken: the visits are one to five days old, and
-the check-in of the provider app is made at the moment of the run.
+the check-in of the provider app is made at the moment of the run. Every point in them checks the location, as the committee
+app saves points: `seed-history.mjs` sets that in the run's own schema, while the sample seed keeps the older modes that the
+end-to-end tests use.
 
 | Image | What it shows |
 |---|---|
