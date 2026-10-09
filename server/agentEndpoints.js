@@ -2,9 +2,11 @@
 //   - server/routes/agent.js registers the routes from it (a handler without a row here, or a row without a handler, stops the
 //     server from starting), so the router and this list cannot disagree;
 //   - server/schemaDoc.js builds the `endpoints` part of GET /api/agent/v1/schema from it (key and text);
+//   - server/agentOpenApi.js builds the OpenAPI document that GET /api/agent/v1/openapi.json serves from it (the paths, the
+//     operationIds, the query parameters from the filters), so an endpoint that is a row here is in that document too;
 //   - tests/agent-docs.test.js reads it as a table: for every row it compares the route, the envelope and the filters with
 //     schemaDoc and docs/agent-api.md, so a new endpoint is one more row here (and its handler), and the test checks its
-//     documents.
+//     documents. tests/agent-openapi.test.js does the same for the OpenAPI document.
 //
 // The order of the rows is the order in which /schema lists the endpoints: it is part of what an agent reads, so a row is added
 // where the documents should show it, and the existing rows keep their place.
@@ -18,6 +20,7 @@ import { SCAN_FILTERS } from './scans.js'
  * One endpoint of the agent API.
  * @typedef {object} AgentEndpoint
  * @property {string} id  a short name that is also usable as an OpenAPI operationId (`listScans`): letters and digits, unique
+ * @property {string} [summary]  a short title for the OpenAPI document ("List scans"); left out, it is the id spelled out
  * @property {'GET'} method  everything in this API is read-only
  * @property {string} path  the route pattern exactly as server/router.js registers it, under /agent/v1 (no /api in front)
  * @property {readonly string[]} filters  every parameter that the endpoint reads from the query, in the order the documents
@@ -37,6 +40,7 @@ const row = (e) => Object.freeze({ ...e, filters: Object.freeze([...e.filters]),
 export const AGENT_ENDPOINTS = Object.freeze([
   row({
     id: 'listScans',
+    summary: 'List scans',
     method: 'GET',
     path: '/agent/v1/scans',
     filters: [...SCAN_FILTERS, 'format'], // `format` is read by the route itself (server/routes/agent.js), the others by listScans
@@ -55,6 +59,7 @@ export const AGENT_ENDPOINTS = Object.freeze([
   }),
   row({
     id: 'listPoints',
+    summary: 'List service points',
     method: 'GET',
     path: '/agent/v1/points',
     filters: [],
@@ -63,6 +68,7 @@ export const AGENT_ENDPOINTS = Object.freeze([
   }),
   row({
     id: 'listProviders',
+    summary: 'List service providers',
     method: 'GET',
     path: '/agent/v1/providers',
     filters: [],
@@ -72,6 +78,7 @@ export const AGENT_ENDPOINTS = Object.freeze([
   }),
   row({
     id: 'getSchema',
+    summary: 'Read the contract of this API',
     method: 'GET',
     path: '/agent/v1/schema',
     filters: [],
@@ -79,7 +86,19 @@ export const AGENT_ENDPOINTS = Object.freeze([
     description: 'This document.',
   }),
   row({
+    id: 'getOpenApi',
+    summary: 'Read the OpenAPI description of this API',
+    method: 'GET',
+    path: '/agent/v1/openapi.json',
+    filters: [],
+    envelope: null,
+    description:
+      'The OpenAPI 3.1 description of this API, for tools that read OpenAPI: every endpoint with its parameters, the shape of ' +
+      'every answer, the errors and the Bearer key. It is built from the same list of endpoints as this document.',
+  }),
+  row({
     id: 'getHealth',
+    summary: 'Check that the API is alive',
     method: 'GET',
     path: '/agent/v1/health',
     filters: [],

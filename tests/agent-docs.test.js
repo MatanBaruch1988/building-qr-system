@@ -445,7 +445,9 @@ describe('endpoints: the routes = the registry = schemaDoc = the md table', () =
       ids.add(e.id)
       keys.add(key)
       if (e.method !== 'GET') problems.push(`${WHERE.registry}: ${key} is a ${e.method}, but the agent API is read-only: only GET.`)
-      if (!/^\/agent\/v1\/[a-z_]+$/.test(e.path)) problems.push(`${WHERE.registry}: the path "${e.path}" of ${e.id} is not "/agent/v1/<name>" as the router registers it (no /api in front).`)
+      // A name in lower case (with underscores); the one file name in the list is the OpenAPI document, "openapi.json".
+      if (!/^\/agent\/v1\/[a-z_]+(\.json)?$/.test(e.path)) problems.push(`${WHERE.registry}: the path "${e.path}" of ${e.id} is not "/agent/v1/<name>" (or "<name>.json") as the router registers it (no /api in front).`)
+      if (e.summary !== undefined && (typeof e.summary !== 'string' || !e.summary.trim() || /\n/.test(e.summary))) problems.push(`${WHERE.registry}: the summary of ${key} must be one line of text (it is the title of the operation in the OpenAPI document), or be left out.`)
       if (!Array.isArray(e.filters) || !e.filters.every((f) => typeof f === 'string' && f) || !unique(e.filters)) problems.push(`${WHERE.registry}: the filters of ${key} must be a list of different names.`)
       if (e.envelope !== null && (!Array.isArray(e.envelope) || !e.envelope.length || !e.envelope.every((k) => typeof k === 'string' && k) || !unique(e.envelope))) {
         problems.push(`${WHERE.registry}: the envelope of ${key} must be null or a list of different top-level keys.`)
