@@ -473,7 +473,8 @@ describe('the route table', () => {
     expect(keys.filter((k, i) => keys.indexOf(k) !== i), 'registered twice').toEqual([])
     for (const r of ROUTES) {
       expect(r.method, keyOf(r)).toMatch(/^(GET|POST|PUT|PATCH|DELETE)$/)
-      expect(r.path, keyOf(r)).toMatch(/^\/[A-Za-z0-9_\-/:]*$/)
+      // A dot is allowed for a file name in a path (GET /agent/v1/openapi.json); nothing else was added to the form.
+      expect(r.path, keyOf(r)).toMatch(/^\/[A-Za-z0-9_\-/:.]*$/)
     }
   })
 })
