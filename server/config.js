@@ -199,3 +199,10 @@ export const MAX_AUDIT_PAGE_SIZE = 200
 
 // The text filters of the scan listing (service_type, flag) are cut to this many characters before they are compared.
 export const FILTER_TEXT_MAX_LENGTH = 60
+
+// The counts of the visits (GET /api/agent/v1/counts, server/scanCounts.js). Two bounds that keep one answer small and the statement
+// short: `from` and `to` may be at most COUNTS_MAX_DAYS days apart (a year, leap year included), and an answer may hold at most
+// COUNTS_MAX_ROWS rows (a year of days by providers, points and services is far below it). Past either, the answer is a 400
+// invalid_filter that says what to narrow, never a cut answer: a count that is silently cut would not add up to the visits.
+export const COUNTS_MAX_DAYS = 366
+export const COUNTS_MAX_ROWS = 10_000

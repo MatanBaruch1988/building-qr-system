@@ -3,6 +3,7 @@ import { query } from '../db.js'
 import { toCsv } from '../http.js'
 import { requireApiKey } from '../auth.js'
 import { listAgentScans, AGENT_SCAN_CSV_COLUMNS, toLocal } from '../scans.js'
+import { listAgentCounts } from '../scanCounts.js'
 import { listAgentRefusals } from '../scanRefusals.js'
 import { listAgentAudit } from '../auditRead.js'
 import { readBuilding } from '../building.js'
@@ -94,6 +95,14 @@ async function listScansHandler({ req, query: q }) {
   return { scans, count: scans.length, next_cursor }
 }
 
+// How many visits there are, per day, provider, point or service (the committee's analyst should not count thousands of rows itself).
+// The filters are scanWhere's, the very function of GET /scans, so the counts add up to the scans of the same filters; `from` and `to` are
+// required and bounded, and so is the answer (server/scanCounts.js). One statement that groups; the answer is built field by field there.
+async function countScansHandler({ req, query: q }) {
+  await requireApiKey(req)
+  return listAgentCounts(q)
+}
+
 // The visits that the server refused (a point that was switched off, a person who is not assigned, a code that names nothing, ...):
 // not scans, never attendance. The filters, the validation and the paging are the committee's own (server/scanRefusals.js reads
 // them once for both), and the answer is built field by field there: no phone, no QR code, no position.
@@ -115,8 +124,8 @@ async function listAuditHandler({ req, query: q }) {
 
 /** The handler of every endpoint of the registry, by its id. */
 const HANDLERS = {
-  getBuilding, getHealth, getOpenApi, getSchema, listAudit: listAuditHandler, listPoints, listProviders, listRefusals: listRefusalsHandler,
-  listScans: listScansHandler,
+  countScans: countScansHandler, getBuilding, getHealth, getOpenApi, getSchema, listAudit: listAuditHandler, listPoints, listProviders,
+  listRefusals: listRefusalsHandler, listScans: listScansHandler,
 }
 
 const registered = new Set(AGENT_ENDPOINTS.map((endpoint) => endpoint.id))

@@ -1,13 +1,14 @@
 # Attendance data for an AI agent (read-only API)
 
 Building attendance log: one row per QR scan by a service provider (cleaning company, gardener).
-The app records facts and signals only. It never analyses, scores or judges: that is your job.
+The app records facts and signals only. It never analyses, scores or judges: that is your job. A count of those facts (how many
+visits per day, provider, point or service) is a fact too, and `GET /counts` gives it.
 
 - **Base URL:** `https://<your-domain>/api/agent/v1` (the committee sees the exact address in the admin screen, in the Agent tab ("אייג׳נט"))
 - **Auth:** `Authorization: Bearer qrk_…`, a key the committee creates and can revoke at any time. Read-only.
 - **Limits:** one key may make at most 60 requests in a minute and at most 2000 in a building day. Over a limit the answer is a
   `429 rate_limited` with a `Retry-After` header (see "Errors"). Ask for fewer, larger pages (`limit=500` and the cursor)
-  rather than many small requests.
+  rather than many small requests, and to count visits ask `GET /counts` instead of paging through the scans.
 - **Self-description:** `GET /schema` returns this contract as JSON. Read it first. `GET /openapi.json` returns the same API as an
   OpenAPI 3.1 document, for tools that read OpenAPI (see "OpenAPI" below).
 - **Ready-made system prompt for the committee's agent:** [`agent-prompt.md`](agent-prompt.md).
@@ -19,6 +20,7 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 | Endpoint | What it returns |
 |---|---|
 | `GET /scans` | Scan records, newest first. Filters below. |
+| `GET /counts` | How many visits there are, per day, provider, point or kind of service (or in all). The filters of `GET /scans`, with `from` and `to` required. Filters below. |
 | `GET /refusals` | The visits that the server refused and did not count, newest first. They are not scans. Filters below. |
 | `GET /audit` | The audit log of the committee: what it changed and who signed in, newest first. Append-only. Filters below. |
 | `GET /points` | Every service point, including inactive ones, with assigned providers. |
@@ -33,6 +35,7 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 | Endpoint | Top level of the JSON answer |
 |---|---|
 | `GET /scans` | `{ scans, count, next_cursor }`. `count` is the number of scans in this page, not the total. `next_cursor` is `null` on the last page. |
+| `GET /counts` | `{ group_by, counts, total }`. `group_by` is the grouping that was asked for, `counts` the rows, `total` their sum. There is no paging: the whole answer is in one response. |
 | `GET /refusals` | `{ refusals, count, next_cursor }`. `count` is the number of refusals in this page, not the total. `next_cursor` is `null` on the last page. |
 | `GET /audit` | `{ entries, count, next_cursor }`. `count` is the number of entries in this page, not the total. `next_cursor` is `null` on the last page. |
 | `GET /points` | `{ points }` |
@@ -67,6 +70,28 @@ The same columns as a scan row, in the same order, with a header line and no byt
 curl -H "Authorization: Bearer $KEY" \
   "https://<your-domain>/api/agent/v1/scans?from=2026-09-01&to=2026-09-30&limit=500"
 ```
+
+### `GET /counts` filters
+
+`from`, `to` (both required: `YYYY-MM-DD` = Israel calendar day, or a full ISO date-time that carries `Z` or an offset such as
+`+03:00`; the range covers at most 366 days), `group_by` (a comma list of `day`, `provider`, `point`, `service_type`), `point_id`,
+`provider_id` (uuids), `service_type`, `flag`, `outcome` (`accepted` default | `rejected` | `all`), `include_voided`, `include_demo`.
+
+How they really behave:
+
+- They are the filters of `GET /scans`, read by the very same code: a `from`, a `to`, a `point_id`, an `outcome` and the rest mean what they
+  mean there, the defaults are the same (accepted visits only, voided scans and the demo account hidden), and so are the errors
+  (`400 invalid_filter` with `field`). A date-time without `Z` or an offset is refused. The `order`, `limit`, `cursor` and `format` of
+  `GET /scans` do not exist here and are ignored: the answer is always JSON and always whole.
+- `from` and `to` are required. A missing one is `400 invalid_filter` (`field` names it), and so is a range that covers more than 366
+  days (`field` is `to`). A day counts as the whole day: `2026-01-01` to `2026-12-31` is 365 days. A `to` before the `from` is an empty
+  range, not an error. For a longer period, ask for several ranges and add the totals.
+- `group_by` is a comma list of `day`, `provider`, `point` and `service_type`, each at most once, in any order (the answer writes its
+  rows in the fixed order day, provider, point, service type, and `group_by` of the answer says it). Empty or absent is no grouping: one
+  row, the total. A value that is not in the list, an empty item, a repeat or a different case is `400 invalid_filter` (`field` is
+  `group_by`).
+- An answer of more than 10000 rows is `400 invalid_filter` (`field` is `group_by`), never a cut answer: narrow the range or group by
+  fewer things.
 
 ### `GET /refusals` filters
 
@@ -151,6 +176,88 @@ The last four fields are the details of a scan that the committee sees in its hi
 `device_id` stands for a phone's sign-in, and a sign-in belongs to one provider. A phone that signs in again, or as another provider, gets a new
 id. So it tells apart the phones that one provider's scans came from (several ids: several phones, or the same phone signed in
 again), and it cannot show the same physical phone across providers, because two providers never share an id.
+
+## Counting the visits
+
+`GET /counts` says how many visits there are, grouped by day, provider, point or kind of service, or all together. A count of the facts
+is a fact too: what it means (is it enough, is it less than last month) is yours to say.
+
+- **Use it instead of counting rows yourself.** For "how many visits did a provider have", "visits per day" or "visits per provider and
+  point", ask `GET /counts`. Do not page through `GET /scans` and add the rows up: that is many requests (a key may make a limited
+  number a minute), and a sum that you work out yourself over hundreds of rows can be wrong where the database's is not. Use
+  `GET /scans` to look at the visits themselves (their times, flags and distances), and `GET /counts` for how many there are.
+- **The counts add up to the scans list.** The filters are those of `GET /scans`, with the same meaning, defaults and errors, so `total` is
+  exactly the number of scans that `GET /scans` returns (paged to the end) for the same filters, and each row is exactly the scans of its
+  day, provider, point and service. A visit that the server refused (`GET /refusals`) is not a scan and is never counted.
+- A row is one group that has at least one visit, ordered by the grouping (days oldest first, then providers and points by name, then
+  kinds of service). With no grouping there is one row even when nothing matched, with a `count` of 0.
+- A dimension that the request did not group by is null in every row. When a request groups by `service_type`, a null `service_type`
+  is the visits that have none.
+- The name of a provider or a point is the name that the scans recorded, as `GET /scans` shows it. If the name changed inside the range
+  (the committee renamed it), every row of that provider or point carries the name on its newest counted visit, so one provider is one
+  group and never two. For the name of today, look the `provider_id` or `point_id` up in `GET /providers` and `GET /points` (a deleted
+  provider or point is not there, and its recorded name stays here).
+- The day is the day in the building's time zone (the `local_date` of a scan): a visit at 23:30 and one at 00:30 are on two days, also on
+  the two days of the year on which the clocks change.
+
+Visits of every provider on every day of September:
+
+```bash
+curl -H "Authorization: Bearer $KEY" \
+  "https://<your-domain>/api/agent/v1/counts?from=2026-09-01&to=2026-09-30&group_by=day,provider"
+```
+
+The same request for the first two days of September (`from=2026-09-01&to=2026-09-02`) answers:
+
+```json
+{
+  "group_by": ["day", "provider"],
+  "counts": [
+    { "day": "2026-09-01", "provider_id": "uuid", "provider_name": "Green Gardens", "point_id": null, "point_name": null, "service_type": null, "count": 1 },
+    { "day": "2026-09-01", "provider_id": "uuid", "provider_name": "Sparkle Cleaning – Dana", "point_id": null, "point_name": null, "service_type": null, "count": 3 },
+    { "day": "2026-09-02", "provider_id": "uuid", "provider_name": "Sparkle Cleaning – Dana", "point_id": null, "point_name": null, "service_type": null, "count": 2 }
+  ],
+  "total": 6
+}
+```
+
+The total visits of one provider in September, with no grouping (one row, and `total` is the same number):
+
+```bash
+curl -H "Authorization: Bearer $KEY" \
+  "https://<your-domain>/api/agent/v1/counts?from=2026-09-01&to=2026-09-30&provider_id=<uuid>"
+```
+
+```json
+{
+  "group_by": [],
+  "counts": [
+    { "day": null, "provider_id": null, "provider_name": null, "point_id": null, "point_name": null, "service_type": null, "count": 41 }
+  ],
+  "total": 41
+}
+```
+
+A row of `counts` (`/counts`):
+
+| Key | Meaning |
+|---|---|
+| `day` | The day of the visits in the group, `YYYY-MM-DD` in Israel time (the `local_date` of the scans), or null when the answer is not grouped by day |
+| `provider_id` | uuid of the service provider, or null when the answer is not grouped by provider. A deleted provider keeps its scans, so this can be an id that `/providers` no longer lists |
+| `provider_name` | Company – contact name as the scans recorded it, or null when the answer is not grouped by provider. The name on the newest counted visit of that provider, the same in every row of it |
+| `point_id` | uuid of the service point, or null when the answer is not grouped by point. A deleted point keeps its scans, so this can be an id that `/points` no longer lists |
+| `point_name` | Name of the point as the scans recorded it (it stays when the point is renamed or deleted), or null when the answer is not grouped by point. The name on the newest counted visit of that point, the same in every row of it |
+| `service_type` | The kind of service that the scans carry (from the point, else the provider), or null: when the answer is grouped by `service_type`, the visits that have none, and when it is not, not grouped |
+| `count` | How many visits are in the group: the scans that `GET /scans` lists for the same filters and the same day, provider, point and service. 0 only in the one row of an answer with no grouping that found no visit |
+
+The `group_by` filter takes a comma list of these, each at most once:
+
+| `group_by` | Meaning |
+|---|---|
+| `day` | One row for each day (the `local_date` of the visits, a day in Israel time) |
+| `provider` | One row for each service provider (by `provider_id`) |
+| `point` | One row for each service point (by `point_id`) |
+| `service_type` | One row for each kind of service, and one more row for the visits that have none |
 
 ## Outcomes and sources
 
@@ -385,6 +492,8 @@ key that is not in the table is never there, whatever the log holds.
 - The data can change because the committee changed it: a point switched off, a scan voided or deleted, the phones of a provider signed out. The audit log (`/audit`) says who did it and when, and it is not attendance (see "The audit log").
 - A visit can also be missing from `/scans` because the server refused it before it became a scan. Those are in `/refusals`, never
   counted as attendance (see "A refused visit"). A visit that waits on a phone is in neither list yet.
+- To say how many visits there are (per day, per provider, per point, per kind of service, or in all), ask `/counts`: its total is the number of rows that
+  `/scans` would list for the same filters. Never add up rows of `/scans` yourself (see "Counting the visits").
 - **Flags are signals, not verdicts.** Report them, weigh them, but do not treat one as proof of anything:
   - `location_unverified`: no usable GPS fix. Normal in basements and stairwells.
   - `location_outside_radius`: a good fix slightly outside the point's radius (within the 15 m pin tolerance).
@@ -422,7 +531,7 @@ Right after the key, and before anything else about the request, the limit of th
 | `401 api_key_required` | No key, or the header is not a `Bearer qrk_…` key |
 | `401 api_key_invalid` | The key is unknown or revoked |
 | `429 rate_limited` | The key has used up a limit: 60 requests in the current minute, or 2000 in the building's day. `window` says which one, and `retry_after_s` (and the `Retry-After` header) how long to wait. Only a valid key gets this answer |
-| `400 invalid_filter` | A bad `from`, `to`, `point_id`, `provider_id`, `group`, `actor_id`, `outcome`, `order` or `limit` (`field` names it) |
+| `400 invalid_filter` | A bad `from`, `to`, `point_id`, `provider_id`, `group`, `group_by`, `actor_id`, `outcome`, `order` or `limit` (`field` names it). GET /counts also refuses a missing from or to, a range that is too long (the field is to) and an answer with too many rows (the field is group_by) |
 | `400 invalid_cursor` | The `cursor` is not one that this API returned |
 | `400 invalid_input` | The database refused a value as out of range or malformed |
 | `400 invalid_json` | The request carries a body that is not valid JSON (these endpoints read no body: send none). Only a valid key gets this answer; without one it is the `401` |

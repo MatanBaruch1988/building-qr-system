@@ -34,6 +34,7 @@ import { AGENT_ENDPOINTS, endpointKey } from '../server/agentEndpoints.js'
 import { buildOpenApi, openApiDocument, auditDetailSchemaName } from '../server/agentOpenApi.js'
 import { AGENT_SCAN_CSV_COLUMNS } from '../server/scans.js'
 import { AUDIT_GROUPS } from '../server/auditRead.js'
+import { COUNT_GROUPS } from '../server/scanCounts.js'
 import { AUDIT_ACTOR_TYPES, AUDIT_DETAIL_ALLOW, AUDIT_SIGN_IN_METHODS } from '../server/audit.js'
 import * as config from '../server/config.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
@@ -278,8 +279,17 @@ const PARAMETER_FACTS = {
   'listRefusals.limit': { minimum: 1, maximum: config.MAX_REFUSAL_PAGE_SIZE, default: config.DEFAULT_PAGE_SIZE },
   'listAudit.limit': { minimum: 1, maximum: config.MAX_AUDIT_PAGE_SIZE, default: config.DEFAULT_PAGE_SIZE },
   group: { enum: [...AUDIT_GROUPS] },
+  group_by: { enum: [...COUNT_GROUPS], maxItems: COUNT_GROUPS.length },
   format: { enum: ['json', 'csv'], default: 'json' },
 }
+// The parameters that an operation requires, by the id of its row: the real route refuses a request without them (400 invalid_filter naming
+// the parameter), and the document says `required: true` for exactly these. Every other filter is optional.
+const REQUIRED_PARAMETERS = { countScans: ['from', 'to'] }
+// A valid value of each required parameter, so that the other parameters of such an operation are tried with a request that is complete.
+const REQUIRED_SAMPLE = { countScans: { from: '2026-09-01', to: '2026-09-30' } }
+/** The query text of the required parameters of an operation, each as `&name=value`, except `except`. */
+const requiredQuery = (e, except) =>
+  Object.entries(REQUIRED_SAMPLE[e.id] ?? {}).filter(([name]) => name !== except).map(([name, value]) => `&${name}=${encodeURIComponent(value)}`).join('')
 const factsFor = (operation, name) => PARAMETER_FACTS[`${operation.operationId}.${name}`] ?? PARAMETER_FACTS[name] ?? {}
 // The same for the schemas of the components, by the path of the keyword (the key `enum` of Scan.properties.source is
 // "Scan.properties.source.enum").
@@ -294,6 +304,9 @@ const SCHEMA_FACTS = {
   'RefusalList.properties.count.minimum': 0,
   'AuditEntry.properties.actor_type.enum': [...AUDIT_ACTOR_TYPES],
   'AuditList.properties.count.minimum': 0,
+  'CountRow.properties.count.minimum': 0,
+  'CountList.properties.group_by.items.enum': [...COUNT_GROUPS],
+  'CountList.properties.total.minimum': 0,
   // The enums of the detail of an audit action: a word of a list of shared/ or of server/audit.js, or null (a value that is not one is null).
   'AuditDetailSessionSignIn.properties.method.enum': [...AUDIT_SIGN_IN_METHODS, null],
   'AuditDetailPointCreate.properties.gps_mode.enum': [...GPS_MODES, null],
@@ -314,7 +327,9 @@ describe('c. the query parameters of each operation are the filters of its regis
       if (parameters.map((p) => p.name).join() !== e.filters.join()) problems.push(`The parameters of ${endpointKey(e)} are not in the order of the filters of its row (${e.filters.join(', ')}).`)
       for (const p of parameters) {
         if (p.in !== 'query') problems.push(`The parameter ${p.name} of ${endpointKey(e)} is in "${p.in}", not in the query.`)
-        if (p.required === true) problems.push(`The parameter ${p.name} of ${endpointKey(e)} is required, but every filter is optional.`)
+        const mustBeRequired = (REQUIRED_PARAMETERS[e.id] ?? []).includes(p.name)
+        if (mustBeRequired && p.required !== true) problems.push(`The parameter ${p.name} of ${endpointKey(e)} must say required: true (the route refuses a request without it).`)
+        if (!mustBeRequired && p.required === true) problems.push(`The parameter ${p.name} of ${endpointKey(e)} is required, but the route accepts a request without it (REQUIRED_PARAMETERS of this test lists the ones that it refuses).`)
         if (!p.description || p.description.trim().length < 10) problems.push(`The parameter ${p.name} of ${endpointKey(e)} has no real description.`)
         if (!p.schema) problems.push(`The parameter ${p.name} of ${endpointKey(e)} has no schema.`)
       }
@@ -415,7 +430,7 @@ describe('d. every enum is its constant, every limit and default is its constant
 
   it('every field of an answer is described by schemaDoc, and every property of an object is required', () => {
     const problems = []
-    for (const [name, fields] of [['Point', schemaDoc.points_fields], ['Provider', schemaDoc.providers_fields], ['Building', schemaDoc.building_fields], ['Refusal', schemaDoc.refusal_fields], ['AuditEntry', schemaDoc.audit_fields], ['Scan', { ...schemaDoc.time_fields, ...schemaDoc.scan_fields }]]) {
+    for (const [name, fields] of [['Point', schemaDoc.points_fields], ['Provider', schemaDoc.providers_fields], ['Building', schemaDoc.building_fields], ['Refusal', schemaDoc.refusal_fields], ['AuditEntry', schemaDoc.audit_fields], ['CountRow', schemaDoc.count_fields], ['Scan', { ...schemaDoc.time_fields, ...schemaDoc.scan_fields }]]) {
       const properties = doc.components.schemas[name].properties
       problems.push(...diffNames('field', { where: `schemaDoc (${name})`, names: Object.keys(fields) }, { where: `components.schemas.${name}`, names: Object.keys(properties) }))
       for (const [field, text] of Object.entries(fields)) {
@@ -458,6 +473,7 @@ const INVALID_VALUES = {
   cursor: ['zzz'],
   format: [], // csv, or JSON for any other value
   group: ['zzz', 'POINT', 'point.update'],
+  group_by: ['zzz', 'DAY', 'day,day', 'day,'],
   actor_id: ['zzz', '123'],
   entity: [], // any text: an entity that nothing has matches nothing
   entity_id: [],
@@ -466,6 +482,11 @@ const INVALID_VALUES = {
 /** Values the document allows for a parameter schema, as the text of a query. */
 function allowedValues(schema, sampleOf) {
   if (schema.anyOf) return schema.anyOf.flatMap((branch) => allowedValues(branch, sampleOf))
+  // A list in one parameter, as `style: form, explode: false` writes it: the items with commas, each alone, all, and all the other way round.
+  if (schema.type === 'array') {
+    const items = schema.items.enum.map(String)
+    return [...items, items.join(','), [...items].reverse().join(',')]
+  }
   if (schema.enum) return schema.enum.map(String)
   if (schema.type === 'boolean') return ['true', 'false', '1', '0']
   if (schema.type === 'integer') return [String(schema.minimum ?? 1), String(schema.maximum ?? 10), String(schema.default ?? 1)]
@@ -498,6 +519,14 @@ describe('the real agent API answers what the document says', () => {
   const resolved = (schema) => (schema.$ref ? doc.components.schemas[schema.$ref.split('/').pop()] : schema)
   const validatorOf = (e) => compileSchema(answerSchema(e), { shut: true })
   const FULL = '/scans?outcome=all&include_voided=1&include_demo=1&limit=500'
+  // The counts need a range. One around the old import of the seed (January 2026) and one around today (the other scans of the seed were
+  // recorded just now), each with no grouping, with all four and with every scan shown, so that rows of every kind are checked.
+  const dayOf = (offsetDays) => new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10)
+  const COUNT_URLS = [`from=2026-01-01&to=2026-01-31`, `from=${dayOf(-30)}&to=${dayOf(2)}`].flatMap((range) => [
+    `/counts?${range}`,
+    `/counts?${range}&group_by=day,provider,point,service_type&outcome=all&include_voided=1&include_demo=1`,
+    `/counts?${range}&group_by=service_type,provider`,
+  ])
 
   beforeAll(async () => {
     db = await setupDb()
@@ -614,7 +643,7 @@ describe('the real agent API answers what the document says', () => {
     const problems = []
     for (const e of AGENT_ENDPOINTS) {
       const validate = validatorOf(e)
-      const urls = e.id === 'listScans' ? [pathOf(e), FULL] : [pathOf(e)]
+      const urls = e.id === 'listScans' ? [pathOf(e), FULL] : e.id === 'countScans' ? COUNT_URLS : [pathOf(e)]
       for (const url of urls) {
         const r = await get(url)
         if (r.status !== 200) {
@@ -752,11 +781,11 @@ describe('the real agent API answers what the document says', () => {
           continue
         }
         for (const value of allowedValues(parameter.schema, sample)) {
-          const r = await get(`${pathOf(e)}?${name}=${encodeURIComponent(value)}${name === 'limit' ? '' : '&limit=1'}`)
+          const r = await get(`${pathOf(e)}?${name}=${encodeURIComponent(value)}${requiredQuery(e, name)}${name === 'limit' ? '' : '&limit=1'}`)
           if (r.status !== 200) problems.push(`${endpointKey(e)} with ${name}=${value}, which the document allows, answered ${r.status} ${r.json?.error?.code}.`)
         }
         for (const value of INVALID_VALUES[name]) {
-          const r = await get(`${pathOf(e)}?${name}=${encodeURIComponent(value)}`)
+          const r = await get(`${pathOf(e)}?${name}=${encodeURIComponent(value)}${requiredQuery(e, name)}`)
           const code = name === 'cursor' ? 'invalid_cursor' : 'invalid_filter'
           if (r.status !== 400 || r.json?.error?.code !== code) problems.push(`${endpointKey(e)} with ${name}=${value} answered ${r.status} ${r.json?.error?.code}, not 400 ${code}.`)
           else if (name !== 'cursor' && r.json.error.field !== name) problems.push(`${endpointKey(e)} with ${name}=${value} named the field "${r.json.error.field}".`)
@@ -768,6 +797,46 @@ describe('the real agent API answers what the document says', () => {
     }
     report(problems)
   }, 60_000)
+
+  it('c. a required parameter is refused when it is missing (400 invalid_filter naming it), and the complete request is answered', async () => {
+    const problems = []
+    for (const e of AGENT_ENDPOINTS) {
+      const required = (operationOf(e).parameters ?? []).filter((p) => p.required).map((p) => p.name)
+      problems.push(...diffNames('required parameter', { where: `REQUIRED_PARAMETERS of this test for ${endpointKey(e)}`, names: REQUIRED_PARAMETERS[e.id] ?? [] }, { where: `the parameters of ${endpointKey(e)} in the document`, names: required }))
+      if (!required.length) continue
+      const complete = await get(`${pathOf(e)}?${requiredQuery(e).slice(1)}`)
+      if (complete.status !== 200) problems.push(`${endpointKey(e)} with every required parameter answered ${complete.status} ${complete.json?.error?.code}.`)
+      for (const name of required) {
+        const rest = requiredQuery(e, name).slice(1)
+        const r = await get(`${pathOf(e)}${rest ? `?${rest}` : ''}`)
+        if (r.status !== 400 || r.json?.error?.code !== 'invalid_filter' || r.json.error.field !== name) {
+          problems.push(`${endpointKey(e)} without ${name} answered ${r.status} ${r.json?.error?.code} (field ${r.json?.error?.field}), not 400 invalid_filter naming ${name}.`)
+        }
+      }
+    }
+    report(problems)
+  })
+
+  it('c. the counts: group_by is one parameter with a comma list (style form, explode false), from and to are required days or moments', () => {
+    const parameters = doc.paths['/counts'].get.parameters
+    const byName = (name) => parameters.find((p) => p.name === name)
+    expect(byName('group_by')).toMatchObject({ style: 'form', explode: false, schema: { type: 'array', uniqueItems: true } })
+    expect(byName('group_by').required).toBeUndefined()
+    for (const name of ['from', 'to']) {
+      expect(byName(name).required).toBe(true)
+      expect(byName(name).schema.anyOf).toEqual([{ type: 'string', format: 'date' }, { type: 'string', format: 'date-time' }])
+      expect(byName(name).description).toContain(String(config.COUNTS_MAX_DAYS))
+    }
+    expect(byName('group_by').description).toContain(String(config.COUNTS_MAX_ROWS))
+    // The filters it shares with the scans list are described as there.
+    for (const name of ['point_id', 'provider_id', 'service_type', 'flag', 'outcome', 'include_voided', 'include_demo']) {
+      expect(byName(name).schema).toEqual(doc.paths['/scans'].get.parameters.find((p) => p.name === name).schema)
+    }
+    // The answer: the grouping, the rows and the total, and no paging.
+    expect(Object.keys(doc.components.schemas.CountList.properties)).toEqual(['group_by', 'counts', 'total'])
+    expect(doc.paths['/counts'].get.responses['200'].content['application/json'].schema).toEqual({ $ref: '#/components/schemas/CountList' })
+    expect(Object.keys(doc.paths['/counts'].get.responses['200'].content)).toEqual(['application/json'])
+  })
 
   it('c. a limit above the maximum is cut, not refused, as the parameter says', async () => {
     const r = await get(`/scans?outcome=all&include_voided=1&include_demo=1&limit=${config.MAX_PAGE_SIZE + 1}`)

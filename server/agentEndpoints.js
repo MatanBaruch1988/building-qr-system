@@ -13,8 +13,11 @@
 //
 // The text of a row is what an agent reads in /schema. Every number it quotes from server/config.js is written from the constant
 // (never typed), as in server/schemaDoc.js: tests/agent-docs.test.js reads this file for typed numbers too.
-import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_REFUSAL_PAGE_SIZE, MAX_AUDIT_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH } from './config.js'
+import {
+  DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_REFUSAL_PAGE_SIZE, MAX_AUDIT_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH, COUNTS_MAX_DAYS, COUNTS_MAX_ROWS,
+} from './config.js'
 import { SCAN_FILTERS } from './scans.js'
+import { COUNT_FILTERS, COUNT_GROUPS } from './scanCounts.js'
 import { REFUSAL_FILTERS } from './scanRefusals.js'
 import { AUDIT_FILTERS, AUDIT_GROUPS } from './auditRead.js'
 
@@ -58,6 +61,26 @@ export const AGENT_ENDPOINTS = Object.freeze([
       'Returns { scans, count, next_cursor }: count is the number of scans in this page (not the total), ' +
       'next_cursor is null on the last page. With format=csv the body is CSV and next_cursor is in the X-Next-Cursor header ' +
       '(absent on the last page). CSV: flags are joined with ";", booleans are the text true/false, null is an empty cell.',
+  }),
+  row({
+    id: 'countScans',
+    summary: 'Count the visits per day, provider, point or service',
+    method: 'GET',
+    path: '/agent/v1/counts',
+    filters: [...COUNT_FILTERS],
+    envelope: ['group_by', 'counts', 'total'],
+    description:
+      'Query: from, to (both REQUIRED: YYYY-MM-DD = a calendar day in Israel time, or an ISO date-time that carries Z or an offset, ' +
+      `as in /scans; the range covers at most ${COUNTS_MAX_DAYS} days), ` +
+      `group_by (a comma list of ${COUNT_GROUPS.join('|')}, each at most once, in any order; none = one row, the total), ` +
+      `point_id, provider_id (uuids), service_type, flag (both text, cut to ${FILTER_TEXT_MAX_LENGTH} characters), ` +
+      'outcome (accepted|rejected|all, default accepted), include_voided, include_demo (only true or 1 mean yes; anything else means no). ' +
+      'Returns { group_by, counts, total }: how many visits there are, grouped as asked. counts has one row for each group that has a visit ' +
+      '(day, provider_id, provider_name, point_id, point_name, service_type and count: a field that was not grouped by is null), in the ' +
+      'order of the grouping, and total is their sum. The filters are those of /scans with the same meaning and the same defaults ' +
+      '(accepted visits only, voided and demo hidden), so total is exactly the number of scans that /scans returns for the same filters: ' +
+      `use this endpoint to count, and never count rows of /scans yourself. An answer of more than ${COUNTS_MAX_ROWS} rows is refused ` +
+      '(400 invalid_filter), not cut: narrow the range or group by less. See count_fields and count_groups.',
   }),
   row({
     id: 'listRefusals',

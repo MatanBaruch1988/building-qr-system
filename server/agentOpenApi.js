@@ -31,10 +31,14 @@
 // each key means), its keys are all optional, and the `detail` of an entry is null or any one of them. A key that the list does not
 // have is not in the schema, so the closed check of the test fails on a key that an answer gains.
 import { STATUS_CODES } from 'node:http'
-import { TIMEZONE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_REFUSAL_PAGE_SIZE, MAX_AUDIT_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH, API_KEY_PREFIX } from './config.js'
+import {
+  TIMEZONE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_REFUSAL_PAGE_SIZE, MAX_AUDIT_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH, API_KEY_PREFIX,
+  COUNTS_MAX_DAYS, COUNTS_MAX_ROWS,
+} from './config.js'
 import { AGENT_ENDPOINTS } from './agentEndpoints.js'
 import { AGENT_SCAN_CSV_COLUMNS } from './scans.js'
 import { AUDIT_GROUPS } from './auditRead.js'
+import { COUNT_GROUPS } from './scanCounts.js'
 import { AUDIT_ACTOR_TYPES, AUDIT_DETAIL_ALLOW } from './audit.js'
 import { schemaDoc } from './schemaDoc.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
@@ -193,6 +197,22 @@ function auditDetailSchemas() {
   return schemas
 }
 
+// ---------- the counts ----------
+
+/**
+ * What each value of group_by means, as a list for a description: the groups of COUNT_GROUPS (server/scanCounts.js) and the groups that
+ * server/schemaDoc.js describes (count_groups) must be the same, or the server does not start.
+ */
+function countGroupsText() {
+  const described = Object.keys(schemaDoc.count_groups)
+  const problems = [
+    ...COUNT_GROUPS.filter((g) => !described.includes(g)).map((g) => `the group "${g}" is a value of group_by but server/schemaDoc.js does not describe it (count_groups)`),
+    ...described.filter((g) => !COUNT_GROUPS.includes(/** @type {any} */ (g))).map((g) => `the group "${g}" is described in server/schemaDoc.js (count_groups) but is not a value of group_by`),
+  ]
+  if (problems.length) throw new Error(`${FILE}: the groups of the counts differ: ${problems.join('; ')}.`)
+  return Object.entries(schemaDoc.count_groups).map(([group, meaning]) => `- ${group}: ${meaning}`).join('\n')
+}
+
 function componentSchemas() {
   const auditDetails = auditDetailSchemas()
   return {
@@ -292,6 +312,34 @@ function componentSchemas() {
         next_cursor: { ...orNull(string), description: 'Pass it as the cursor to get the next page. Null on the last page.' },
       },
       'One page of scans (the JSON answer; with format=csv the answer is CSV).',
+    ),
+
+    CountRow: describedObject(
+      'CountRow',
+      {
+        day: orNull(day),
+        provider_id: orNull(uuid),
+        provider_name: orNull(string),
+        point_id: orNull(uuid),
+        point_name: orNull(string),
+        service_type: orNull(string),
+        count: { ...integer, minimum: 0 },
+      },
+      schemaDoc.count_fields,
+    ),
+    CountList: plainObject(
+      {
+        group_by: {
+          type: 'array',
+          items: oneOf(COUNT_GROUPS),
+          uniqueItems: true,
+          description: 'The grouping that was asked for, written in the fixed order of the rows (day, provider, point, service_type), whatever the order of the request. Empty when the answer is not grouped: it is then one row, the total.',
+        },
+        counts: { type: 'array', items: ref('schemas', 'CountRow'), description: 'One row for each group that has a visit (a not grouped answer has its one row even when there is none), ordered by the grouping.' },
+        total: { ...integer, minimum: 0, description: 'The sum of the counts: the number of scans that GET /scans returns for the same filters.' },
+      },
+      'The answer of the counts endpoint: how many visits there are for the filters, grouped as asked. A dimension that was not grouped by is null in every row. ' +
+        `An answer of more than ${COUNTS_MAX_ROWS} rows is refused with a 400, never cut. What each group is:\n${countGroupsText()}`,
     ),
 
     Refusal: describedObject(
@@ -397,7 +445,7 @@ const YES_NOTE = 'Only true or 1 mean yes; any other value means no.'
  * Every query parameter of the registry, by name: how it is documented. A filter that an endpoint of the registry lists and that
  * is not here stops the server from starting, with the name of the endpoint. The values of outcome, order and format are the ones
  * that server/scans.js (and the route) accept: tests/agent-openapi.test.js sends each of them to the real route.
- * @type {Record<string, { description: string, schema: object }>}
+ * @type {Record<string, { description: string, schema: object, required?: boolean, style?: 'form', explode?: boolean }>}
  */
 const PARAMETERS = {
   from: {
@@ -429,6 +477,14 @@ const PARAMETERS = {
     description: `Include the scans of the demo account (test data, flagged demo). They are left out by default. ${YES_NOTE}`,
     schema: { ...boolean, default: false },
   },
+  group_by: {
+    description:
+      `How to group the counts: a comma list of ${COUNT_GROUPS.join(', ')}, each at most once, in any order (the rows of the answer are in the fixed order of the list). ` +
+      `None, or empty, is one row: the total. A value that is not in the list, or a repeat, is refused. The answer may have ${COUNTS_MAX_ROWS} rows at most. What each is:\n${countGroupsText()}`,
+    schema: { type: 'array', items: oneOf(COUNT_GROUPS), uniqueItems: true, maxItems: COUNT_GROUPS.length },
+    style: 'form',
+    explode: false,
+  },
   order: {
     description: 'The order of the scans by time of the visit: desc is the newest first (the default), asc the oldest first. Keep the same order while paging.',
     schema: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
@@ -456,9 +512,25 @@ const PARAMETERS = {
 /**
  * The parameters whose name is also a filter of another endpoint but whose meaning here is another one (a refused visit is not a scan,
  * and its page is cut at its own size), by the id of the endpoint and then by name. A name that is not here is described by PARAMETERS.
- * @type {Record<string, Record<string, { description: string, schema: object }>>}
+ * @type {Record<string, Record<string, { description: string, schema: object, required?: boolean, style?: 'form', explode?: boolean }>>}
  */
 const ENDPOINT_PARAMETERS = {
+  countScans: {
+    from: {
+      description:
+        `The first day or moment to count. REQUIRED, and together with to the range covers at most ${COUNTS_MAX_DAYS} days. A calendar day (YYYY-MM-DD) means that whole day in the building time zone (${TIMEZONE}). ` +
+        'An ISO 8601 date-time that carries Z or an offset is an exact moment. A date-time without Z or an offset is refused. It means what it means in the scans list, so the counts add up to those scans.',
+      schema: DAY_OR_MOMENT,
+      required: true,
+    },
+    to: {
+      description:
+        `The last day or moment to count, in the same two forms as from. REQUIRED. A calendar day (YYYY-MM-DD) includes that whole day in ${TIMEZONE}. ` +
+        `A range that covers more than ${COUNTS_MAX_DAYS} days is refused (the field is to).`,
+      schema: DAY_OR_MOMENT,
+      required: true,
+    },
+  },
   listRefusals: {
     from: {
       description:
@@ -574,6 +646,7 @@ const ANSWERS = {
       },
     },
   },
+  countScans: { description: 'The number of visits, grouped as asked.', content: json('CountList') },
   listRefusals: { description: 'A page of the visits that the server refused.', content: json('RefusalList') },
   listAudit: { description: 'A page of the audit log of the committee.', content: json('AuditList') },
   listPoints: { description: 'Every service point.', content: json('PointList') },
@@ -642,7 +715,14 @@ function buildPaths(/** @type {Record<number, object>} */ attached) {
     const parameters = endpoint.filters.map((name) => {
       const parameter = ENDPOINT_PARAMETERS[endpoint.id]?.[name] ?? PARAMETERS[name]
       if (!parameter) throw new Error(`${FILE}: the filter "${name}" of ${endpoint.id} has no description in PARAMETERS: add it.`)
-      return { name, in: 'query', description: parameter.description, schema: parameter.schema }
+      return {
+        name,
+        in: 'query',
+        ...(parameter.required ? { required: true } : {}),
+        ...(parameter.style ? { style: parameter.style, explode: parameter.explode } : {}),
+        description: parameter.description,
+        schema: parameter.schema,
+      }
     })
     const answer = ANSWERS[endpoint.id]
     if (!answer) throw new Error(`${FILE}: the endpoint ${endpoint.id} has no 200 answer in ANSWERS: add it.`)
