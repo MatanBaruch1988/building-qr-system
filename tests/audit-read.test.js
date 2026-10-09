@@ -5,12 +5,14 @@
 //     change), group (an exact list), actor_id, entity with entity_id;
 //   - bad parameters are 400 with the codes of the scans list (compared with it, not copied from it);
 //   - the name of the actor: the snapshot on the row, else the member's current name, a deleted member, the system actor;
-//   - privacy: an entry has the listed fields and nothing else, the detail is as stored, and the agent API has no audit;
+//   - privacy: an entry has the listed fields and nothing else, the detail is as stored, and the agent API shows the log only through
+//     the allow-list of each action (the full proof of that is tests/agent-audit.test.js);
 //   - the SQL can use the two indexes of migration 007 (asked of the database with explain).
 // Who may call it is proved for every route at once by tests/route-auth.test.js (the router's guard of /admin/). The data is fake.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
+import { randomToken, sha256 } from '../server/crypto.js'
 import '../server/index.js' // importing it registers every route file with the router
 import { routeTable } from '../server/router.js'
 import { providerSnapshotName } from '../server/scans.js'
@@ -679,9 +681,32 @@ describe('privacy: what an entry holds', () => {
     expect((await get('', 'qr_admin=nonsense')).status).toBe(401)
   })
 
-  it('is not in the agent API: no route, and no word of it in the schema that the agent reads', () => {
-    expect(routeTable().filter((r) => r.path.startsWith('/agent/v1/') && /audit/i.test(r.path))).toEqual([])
-    expect(JSON.stringify(schemaDoc)).not.toMatch(/audit/i)
+  // This test pinned the opposite until 08/10/2026: no route of the agent API to the log, and no word of "audit" in the schema that
+  // the agent reads. The owner decided on 08/10/2026 that the committee's agent is its analyst and may read the audit log (AGENTS.md
+  // "Safety", docs/privacy.md), so that change is the owner's decision and not a weakened test. What the old pin was for stays proved
+  // here: what must not reach the agent still does not. The whole proof of the agent's route is in tests/agent-audit.test.js.
+  it('is in the agent API since the owner decision of 08/10/2026 (the agent is the committee analyst), without anything secret', async () => {
+    expect(routeTable().filter((r) => r.path === '/agent/v1/audit')).toHaveLength(1)
+    expect(Object.keys(schemaDoc.endpoints)).toContain('GET /api/agent/v1/audit')
+    // An agent key, written straight into the table so that this file's audit rows (the group counts above) are left alone.
+    const key = randomToken(API_KEY_PREFIX)
+    await db.pool.query("insert into api_keys (name, key_prefix, key_hash) values ('Fake agent key of the audit read', $1, $2)", [key.slice(0, 8), sha256(key)])
+    const agent = await call('GET', '/api/agent/v1/audit?limit=200', { token: key })
+    expect(agent.status, agent.text).toBe(200)
+    expect(Object.keys(agent.json)).toEqual(['entries', 'count', 'next_cursor'])
+    expect(agent.json.count).toBe(agent.json.entries.length)
+    expect(agent.json.entries.length).toBeGreaterThan(50)
+    // It is the committee's log: the same newest entries, in the same order (the agent's request wrote no row of its own).
+    const committee = (await get('limit=200')).json.entries
+    expect(agent.json.entries.map((e) => e.id)).toEqual(committee.map((e) => e.id))
+    // What the old pin kept out of the agent still stays out: the first characters of a key (the delete of a key holds them, and the
+    // committee's answer shows them as stored) and any key of a detail that its action does not allow.
+    expect(JSON.stringify(committee)).toContain(`${API_KEY_PREFIX}abcd`)
+    for (const secret of [`${API_KEY_PREFIX}abcd`, 'key_prefix', 'fake-qr-live', 'fake-hash-live', key, key.slice(0, 8)]) {
+      expect(agent.text, secret).not.toContain(secret)
+    }
+    const deleted = agent.json.entries.find((e) => labelOf[e.id] === 'api_key.delete')
+    expect(deleted.detail).toEqual({ name: 'Fake agent', was_revoked: true })
   })
 })
 

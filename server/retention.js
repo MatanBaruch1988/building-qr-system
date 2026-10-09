@@ -80,8 +80,9 @@ export async function runRetention() {
       alertPings: pings.rowCount,
       apiKeyUsage: usage.rowCount,
     }
-    // Counts only: no id, no name, no label. The audit log has no end date. The committee reads it (GET /api/admin/audit);
-    // the agent API and the exports do not have it, and whoever holds the database or a backup can read it too.
+    // Counts only: no id, no name, no label. The audit log has no end date. The committee reads it (GET /api/admin/audit), and so
+    // does its agent (GET /api/agent/v1/audit, through the allow-list of each action, including this one's counts); the exports do
+    // not have it, and whoever holds the database or a backup can read it too.
     // The name of the system actor stays null on purpose: actor_name is the snapshot of a person's name, and the system actor
     // is already named by actor_type, so a screen can name it in the reader's own language (src/i18n), which a fixed English
     // string in the database could not do.
