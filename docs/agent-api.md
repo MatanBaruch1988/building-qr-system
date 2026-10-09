@@ -8,7 +8,8 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 - **Limits:** one key may make at most 60 requests in a minute and at most 2000 in a building day. Over a limit the answer is a
   `429 rate_limited` with a `Retry-After` header (see "Errors"). Ask for fewer, larger pages (`limit=500` and the cursor)
   rather than many small requests.
-- **Self-description:** `GET /schema` returns this contract as JSON. Read it first.
+- **Self-description:** `GET /schema` returns this contract as JSON. Read it first. `GET /openapi.json` returns the same API as an
+  OpenAPI 3.1 document, for tools that read OpenAPI (see "OpenAPI" below).
 - **Ready-made system prompt for the committee's agent:** [`agent-prompt.md`](agent-prompt.md).
 - **Time:** all human-readable times are Israel time. `checked_in_at` is UTC ISO, `checked_in_local` is
   `YYYY-MM-DD HH:mm:ss` in Asia/Jerusalem, `local_date` is the Israeli calendar day (use it for "per day").
@@ -21,6 +22,7 @@ The app records facts and signals only. It never analyses, scores or judges: tha
 | `GET /points` | Every service point, including inactive ones, with assigned providers. |
 | `GET /providers` | Every provider, including inactive and demo ones, with `last_scan_at`. |
 | `GET /schema` | Field, flag and rule descriptions. |
+| `GET /openapi.json` | The OpenAPI 3.1 description of this API: endpoints, parameters, answers, errors and the Bearer key. |
 | `GET /health` | Liveness and server time. |
 
 ### Response envelopes
@@ -58,6 +60,16 @@ The same columns as a scan row, in the same order, with a header line and no byt
 curl -H "Authorization: Bearer $KEY" \
   "https://<your-domain>/api/agent/v1/scans?from=2026-09-01&to=2026-09-30&limit=500"
 ```
+
+### OpenAPI
+
+`GET /openapi.json` answers one OpenAPI 3.1 document (JSON). It lists every endpoint of this page with its parameters (types, formats,
+allowed values and limits), the shape of every answer (the JSON of a scan, a point and a provider, the CSV variant of `GET /scans`
+and its `X-Next-Cursor` header), the errors of the table under "Errors", and the Bearer key. It needs the key like every other endpoint.
+Give it to a tool that imports OpenAPI (an agent platform, a client generator). It is built from the same list of endpoints as
+`GET /schema`, so the two name the same endpoints; the prose (what a field, a flag or a rule means) stays in `GET /schema`, which
+the document points to. A field that a newer version adds to an answer is in the document of that version, and a client that
+validates answers should not refuse a field it does not know.
 
 ## A scan row
 

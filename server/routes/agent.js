@@ -4,6 +4,7 @@ import { toCsv } from '../http.js'
 import { requireApiKey } from '../auth.js'
 import { listScans, SCAN_CSV_COLUMNS, toLocal } from '../scans.js'
 import { schemaDoc } from '../schemaDoc.js'
+import { openApiDocument } from '../agentOpenApi.js'
 import { AGENT_ENDPOINTS } from '../agentEndpoints.js'
 
 // Read-only surface for the external agent. Nothing here writes, and secrets (QR tokens,
@@ -22,6 +23,13 @@ async function getHealth({ req }) {
 async function getSchema({ req }) {
   await requireApiKey(req)
   return schemaDoc
+}
+
+// The OpenAPI description of this API, built once when the server starts (server/agentOpenApi.js). It says nothing about the
+// data, only about the shape of the API, and it is behind the key like the rest.
+async function getOpenApi({ req }) {
+  await requireApiKey(req)
+  return openApiDocument
 }
 
 async function listPoints({ req }) {
@@ -64,7 +72,7 @@ async function listScansHandler({ req, query: q }) {
 }
 
 /** The handler of every endpoint of the registry, by its id. */
-const HANDLERS = { getHealth, getSchema, listPoints, listProviders, listScans: listScansHandler }
+const HANDLERS = { getHealth, getOpenApi, getSchema, listPoints, listProviders, listScans: listScansHandler }
 
 const registered = new Set(AGENT_ENDPOINTS.map((endpoint) => endpoint.id))
 for (const id of Object.keys(HANDLERS)) {
