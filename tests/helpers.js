@@ -121,3 +121,22 @@ export async function adminCookie(email = 'admin@test.local') {
   if (r.status !== 200) throw new Error('admin sign-in failed: ' + r.text)
   return String(r.headers['set-cookie']).split(';')[0]
 }
+
+/**
+ * Mints an agent key the way the committee does, through the real POST /api/admin/api-keys (a key of the Agent tab), and returns
+ * the key (shown once, as the API shows it) with the id of its row. `cookie` is the committee's session (adminCookie()).
+ * @param {string} cookie
+ * @param {string} [name]
+ * @returns {Promise<{ key: string, id: string }>}
+ */
+export async function mintAgentKey(cookie, name = 'test agent') {
+  const r = await call('POST', '/api/admin/api-keys', { cookie, body: { name } })
+  if (r.status !== 201) throw new Error('minting an agent key failed: ' + r.text)
+  return { key: r.json.key, id: r.json.api_key.id }
+}
+
+/** Revokes an agent key through the real route (POST /api/admin/api-keys/:id/revoke): the key then answers api_key_invalid. */
+export async function revokeAgentKey(cookie, id) {
+  const r = await call('POST', `/api/admin/api-keys/${id}/revoke`, { cookie })
+  if (r.status !== 200) throw new Error('revoking an agent key failed: ' + r.text)
+}
