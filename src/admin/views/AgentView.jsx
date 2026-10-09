@@ -4,6 +4,7 @@ import { useLoad, LOAD_KEY, formatDateTime } from '../hooks.js'
 import { Modal, Field, Badge, EmptyState, Spinner, IconButton, useToast, useConfirm, useAction } from '../ui.jsx'
 import { IconPlus, IconKey, IconCopy, IconBan, IconAlert, IconInfo, IconTrash } from '../icons.jsx'
 import { KEY_NAME_MAX_LENGTH } from '../../../shared/contract.js'
+import { agentPrompt } from '../agentPrompt.js'
 
 function NewKeyDialog({ onClose, onCreated }) {
   const toast = useToast()
@@ -88,12 +89,9 @@ export default function AgentView() {
     if (ok && await run(() => adminApi(`/api-keys/${k.id}`, { method: 'DELETE' }), 'המפתח נמחק')) keys.reload()
   }
 
-  const prompt = `You have read-only access to the attendance log of our building's service providers (cleaning, gardening).
-Base URL: ${base}
-Authorization: Bearer <API KEY>
-Start with GET ${base}/schema : it explains every field, flag and rule.
-Main endpoint: GET ${base}/scans?from=YYYY-MM-DD&to=YYYY-MM-DD (also point_id, provider_id, flag, outcome=all|accepted|rejected, limit, cursor, format=csv).
-Times are Israel time (checked_in_local, local_date). When you report to people, write dates as DD/MM/YYYY and times as HH:MM (24 hours, Israel time): never month names or weekdays, and convert checked_in_local and local_date to that format instead of copying them. Flags are signals, not verdicts: report them, do not treat them as proof of anything.`
+  // The same text as the section "The analyst prompt" of docs/agent-prompt.md, with the address of this installation filled in
+  // (src/admin/agentPrompt.js, and tests/agent-prompt.test.js keeps the two equal).
+  const prompt = agentPrompt(base)
 
   return (
     <>
