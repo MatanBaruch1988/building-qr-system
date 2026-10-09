@@ -22,7 +22,7 @@ export default {
   'login.network': 'No connection. Try again when you have signal.',
   'login.noProviders': 'No service providers have been set up yet. Contact the building committee.',
   'login.loadError': 'We could not load the list.',
-  'login.privacy': "Each scan records your name, the point and the time. Your phone's location is only used to check that you are at the point. The location itself is not saved, only the distance from the point.",
+  'login.privacy': "Each scan records your name, the point and the time. Your phone's location is only used to check that you are at the point. The location itself is not saved on the server, only the distance from the point.",
 
   'home.hello': 'Hello, {name}',
   'home.instruction': 'To check in, scan the QR code at the point with your phone camera.',
