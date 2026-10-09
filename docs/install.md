@@ -316,12 +316,14 @@ not say `nonprod`.
    says that the details were saved ("פרטי הבניין נשמרו"). The committee app's brand and window title follow at once, and
    the providers' app shows the name within about a minute. The label of the installed app on a phone's Home Screen is
    fixed when the app is built, so it does not follow the name.
-2. Points tab ("נקודות"), ("נקודה חדשה"): a name, and the location check ("בדיקת מיקום"). For a first test leave the
-   default or choose ("בלי מיקום"). Save ("שמירה"): the QR dialog opens by itself, and a toast says that the point was
-   created and that its QR can be printed. The address under the code must be your production address,
-   `https://<your-domain>/scan?code=BQR-...`. A banner about a local address means `APP_BASE_URL` is missing. The dialog
-   has ("הדפסת שלט") (prints the sign), ("הורדה") (downloads it), ("העתקת קישור") (copies the link) and a button that
-   replaces the point's code. You can open the dialog again later with the QR icon on the point's tile.
+2. Points tab ("נקודות"), ("נקודה חדשה"): a name and a pin on the map. Every point checks the phone's location against
+   its pin, so a point cannot be saved without one. For a first test, stand where the sign will hang and press the form's
+   own location button ("המיקום שלי כעת") to put the pin where you stand, or click the map. Save ("שמירה"): the QR
+   dialog opens by itself, and a toast says that the point was created and that its QR can be printed. The address under
+   the code must be your production address, `https://<your-domain>/scan?code=BQR-...`. A banner about a local address
+   means `APP_BASE_URL` is missing. The dialog has ("הדפסת שלט") (prints the sign), ("הורדה") (downloads it),
+   ("העתקת קישור") (copies the link) and a button that replaces the point's code. You can open the dialog again later
+   with the QR icon on the point's tile.
 3. Providers tab (("ספקים") in the navigation, ("נותני שירות") as the page title), ("נותן שירות חדש"): a company and a worker
    name. **The form fills in a password by itself**: ("יצירה") makes another one, and a copy button sits next to it. Copy
    the password with that button before you save, and give it to the worker once. **Do not click outside the dialog while
@@ -332,8 +334,9 @@ not say `nonprod`.
    at every point, and whose scans are flagged and left out of reports and of the agent's data: use it for tests that
    must stay out of the real history.
 4. On a phone, scan the sign with the camera (the QR on your computer's screen works as well as a printed sign): the
-   providers' app opens, choose the name, enter the password, and the check-in is recorded. In the History tab
-   ("היסטוריה") of the committee app the scan appears, with the point's name, the time, and the company and the worker.
+   providers' app opens, choose the name, enter the password, and the check-in is recorded (allow the location when the
+   phone asks, and be within the point's radius of the pin). In the History tab ("היסטוריה") of the committee app the scan
+   appears, with the point's name, the time, and the company and the worker.
 5. Before you give signs to the providers: read [privacy.md](privacy.md) (in a copy, "the owner of the project" is you,
    and the periods are constants in `server/config.js`; this guide is not legal advice), and do the quick pass of the
    [iOS checklist](manual-ios-checklist.md) on a real iPhone (items 1, 4 and 8 are the quick pass).
