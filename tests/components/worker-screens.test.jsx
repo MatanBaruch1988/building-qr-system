@@ -124,9 +124,27 @@ describe('ResultView', () => {
   })
 
   it('tells a check-in that is only saved on the phone', () => {
-    show({ kind: 'queued', persisted: true })
+    show({ kind: 'queued', persisted: true, located: true })
     expect(screen.getByRole('heading', { name: he['checkin.queued.title'] })).toBeTruthy()
     expect(screen.getByText(he['checkin.queued.body'])).toBeTruthy()
+    expect(screen.queryByText(he['checkin.queued.noLocation']), 'a visit with a position has nothing to warn about').toBeNull()
+  })
+
+  it('warns that the server may refuse a saved check-in that has no position, in the language of the person', () => {
+    show({ kind: 'queued', persisted: true, located: false })
+    expect(screen.getByText(he['checkin.queued.body'])).toBeTruthy()
+    expect(screen.getByText(he['checkin.queued.noLocation'])).toBeTruthy()
+  })
+
+  it('says nothing extra for a saved check-in from before the screen knew about positions (no `located` at all)', () => {
+    show({ kind: 'queued', persisted: true })
+    expect(screen.queryByText(he['checkin.queued.noLocation'])).toBeNull()
+  })
+
+  it('adds the warning to the message of a check-in that could not even be saved on the phone', () => {
+    show({ kind: 'queued', persisted: false, located: false })
+    expect(screen.getByText(he['checkin.queuedTemp.body'])).toBeTruthy()
+    expect(screen.getByText(he['checkin.queued.noLocation'])).toBeTruthy()
   })
 
   it('calls onDone from the done button', () => {

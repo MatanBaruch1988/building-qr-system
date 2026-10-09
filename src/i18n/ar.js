@@ -43,6 +43,7 @@ export default {
   'checkin.duplicate.body': 'تم تسجيل زيارتك إلى «{point}» في {time}.',
   'checkin.queued.title': 'تم الحفظ على الهاتف',
   'checkin.queued.body': 'لا توجد تغطية الآن. سيُرسَل الحضور تلقائيًا عند توفر التغطية.',
+  'checkin.queued.noLocation': 'تعذّر الحصول على موقعك. عند إرسال الحضور قد يرفضه الخادم.',
   'checkin.far.title': 'يبدو أنك لست قرب النقطة',
   'checkin.far.body': 'حسب الموقع أنت على بُعد نحو {distance} من «{point}». اقترب منها وامسح الرمز مرة أخرى.',
   'checkin.needLocation.title': 'هذه النقطة تتطلب تحديد الموقع',

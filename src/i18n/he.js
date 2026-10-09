@@ -45,6 +45,7 @@ export default {
   'checkin.duplicate.body': 'הביקור ב{point} נרשם ב-{time}.',
   'checkin.queued.title': 'נשמר במכשיר',
   'checkin.queued.body': 'אין קליטה כרגע. הנוכחות תישלח לבד כשתהיה קליטה.',
+  'checkin.queued.noLocation': 'לא הצלחנו לקבל מיקום. כשהנוכחות תישלח, השרת עלול לדחות אותה.',
   'checkin.far.title': 'לא נראה שאתם ליד הנקודה',
   'checkin.far.body': 'לפי המיקום אתם במרחק של כ-{distance} מהנקודה ({point}). גשו אליה וסרקו שוב.',
   'checkin.needLocation.title': 'הנקודה הזו דורשת מיקום',

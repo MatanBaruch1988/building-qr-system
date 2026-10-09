@@ -43,6 +43,7 @@ export default {
   'checkin.duplicate.body': 'Визит на точке «{point}» записан в {time}.',
   'checkin.queued.title': 'Сохранено на телефоне',
   'checkin.queued.body': 'Сейчас нет связи. Отметка отправится сама, когда связь появится.',
+  'checkin.queued.noLocation': 'Не удалось определить ваше местоположение. Когда отметка будет отправлена, сервер может её отклонить.',
   'checkin.far.title': 'Похоже, вы не рядом с точкой',
   'checkin.far.body': 'По геолокации вы примерно в {distance} от точки «{point}». Подойдите к ней и отсканируйте снова.',
   'checkin.needLocation.title': 'Для этой точки нужна геолокация',

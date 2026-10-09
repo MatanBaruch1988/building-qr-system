@@ -43,6 +43,7 @@ export default {
   'checkin.duplicate.body': 'Your visit to {point} was recorded at {time}.',
   'checkin.queued.title': 'Saved on this phone',
   'checkin.queued.body': 'There is no signal right now. The check-in will be sent automatically when you are back online.',
+  'checkin.queued.noLocation': 'We could not get your location. When this visit is sent, the server may refuse it.',
   'checkin.far.title': 'You do not seem to be at the point',
   'checkin.far.body': 'Your location is about {distance} from {point}. Go to the point and scan again.',
   'checkin.needLocation.title': 'This point needs your location',

@@ -3,7 +3,7 @@ import { I18nProvider, useI18n } from '../i18n/index.jsx'
 import { api } from '../api/client.js'
 import { loadSession, saveSession, clearSession, isProvider } from '../worker/session.js'
 import { createQueue } from '../worker/scanQueue.js'
-import { getFix } from '../worker/geo.js'
+import { getFix, forgetLastFix } from '../worker/geo.js'
 import { performCheckIn, withScanContext } from '../worker/checkIn.js'
 import { uuid } from '../worker/uuid.js'
 import { SCAN_ERROR_POINT_INACTIVE } from '../../shared/contract.js'
@@ -79,6 +79,7 @@ function WorkerShell({ session, setSession, building }) {
       noteClientError({ kind: 'signed_out', place: currentPlace(), code })
     }
     clearSession()
+    forgetLastFix() // and the next person must not send the previous person's last position either (src/worker/geo.js)
     setSession(null)
     setView('home')
     setResult(null)
@@ -200,6 +201,7 @@ function WorkerShell({ session, setSession, building }) {
       api('/session', { method: 'DELETE', token: session.token, timeoutMs: 5000 }).catch(() => {})
     }
     clearSession()
+    forgetLastFix() // on a shared phone the next person must not send the previous one's last position
     setSession(null)
     setView('home')
     setResult(null)

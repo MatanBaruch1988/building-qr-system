@@ -1,16 +1,36 @@
 // The phone's location for a scan (src/worker/geo.js). A point that requires the location waits a few seconds for a precise
 // reading (the precise path, `getFix({ precise: true })`); every other point keeps the quick position it always had. The
 // browser is replaced by a phone whose readings the test sends by hand, and time by fake timers, so a wait of 8.5 seconds
-// costs nothing and its edges (just before and just after) can be tested.
+// costs nothing and its edges (just before and just after) can be tested. When a way ends with no usable reading, the
+// position that the phone kept from its last good reading (and the one that the browser remembers) is the last resort.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { getFix, PRECISE_TARGET_ACCURACY_M, PRECISE_WAIT_MS } from '../src/worker/geo.js'
-import { GPS_MAX_STALE_AGE_S } from '../shared/contract.js'
+import { getFix, forgetLastFix, PRECISE_TARGET_ACCURACY_M, PRECISE_WAIT_MS, LAST_KNOWN_WAIT_MS } from '../src/worker/geo.js'
+import { GPS_MAX_STALE_AGE_S, GPS_MAX_USABLE_ACCURACY_M } from '../shared/contract.js'
 
 /** The extra wait when there is still no reading at the end of PRECISE_WAIT_MS (the watchdog of `ask`, which is also 2.5 s). */
 const GRACE_MS = 2500
 
-/** A phone whose position the test drives: it records every request, and answers a watch only when `reading` or `fail` is called. */
-function fakePhone({ answerWhileWatching } = {}) {
+/** The key under which the phone keeps its last usable reading. */
+const LAST_FIX_KEY = 'qr.lastfix.v1'
+
+/** localStorage as a test sees it: a map, so that what the app keeps can be read back. */
+function fakeStorage() {
+  const items = new Map()
+  return {
+    getItem: (key) => items.get(key) ?? null,
+    setItem: (key, value) => void items.set(key, String(value)),
+    removeItem: (key) => void items.delete(key),
+  }
+}
+
+beforeEach(() => vi.stubGlobal('localStorage', fakeStorage()))
+
+/**
+ * A phone whose position the test drives: it records every request, and answers a watch only when `reading` or `fail` is called.
+ * `browser` is what the browser answers to a one-off request (the quick path and the last resort): a position it remembers
+ * (`{ accuracy, ageMs }`), a refusal (`{ error: code }`), or, by default, nothing (position unavailable), as in a basement.
+ */
+function fakePhone({ answerWhileWatching, browser = null } = {}) {
   const phone = {
     watches: [],
     cleared: [],
@@ -37,9 +57,11 @@ function fakePhone({ answerWhileWatching } = {}) {
       clearWatch(id) {
         phone.cleared.push(id)
       },
-      getCurrentPosition(ok, _fail, options) {
+      getCurrentPosition(ok, fail, options) {
         phone.quickRequests.push(options)
-        ok({ coords: { latitude: 32.08, longitude: 34.78, accuracy: 10 }, timestamp: Date.now() })
+        if (!browser) return fail({ code: 2 })
+        if (browser.error) return fail({ code: browser.error })
+        ok({ coords: { latitude: 32.08, longitude: 34.78, accuracy: browser.accuracy }, timestamp: Date.now() - (browser.ageMs ?? 0) })
       },
     },
   })
@@ -217,7 +239,7 @@ describe('the quick position of the other points is untouched', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('getFix() asks once, for a position that the phone remembers, without high accuracy and without a watch', async () => {
-    const phone = fakePhone()
+    const phone = fakePhone({ browser: { accuracy: 10 } })
     const res = await getFix()
     expect(phone.quickRequests).toEqual([{ enableHighAccuracy: false, timeout: 4000, maximumAge: GPS_MAX_STALE_AGE_S * 1000 }])
     expect(phone.watches).toHaveLength(0)
@@ -225,9 +247,230 @@ describe('the quick position of the other points is untouched', () => {
   })
 
   it('getFix({ maxAgeMs: 0 }) is still the quick path, with its own age', async () => {
-    const phone = fakePhone()
+    const phone = fakePhone({ browser: { accuracy: 10 } })
     await getFix({ maxAgeMs: 0 })
     expect(phone.quickRequests).toEqual([{ enableHighAccuracy: false, timeout: 4000, maximumAge: 0 }])
     expect(phone.watches).toHaveLength(0)
+  })
+})
+
+describe('the last position of the phone, when there is no fresh one', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  /** Everything the precise path waits when no reading comes, before the last resort looks at what the phone kept. */
+  const WAITED_MS = PRECISE_WAIT_MS + GRACE_MS
+  const kept = () => JSON.parse(localStorage.getItem(LAST_FIX_KEY))
+  /** Puts a position on the phone as an earlier visit would have left it, `ageMs` before now. */
+  const keep = (ageMs, accuracy = 20) => localStorage.setItem(LAST_FIX_KEY, JSON.stringify({ lat: 32.1, lng: 34.8, accuracy, taken_at: Date.now() - ageMs }))
+  /** Puts a position on the phone that is `ageS` seconds old when the precise path has waited for nothing and the last resort looks at it. */
+  const keepAged = (ageS, accuracy = 20) => keep(ageS * 1000 - WAITED_MS, accuracy)
+  /** The precise path with no reading at all, until it gives up (and the last resort has answered). */
+  async function preciseWithNothing() {
+    const out = ask({ precise: true })
+    await vi.advanceTimersByTimeAsync(WAITED_MS)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(out.done).toBe(true)
+    return out.value
+  }
+
+  describe('keeping it', () => {
+    it('keeps a usable reading with the time of the reading, not the time of keeping it', async () => {
+      const phone = fakePhone()
+      const taken = Date.now() - 4200
+      const out = ask({ precise: true })
+      phone.reading(PRECISE_TARGET_ACCURACY_M, 4200)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(out.value.fix).toMatchObject({ accuracy: PRECISE_TARGET_ACCURACY_M, age_s: 4 })
+      expect(kept()).toEqual({ lat: 32.08, lng: 34.78, accuracy: PRECISE_TARGET_ACCURACY_M, taken_at: taken })
+    })
+
+    it('keeps the position that the quick path got with the time of that position, so keeping it again does not make it younger', async () => {
+      fakePhone({ browser: { accuracy: 40, ageMs: 100_000 } })
+      const taken = Date.now() - 100_000
+      const res = await getFix()
+      expect(res.fix.age_s).toBe(100)
+      expect(kept().taken_at).toBe(taken)
+    })
+
+    it('never keeps a reading that is too vague for the server, and keeps one of exactly the limit', async () => {
+      const phone = fakePhone()
+      const out = ask({ precise: true })
+      phone.reading(GPS_MAX_USABLE_ACCURACY_M + 1)
+      await vi.advanceTimersByTimeAsync(PRECISE_WAIT_MS)
+      expect(out.value.fix.accuracy).toBe(GPS_MAX_USABLE_ACCURACY_M + 1)
+      expect(localStorage.getItem(LAST_FIX_KEY)).toBeNull()
+
+      const exact = fakePhone()
+      const usable = ask({ precise: true })
+      exact.reading(GPS_MAX_USABLE_ACCURACY_M)
+      await vi.advanceTimersByTimeAsync(PRECISE_WAIT_MS)
+      expect(usable.value.fix.accuracy).toBe(GPS_MAX_USABLE_ACCURACY_M)
+      expect(kept().accuracy).toBe(GPS_MAX_USABLE_ACCURACY_M)
+    })
+
+    it('does not replace a younger position with an older one', async () => {
+      keep(10_000)
+      const before = localStorage.getItem(LAST_FIX_KEY)
+      fakePhone({ browser: { accuracy: 40, ageMs: 100_000 } })
+      await getFix()
+      expect(localStorage.getItem(LAST_FIX_KEY)).toBe(before)
+
+      fakePhone({ browser: { accuracy: 40, ageMs: 2000 } })
+      await getFix()
+      expect(kept().taken_at, 'a younger one does replace it').toBe(Date.now() - 2000)
+    })
+  })
+
+  describe('using it', () => {
+    it('gives the kept position, with its real age, when the precise path got nothing', async () => {
+      keepAged(200)
+      const phone = fakePhone()
+      expect(await preciseWithNothing()).toEqual({ fix: { lat: 32.1, lng: 34.8, accuracy: 20, age_s: 200 }, reason: null })
+      expect(phone.cleared).toEqual([1])
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('uses a kept position of exactly the limit, and not one a second older, which it also deletes', async () => {
+      keepAged(GPS_MAX_STALE_AGE_S)
+      fakePhone()
+      expect(await preciseWithNothing()).toMatchObject({ fix: { age_s: GPS_MAX_STALE_AGE_S }, reason: null })
+
+      forgetLastFix()
+      keepAged(GPS_MAX_STALE_AGE_S + 1)
+      fakePhone()
+      expect(await preciseWithNothing()).toEqual({ fix: null, reason: 'timeout' })
+      expect(localStorage.getItem(LAST_FIX_KEY), 'it can never be used again').toBeNull()
+    })
+
+    it('deletes, and does not use, a value that is not a position', async () => {
+      const damaged = [
+        'not json',
+        '{}',
+        JSON.stringify({ lat: 1, lng: 2, accuracy: 'x', taken_at: Date.now() }),
+        JSON.stringify({ lat: 1, lng: 2, accuracy: 10, taken_at: Date.now() + 60_000 }), // from the future: the clock was set back
+      ]
+      for (const value of damaged) {
+        localStorage.setItem(LAST_FIX_KEY, value)
+        fakePhone()
+        expect(await preciseWithNothing(), value).toEqual({ fix: null, reason: 'timeout' })
+        expect(localStorage.getItem(LAST_FIX_KEY), value).toBeNull()
+      }
+    })
+
+    it("falls back on the browser's own last known position when nothing is kept, asking for it with a short wait", async () => {
+      const phone = fakePhone({ browser: { accuracy: 35, ageMs: 120_000 } })
+      expect(await preciseWithNothing()).toEqual({ fix: { lat: 32.08, lng: 34.78, accuracy: 35, age_s: 120 }, reason: null })
+      expect(phone.quickRequests).toEqual([{ enableHighAccuracy: false, maximumAge: GPS_MAX_STALE_AGE_S * 1000, timeout: LAST_KNOWN_WAIT_MS }])
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it("takes the younger of the kept position and the browser's, whichever it is", async () => {
+      keepAged(200)
+      fakePhone({ browser: { accuracy: 35, ageMs: 100_000 } })
+      expect(await preciseWithNothing()).toMatchObject({ fix: { lat: 32.08, accuracy: 35, age_s: 100 } })
+
+      keepAged(50)
+      fakePhone({ browser: { accuracy: 35, ageMs: 120_000 } })
+      expect(await preciseWithNothing()).toMatchObject({ fix: { lat: 32.1, accuracy: 20, age_s: 50 } })
+    })
+
+    it('ignores a browser position older than the limit, and any position too vague for the server', async () => {
+      fakePhone({ browser: { accuracy: 35, ageMs: (GPS_MAX_STALE_AGE_S + 5) * 1000 } })
+      expect(await preciseWithNothing(), 'a browser that does not honour maximumAge').toEqual({ fix: null, reason: 'timeout' })
+
+      keepAged(10, GPS_MAX_USABLE_ACCURACY_M + 1)
+      fakePhone({ browser: { accuracy: GPS_MAX_USABLE_ACCURACY_M + 1, ageMs: 5000 } })
+      expect(await preciseWithNothing()).toEqual({ fix: null, reason: 'timeout' })
+    })
+
+    it('prefers a usable remembered position to a fresh reading that is too vague, and keeps the vague one when there is none', async () => {
+      keep(60_000)
+      const phone = fakePhone()
+      const out = ask({ precise: true })
+      phone.reading(GPS_MAX_USABLE_ACCURACY_M + 50)
+      await vi.advanceTimersByTimeAsync(PRECISE_WAIT_MS)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(out.value.fix).toMatchObject({ lat: 32.1, accuracy: 20 })
+
+      forgetLastFix()
+      const bare = fakePhone()
+      const vague = ask({ precise: true })
+      bare.reading(GPS_MAX_USABLE_ACCURACY_M + 50)
+      await vi.advanceTimersByTimeAsync(PRECISE_WAIT_MS)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vague.value).toMatchObject({ fix: { accuracy: GPS_MAX_USABLE_ACCURACY_M + 50 }, reason: null })
+    })
+
+    it('serves the quick path too, after both of its requests have failed', async () => {
+      keep(100_000)
+      const phone = fakePhone()
+      const res = await getFix()
+      expect(res).toEqual({ fix: { lat: 32.1, lng: 34.8, accuracy: 20, age_s: 100 }, reason: null })
+      expect(phone.quickRequests).toHaveLength(3) // the remembered position, the fresh one, the last resort
+    })
+  })
+
+  describe('never using it', () => {
+    it('does not use it after the permission was denied: the person does not share the location now', async () => {
+      keep(10_000)
+      const phone = fakePhone()
+      const out = ask({ precise: true })
+      phone.fail(1)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(out.value).toEqual({ fix: null, reason: 'denied' })
+      expect(phone.quickRequests, 'it did not even ask the browser').toHaveLength(0)
+
+      const quick = fakePhone({ browser: { error: 1 } })
+      expect(await getFix()).toEqual({ fix: null, reason: 'denied' })
+      expect(quick.quickRequests, 'the quick path stops at the refusal').toHaveLength(1)
+    })
+
+    it('does not use it when the browser says that the permission was withdrawn while the app waited', async () => {
+      keepAged(10)
+      const phone = fakePhone({ browser: { error: 1 } })
+      expect(await preciseWithNothing()).toEqual({ fix: null, reason: 'timeout' })
+      expect(phone.quickRequests).toHaveLength(1)
+    })
+
+    it('does not use it in a browser without geolocation', async () => {
+      keep(10_000)
+      vi.stubGlobal('navigator', {})
+      const out = ask({ precise: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(out.value).toEqual({ fix: null, reason: 'unsupported' })
+      expect(await getFix()).toEqual({ fix: null, reason: 'unsupported' })
+    })
+
+    it("does not keep what the last resort gave: the kept position is not refreshed, and the browser's is not copied", async () => {
+      keepAged(200)
+      const before = localStorage.getItem(LAST_FIX_KEY)
+      fakePhone()
+      await preciseWithNothing()
+      expect(localStorage.getItem(LAST_FIX_KEY), 'a position handed back is as old as it was').toBe(before)
+
+      forgetLastFix()
+      fakePhone({ browser: { accuracy: 35, ageMs: 100_000 } })
+      expect(await preciseWithNothing()).toMatchObject({ fix: { accuracy: 35, age_s: 100 } })
+      expect(localStorage.getItem(LAST_FIX_KEY), 'a position that came from the last resort is not kept').toBeNull()
+    })
+
+    it('is forgotten by forgetLastFix', async () => {
+      const phone = fakePhone()
+      const out = ask({ precise: true })
+      phone.reading(PRECISE_TARGET_ACCURACY_M)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(out.done).toBe(true)
+      expect(kept()).not.toBeNull()
+
+      forgetLastFix()
+      expect(localStorage.getItem(LAST_FIX_KEY)).toBeNull()
+      fakePhone()
+      expect(await preciseWithNothing()).toEqual({ fix: null, reason: 'timeout' })
+      forgetLastFix() // nothing kept: no error
+    })
   })
 })
