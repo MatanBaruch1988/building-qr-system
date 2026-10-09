@@ -62,9 +62,11 @@ export async function performCheckIn({ code, point, session, deps, onPhase = () 
   let locationReason = null
   if (point?.gps_mode !== GPS_MODE_NONE) {
     onPhase('locating')
-    // A point that MUST verify location gets a fresh reading: a position the phone remembers from a few minutes
-    // earlier (fine for "optional" points, and quicker) would let someone scan right after leaving the building.
-    const res = await getFix(point?.gps_mode === GPS_MODE_REQUIRED ? { maxAgeMs: 0 } : undefined)
+    // A point that MUST verify location waits a few seconds for a precise reading (src/worker/geo.js), and it is always a
+    // fresh one: a position the phone remembers from a few minutes earlier (fine for "optional" points, and quicker) would
+    // let someone scan right after leaving the building. It is precise because the quick estimate of a network (up to 150 m)
+    // would widen the fence by up to 50 m: the server counts the accuracy that the phone reports.
+    const res = await getFix(point?.gps_mode === GPS_MODE_REQUIRED ? { precise: true } : undefined)
     gps = res.fix
     locationReason = res.reason
   }
