@@ -1,6 +1,7 @@
 // The building's address and name: the two settings that the committee saves in the committee app and the provider app reads
-// (migrations 006 and 012, GET /api/public/building, GET and PUT /api/admin/building). Both start empty, and neither is in the
-// agent API. The name is optional in a save: a committee screen that sends the address only leaves the saved name alone.
+// (migrations 006 and 012, GET /api/public/building, GET and PUT /api/admin/building). Both start empty. The agent reads them at
+// GET /api/agent/v1/building (owner decision of 08/10/2026) and in no other agent answer. The name is optional in a save: a
+// committee screen that sends the address only leaves the saved name alone.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { setupDb, call, seedAdmin, adminCookie } from './helpers.js'
 
@@ -437,26 +438,59 @@ describe('who changed it, and when', () => {
 })
 
 describe('the agent API', () => {
-  it('does not carry the address: it is not attendance data', async () => {
-    await save('רחוב שלא לסוכן 5')
-    const key = (await call('POST', '/api/admin/api-keys', { cookie, body: { name: 'בדיקה' } })).json.key
-    for (const path of ['/api/agent/v1/schema', '/api/agent/v1/points', '/api/agent/v1/providers', '/api/agent/v1/scans']) {
-      const r = await call('GET', path, { token: key })
-      expect(r.status, path).toBe(200)
-      expect(r.text, path).not.toContain('שלא לסוכן')
-    }
-    expect((await call('GET', '/api/agent/v1/building', { token: key })).status).toBe(404)
+  // The owner decided on 08/10/2026 that the committee's agent is its analyst: it sees what the committee app shows, and never a
+  // secret (AGENTS.md, "Safety"; docs/privacy.md). Until then the agent API did not carry the building ("it is not attendance
+  // data"), and the tests here pinned that: a 404 at /building and neither text in any answer. The building now has an endpoint of
+  // its own, GET /api/agent/v1/building, which answers the name and the address. What has not changed is that no OTHER agent answer
+  // carries the two texts, and that the answer never carries the bookkeeping of the row (who saved it, when) or the table's name.
+  const agentKey = async (name) => (await call('POST', '/api/admin/api-keys', { cookie, body: { name } })).json.key
+  const agentGet = (key, path) => call('GET', `/api/agent/v1${path}`, { token: key })
+
+  it('answers the name and the address at GET /api/agent/v1/building, as the committee typed them and in this order', async () => {
+    await put({ address: 'רחוב לסוכן 5', name: 'בניין לסוכן' })
+    const r = await agentGet(await agentKey('בדיקת בניין'), '/building')
+    expect(r.status).toBe(200)
+    expect(r.json).toEqual({ building: { name: 'בניין לסוכן', address: 'רחוב לסוכן 5' } })
+    expect(Object.keys(r.json)).toEqual(['building'])
+    expect(Object.keys(r.json.building)).toEqual(['name', 'address'])
   })
 
-  it('does not carry the name either, in any answer', async () => {
+  it('follows a change of the committee at once, and is an empty string for a text that is not set (not null, not missing)', async () => {
+    const key = await agentKey('בדיקת שינוי')
+    await db.pool.query("update building_settings set address = '', name = ''")
+    expect((await agentGet(key, '/building')).json).toEqual({ building: { name: '', address: '' } })
+    await save('רחוב בלי שם 3')
+    expect((await agentGet(key, '/building')).json).toEqual({ building: { name: '', address: 'רחוב בלי שם 3' } })
+    await put({ address: 'רחוב בלי שם 3', name: 'שם חדש' })
+    expect((await agentGet(key, '/building')).json).toEqual({ building: { name: 'שם חדש', address: 'רחוב בלי שם 3' } })
+  })
+
+  it('needs the agent key, as every agent endpoint does: no key, an unknown key and the committee cookie are refused', async () => {
+    expect((await call('GET', '/api/agent/v1/building')).json.error.code).toBe('api_key_required')
+    expect((await call('GET', '/api/agent/v1/building', { token: 'qrk_unknown' })).json.error.code).toBe('api_key_invalid')
+    expect((await call('GET', '/api/agent/v1/building', { cookie })).status).toBe(401) // the committee's cookie is not an agent key
+  })
+
+  it('shows nothing of the row beyond the two texts: not who saved it, not when, not the name of the table', async () => {
+    await save('רחוב עם חתימה 8')
+    expect((await stored())[0].updated_by).toBe(adminId)
+    const r = await agentGet(await agentKey('בדיקת חתימה'), '/building')
+    expect(r.status).toBe(200)
+    for (const hidden of [adminId, 'updated_by', 'updated_at', 'building_settings', 'admin@test.local']) {
+      expect(r.text, hidden).not.toContain(hidden)
+    }
+  })
+
+  it('carries neither text in any other answer: only /building says them', async () => {
     await put({ address: 'רחוב שלא לסוכן 6', name: 'שם שלא לסוכן' })
-    const key = (await call('POST', '/api/admin/api-keys', { cookie, body: { name: 'בדיקת שם' } })).json.key
-    for (const path of ['/api/agent/v1/schema', '/api/agent/v1/points', '/api/agent/v1/providers', '/api/agent/v1/scans', '/api/agent/v1/health']) {
-      const r = await call('GET', path, { token: key })
+    const key = await agentKey('בדיקת שאר התשובות')
+    for (const path of ['/schema', '/openapi.json', '/points', '/providers', '/scans', '/scans?format=csv', '/health']) {
+      const r = await agentGet(key, path)
       expect(r.status, path).toBe(200)
-      expect(r.text, path).not.toContain('שם שלא לסוכן')
+      expect(r.text, path).not.toContain('שלא לסוכן')
       expect(r.text, path).not.toContain('building_settings')
     }
+    expect((await agentGet(key, '/building')).text).toContain('שם שלא לסוכן')
     await db.pool.query("update building_settings set name = ''")
   })
 })

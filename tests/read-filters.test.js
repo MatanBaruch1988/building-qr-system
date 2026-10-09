@@ -2,8 +2,9 @@
 //   - scanWhere (server/scans.js): the conditions of the scan filters, which listScans uses and a later counting endpoint will;
 //   - REFUSAL_FILTERS (server/scanRefusals.js): the list of what listRefusals reads from its query (the audit log has AUDIT_FILTERS,
 //     proved in tests/audit-read.test.js, and the scans have SCAN_FILTERS, proved in tests/agent-docs.test.js);
-//   - PHONE_HEALTH_LATERAL (server/deviceStatus.js): the phone-health part of the providers list (its numbers are proved in
-//     tests/providers-phone-health.test.js);
+//   - PHONE_HEALTH_LATERAL (server/deviceStatus.js): the phone-health part of the providers list of the committee and of the agent
+//     (the committee's numbers are proved in tests/providers-phone-health.test.js, the agent's in
+//     tests/agent-phones-building-voids.test.js);
 //   - looksSecret (shared/secretLike.js).
 // None of them changed what any route answers: the answers themselves are proved by the tests of the routes. No database is
 // needed: the statements are read from a pool that records them.
@@ -169,13 +170,22 @@ describe('REFUSAL_FILTERS', () => {
 })
 
 describe('PHONE_HEALTH_LATERAL', () => {
-  it('is the lateral join that gives a provider its three phone-health columns, with $1 as the server build', () => {
+  it('is the lateral join that gives a provider its phone-health columns, with $1 as the server build', () => {
     expect(PHONE_HEALTH_LATERAL).toMatch(/^cross join lateral \(/)
     expect(PHONE_HEALTH_LATERAL).toMatch(/\) phones$/)
-    for (const column of ['waiting', 'oldest_waiting_at', 'outdated_devices']) expect(PHONE_HEALTH_LATERAL, column).toMatch(new RegExp(`\\bas ${column}\\b`))
+    // The committee's providers list selects the first three, the agent's providers all seven (tests/agent-phones-building-voids.test.js).
+    for (const column of ['waiting', 'oldest_waiting_at', 'outdated_devices', 'active_devices', 'last_sync_at', 'not_accepted_total', 'overflow_total']) {
+      expect(PHONE_HEALTH_LATERAL, column).toMatch(new RegExp(`\\bas ${column}\\b`))
+    }
     expect(PHONE_HEALTH_LATERAL).toContain('d.app_build <> $1::text')
     expect(PHONE_HEALTH_LATERAL).toContain('d.provider_id = p.id and d.revoked_at is null') // the active phones of the provider `p`
     expect(PHONE_HEALTH_LATERAL).not.toMatch(/\$[2-9]/) // the build is its only parameter: the caller's own values start at $2
+  })
+
+  it('reads no column that identifies or describes one phone: no label, no token hash, no id, and no row per phone (it is one aggregate)', () => {
+    const sql = PHONE_HEALTH_LATERAL.replace(/\s+/g, ' ')
+    for (const column of ['label', 'token_hash', 'd.id', 'user_agent']) expect(sql, column).not.toContain(column)
+    expect(sql).not.toMatch(/\bgroup by\b/) // an aggregate over all the phones of the provider: exactly one row for each provider
   })
 })
 

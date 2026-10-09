@@ -10,8 +10,8 @@
 // What is compared with what (the first of each line is the truth):
 //   1. flags:          shared/flags.js = what server/ emits = schemaDoc.flags = the list in the md = FLAGS of HistoryView
 //   2. scan fields:    the real /scans answer = the real CSV header = schemaDoc (time_fields + scan_fields) = the md example
-//   3. points, providers and the envelopes of every answer: the real answers = schemaDoc = the md tables (the envelopes are
-//                      also compared with the registry)
+//   3. points, providers, the building and the envelopes of every answer: the real answers = schemaDoc = the md tables (the
+//                      envelopes are also compared with the registry)
 //   4. endpoints:      the routes under /agent/v1 in routeTable() = the registry = schemaDoc.endpoints = the md table
 //   5. filters:        what the code of each endpoint really reads = the registry = schemaDoc = the md (and the values they allow)
 //   6. outcomes and sources: the check constraints of the scans table (db/migrations) = schemaDoc = the md
@@ -39,7 +39,7 @@ import { AGENT_ENDPOINTS, endpointKey } from '../server/agentEndpoints.js'
 import * as config from '../server/config.js'
 import * as flagsModule from '../shared/flags.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
-import { SCAN_FILTERS, SCAN_CSV_COLUMNS, listScans } from '../server/scans.js'
+import { SCAN_FILTERS, SCAN_CSV_COLUMNS, AGENT_SCAN_CSV_COLUMNS, listAgentScans } from '../server/scans.js'
 import { evaluateGps, resolveClock } from '../server/scanLogic.js'
 
 // ---------- where the documents are ----------
@@ -74,6 +74,8 @@ const WHERE = {
   schemaProviders: `${SCHEMA} (providers_fields)`,
   mdPoints: `${MD} (the point table under "## A point and a provider")`,
   mdProviders: `${MD} (the provider table under "## A point and a provider")`,
+  schemaBuilding: `${SCHEMA} (building_fields)`,
+  mdBuilding: `${MD} (the table under "## The building")`,
   schemaFilters: (e) => `${ENDPOINTS_FILE} (the Query list in the text of ${endpointKey(e)}, served by ${SCHEMA})`,
   mdFilters: (e) => `${MD} (the first paragraph under the "${mdName(e)}" filters heading)`,
   schemaOutcomes: `${SCHEMA} (outcomes)`,
@@ -228,6 +230,7 @@ const mdScanRowKeys = () => {
 }
 const mdFieldTable = (before) =>
   tableOf(section(md, '## A point and a provider'), `of fields under "## A point and a provider"`, before).rows.flatMap((r) => codes(r[0]))
+const mdBuildingFields = () => tableOf(section(md, '## The building'), 'of the building fields under "## The building"').rows.flatMap((r) => codes(r[0]))
 const mdValueTable = (header) => {
   const t = tables(section(md, '## Outcomes and sources')).find((x) => x.header[0] === header)
   if (!t) throw new Error(`${MD} has no table whose first column is ${header} under "## Outcomes and sources": the outcomes and the sources are read from it.`)
@@ -668,21 +671,23 @@ describe('the real agent API answers what the documents say', () => {
     const real = Object.keys(json.scans[0])
     const problems = []
     for (const s of json.scans) {
-      if (Object.keys(s).join() !== real.join()) problems.push('The /scans answer does not give every scan the same keys in the same order (scanJson in server/scans.js).')
+      if (Object.keys(s).join() !== real.join()) problems.push('The /scans answer does not give every scan the same keys in the same order (agentScanJson in server/scans.js).')
     }
     const csv = await get('/scans?outcome=all&format=csv&limit=500')
     const lines = csv.text.split('\r\n')
     const header = lines[0].split(',')
-    const truth = { where: 'the real /scans answer (scanJson in server/scans.js)', names: real }
+    const truth = { where: 'the real /scans answer (agentScanJson in server/scans.js)', names: real }
     problems.push(
       ...diffAll('scan field', truth, [
-        { where: `the CSV header of the real /scans?format=csv answer (SCAN_CSV_COLUMNS in server/scans.js)`, names: header },
+        { where: `the CSV header of the real /scans?format=csv answer (AGENT_SCAN_CSV_COLUMNS in server/scans.js)`, names: header },
         { where: WHERE.schemaScanFields, names: [...Object.keys(schemaDoc.time_fields), ...Object.keys(schemaDoc.scan_fields)] },
         { where: WHERE.mdScanRow, names: mdScanRowKeys() },
       ]),
     )
     if (header.join() !== real.join()) problems.push(`The CSV columns (${header.join(',')}) are not in the order of a scan row (${real.join(',')}), but ${MD} says "the same columns as a scan row, in the same order".`)
-    if (SCAN_CSV_COLUMNS.join() !== real.join()) problems.push('SCAN_CSV_COLUMNS in server/scans.js is not in the order of scanJson.')
+    if (AGENT_SCAN_CSV_COLUMNS.join() !== real.join()) problems.push('AGENT_SCAN_CSV_COLUMNS in server/scans.js is not in the order of agentScanJson.')
+    // The agent's columns are the committee's, in the same order, and then the ones that only the agent has.
+    if (AGENT_SCAN_CSV_COLUMNS.slice(0, SCAN_CSV_COLUMNS.length).join() !== SCAN_CSV_COLUMNS.join()) problems.push('AGENT_SCAN_CSV_COLUMNS in server/scans.js does not begin with SCAN_CSV_COLUMNS, in order: a reader that took the first columns by position would read something else.')
     // The example of the md for the flags cell is what the code writes for a scan that has two flags.
     const example = /\(for example `([a-z_;]+)`\)/.exec(section(md, '### CSV').replace(/\s*\n\s*/g, ' '))?.[1]
     const flagged = json.scans.find((s) => s.flags.length === 2)
@@ -695,9 +700,10 @@ describe('the real agent API answers what the documents say', () => {
     report(problems)
   })
 
-  it('points and providers: the real answers = schemaDoc = the md tables; and the envelope of every answer', async () => {
+  it('points, providers and the building: the real answers = schemaDoc = the md tables; and the envelope of every answer', async () => {
     const points = (await get('/points')).json
     const providers = (await get('/providers')).json
+    const building = (await get('/building')).json
     expect(points.points.length).toBeGreaterThan(0)
     expect(providers.providers.length).toBeGreaterThan(0)
     const problems = [
@@ -708,6 +714,10 @@ describe('the real agent API answers what the documents say', () => {
       ...diffAll('provider field', { where: 'the real /providers answer (server/routes/agent.js)', names: Object.keys(providers.providers[0]) }, [
         { where: WHERE.schemaProviders, names: Object.keys(schemaDoc.providers_fields) },
         { where: WHERE.mdProviders, names: mdFieldTable(/\(`\/providers`\)/) },
+      ]),
+      ...diffAll('building field', { where: 'the real /building answer (server/routes/agent.js)', names: Object.keys(building.building ?? {}) }, [
+        { where: WHERE.schemaBuilding, names: Object.keys(schemaDoc.building_fields) },
+        { where: WHERE.mdBuilding, names: mdBuildingFields() },
       ]),
     ]
     // The envelope of every endpoint of the registry that has one: the real answer = the registry = the md row = the text of /schema.
@@ -728,7 +738,7 @@ describe('the real agent API answers what the documents say', () => {
       if (!inSchema) problems.push(`${ENDPOINTS_FILE}: the text of ${endpointKey(e)} no longer says "Returns { ... }".`)
       else problems.push(...diffNames('top-level key', real, { where: `${WHERE.schemaEndpoints}, ${endpointKey(e)}`, names: inSchema }))
     }
-    for (const [name, rows] of [['points_fields', schemaDoc.points_fields], ['providers_fields', schemaDoc.providers_fields], ['scan_fields', schemaDoc.scan_fields], ['time_fields', schemaDoc.time_fields]]) {
+    for (const [name, rows] of [['points_fields', schemaDoc.points_fields], ['providers_fields', schemaDoc.providers_fields], ['building_fields', schemaDoc.building_fields], ['scan_fields', schemaDoc.scan_fields], ['time_fields', schemaDoc.time_fields]]) {
       for (const [field, text] of Object.entries(rows)) {
         if (typeof text !== 'string' || !text.trim()) problems.push(`${SCHEMA}: ${name}.${field} has no description.`)
       }
@@ -741,8 +751,8 @@ describe('the real agent API answers what the documents say', () => {
   // the route does: `proveRouteReads`). An endpoint of the registry that lists filters needs a probe here, and a probe needs a row.
   const FILTER_PROBES = {
     listScans: {
-      readWhere: 'what listScans reads in server/scans.js',
-      // Every property that listScans reads from its query. The values are all valid, so that no read is skipped by an early
+      readWhere: 'what listAgentScans reads in server/scans.js (the function behind the route)',
+      // Every property that listAgentScans reads from its query. The values are all valid, so that no read is skipped by an early
       // refusal (the cursor is made the way the API makes one).
       read: async () => {
         const reads = new Set()
@@ -753,7 +763,7 @@ describe('the real agent API answers what the documents say', () => {
           },
           { get: (target, prop) => (typeof prop === 'string' ? (reads.add(prop), target[prop]) : target[prop]) },
         )
-        await listScans(query)
+        await listAgentScans(query)
         return [...reads]
       },
       listedWhere: 'SCAN_FILTERS in server/scans.js',
@@ -898,12 +908,14 @@ describe('the real agent API answers what the documents say', () => {
       expectPair(await call(method, `/api/agent/v1${rel}?limit=abc`, { token: spent.key }), `${method} ${rel} with a key that is over its limit for the minute`, 429, 'rate_limited')
     }
 
-    // A failure of the server itself: a database that cannot be reached, through the real route and the real router.
+    // A failure of the server itself: a database that cannot be reached, through the real route and the real router. The key is taken
+    // before the database is broken: the rotation of keys (currentKey) mints a new one through the database when the old one is used up.
+    const brokenKey = await currentKey()
     const pool = getPool()
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     setPool({ query: async () => { throw Object.assign(new Error('connection lost'), { code: 'ECONNRESET' }) } })
     try {
-      expectPair(await get('/scans'), 'GET /scans while the database cannot be reached', 500, 'server_error')
+      expectPair(await call('GET', '/api/agent/v1/scans', { token: brokenKey }), 'GET /scans while the database cannot be reached', 500, 'server_error')
     } finally {
       setPool(pool)
       logged.mockRestore()
