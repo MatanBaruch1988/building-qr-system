@@ -31,8 +31,10 @@ import { routeTable } from '../server/router.js'
 import { getPool, setPool } from '../server/db.js'
 import { schemaDoc } from '../server/schemaDoc.js'
 import { AGENT_ENDPOINTS, endpointKey } from '../server/agentEndpoints.js'
-import { buildOpenApi, openApiDocument } from '../server/agentOpenApi.js'
+import { buildOpenApi, openApiDocument, auditDetailSchemaName } from '../server/agentOpenApi.js'
 import { AGENT_SCAN_CSV_COLUMNS } from '../server/scans.js'
+import { AUDIT_GROUPS } from '../server/auditRead.js'
+import { AUDIT_ACTOR_TYPES, AUDIT_DETAIL_ALLOW, AUDIT_SIGN_IN_METHODS } from '../server/audit.js'
 import * as config from '../server/config.js'
 import { SCAN_FLAGS } from '../shared/flags.js'
 import { SCAN_OUTCOMES, SCAN_SOURCES, GPS_MODES, OUTCOME_ACCEPTED, SYNC_PERMANENT_ERROR_CODES } from '../shared/contract.js'
@@ -274,6 +276,8 @@ const PARAMETER_FACTS = {
   order: { enum: ['asc', 'desc'], default: 'desc' },
   limit: { minimum: 1, maximum: config.MAX_PAGE_SIZE, default: config.DEFAULT_PAGE_SIZE },
   'listRefusals.limit': { minimum: 1, maximum: config.MAX_REFUSAL_PAGE_SIZE, default: config.DEFAULT_PAGE_SIZE },
+  'listAudit.limit': { minimum: 1, maximum: config.MAX_AUDIT_PAGE_SIZE, default: config.DEFAULT_PAGE_SIZE },
+  group: { enum: [...AUDIT_GROUPS] },
   format: { enum: ['json', 'csv'], default: 'json' },
 }
 const factsFor = (operation, name) => PARAMETER_FACTS[`${operation.operationId}.${name}`] ?? PARAMETER_FACTS[name] ?? {}
@@ -288,6 +292,15 @@ const SCHEMA_FACTS = {
   'Refusal.properties.source.enum': [...SCAN_SOURCES],
   'Refusal.properties.code.enum': [...SYNC_PERMANENT_ERROR_CODES],
   'RefusalList.properties.count.minimum': 0,
+  'AuditEntry.properties.actor_type.enum': [...AUDIT_ACTOR_TYPES],
+  'AuditList.properties.count.minimum': 0,
+  // The enums of the detail of an audit action: a word of a list of shared/ or of server/audit.js, or null (a value that is not one is null).
+  'AuditDetailSessionSignIn.properties.method.enum': [...AUDIT_SIGN_IN_METHODS, null],
+  'AuditDetailPointCreate.properties.gps_mode.enum': [...GPS_MODES, null],
+  'AuditDetailPointUpdate.properties.gps_mode.enum': [...GPS_MODES, null],
+  'AuditDetailPointUpdate.properties.changes.properties.gps_mode.properties.from.enum': [...GPS_MODES, null],
+  'AuditDetailPointUpdate.properties.changes.properties.gps_mode.properties.to.enum': [...GPS_MODES, null],
+  'AuditDetailScanDelete.properties.outcome.enum': [...SCAN_OUTCOMES, null],
 }
 const factsOf = (schema) => Object.fromEntries([...nodes(schema)].flatMap(([, node]) => Object.entries(node).filter(([key]) => KEYWORDS.includes(key))))
 
@@ -356,6 +369,33 @@ describe('d. every enum is its constant, every limit and default is its constant
     report(problems)
   })
 
+  it('the audit detail schemas are the actions of AUDIT_DETAIL_ALLOW that have keys, each with exactly its keys, all optional; the detail of an entry is null or one of them', () => {
+    const problems = []
+    const withSchema = []
+    for (const [action, allow] of Object.entries(AUDIT_DETAIL_ALLOW)) {
+      const name = auditDetailSchemaName(action)
+      const schema = doc.components.schemas[name]
+      const keys = Object.keys(allow)
+      if (!keys.length) {
+        if (schema) problems.push(`components.schemas.${name} exists, but ${action} allows no key: its detail is always null.`)
+        continue
+      }
+      if (!schema) {
+        problems.push(`${action} allows keys in AUDIT_DETAIL_ALLOW but the document has no schema ${name}.`)
+        continue
+      }
+      withSchema.push(name)
+      problems.push(...diffNames(`key of ${action}`, { where: 'AUDIT_DETAIL_ALLOW (server/audit.js)', names: keys }, { where: `components.schemas.${name}`, names: Object.keys(schema.properties) }))
+      if (schema.required !== undefined) problems.push(`components.schemas.${name} requires keys, but an entry holds only the keys that its action wrote.`)
+    }
+    const inDocument = Object.keys(doc.components.schemas).filter((n) => n.startsWith('AuditDetail'))
+    problems.push(...diffNames('audit detail schema', { where: 'AUDIT_DETAIL_ALLOW (server/audit.js)', names: withSchema }, { where: 'components.schemas', names: inDocument }))
+    const anyOf = doc.components.schemas.AuditEntry.properties.detail.anyOf
+    expect(anyOf[0]).toEqual({ type: 'null' })
+    expect(anyOf.slice(1).map((x) => x.$ref)).toEqual(withSchema.map((name) => `#/components/schemas/${name}`))
+    report(problems)
+  })
+
   it('the enums of the flags, outcomes, sources and GPS modes are the lists of shared/ in full (nothing left out, nothing added)', () => {
     const scan = doc.components.schemas.Scan.properties
     expect(scan.flags.items.enum).toEqual([...SCAN_FLAGS])
@@ -375,7 +415,7 @@ describe('d. every enum is its constant, every limit and default is its constant
 
   it('every field of an answer is described by schemaDoc, and every property of an object is required', () => {
     const problems = []
-    for (const [name, fields] of [['Point', schemaDoc.points_fields], ['Provider', schemaDoc.providers_fields], ['Building', schemaDoc.building_fields], ['Refusal', schemaDoc.refusal_fields], ['Scan', { ...schemaDoc.time_fields, ...schemaDoc.scan_fields }]]) {
+    for (const [name, fields] of [['Point', schemaDoc.points_fields], ['Provider', schemaDoc.providers_fields], ['Building', schemaDoc.building_fields], ['Refusal', schemaDoc.refusal_fields], ['AuditEntry', schemaDoc.audit_fields], ['Scan', { ...schemaDoc.time_fields, ...schemaDoc.scan_fields }]]) {
       const properties = doc.components.schemas[name].properties
       problems.push(...diffNames('field', { where: `schemaDoc (${name})`, names: Object.keys(fields) }, { where: `components.schemas.${name}`, names: Object.keys(properties) }))
       for (const [field, text] of Object.entries(fields)) {
@@ -384,6 +424,10 @@ describe('d. every enum is its constant, every limit and default is its constant
     }
     for (const [name, schema] of Object.entries(doc.components.schemas)) {
       if (name === 'Error') continue // an error carries extra keys when it has them: its code and message are the required ones
+      // The detail of an audit action holds only the keys that its action wrote, so every key of it is optional on purpose (the closed check
+      // of the real answers below, and tests/agent-audit.test.js, prove that no other key can be there). Its `{ from, to }` and
+      // `{ added, removed }` objects are still all-required, and tests/agent-audit.test.js checks that.
+      if (name.startsWith('AuditDetail')) continue
       for (const [keys, node] of nodes(schema)) {
         if (!node.properties || Array.isArray(node)) continue
         const where = `components.schemas.${[name, ...keys].join('.')}`
@@ -413,6 +457,10 @@ const INVALID_VALUES = {
   limit: ['0', '-1', 'abc', '1.5'],
   cursor: ['zzz'],
   format: [], // csv, or JSON for any other value
+  group: ['zzz', 'POINT', 'point.update'],
+  actor_id: ['zzz', '123'],
+  entity: [], // any text: an entity that nothing has matches nothing
+  entity_id: [],
 }
 
 /** Values the document allows for a parameter schema, as the text of a query. */
@@ -689,6 +737,7 @@ describe('the real agent API answers what the document says', () => {
     const cursors = {
       listScans: (await get('/scans?outcome=all&limit=1')).json.next_cursor,
       listRefusals: (await get('/refusals?limit=1')).json.next_cursor, // the cursor of the scans is not one of the refused visits
+      listAudit: (await get('/audit?limit=1')).json.next_cursor, // nor is the cursor of the scans one of the audit log
     }
     for (const e of AGENT_ENDPOINTS) {
       for (const parameter of operationOf(e).parameters ?? []) {

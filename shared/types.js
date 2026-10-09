@@ -149,7 +149,8 @@
 /**
  * One entry of the audit log, as the committee reads it (GET /api/admin/audit, auditEntry in server/auditRead.js). It is
  * the row of `audit_log`, the name of the member and the current name of what the entry is about, nothing else: no session, no
- * token. The agent API never has it.
+ * token. The committee's agent reads the same log in a narrower shape (agentAuditEntry in server/auditRead.js: the same fields, with
+ * the detail cut to the keys that its action allows).
  * @typedef {object} AuditEntry
  * @property {number} id  the row's number, which orders two entries with the same `at` (a number, like the id of a refused visit)
  * @property {string} at  ISO 8601, UTC

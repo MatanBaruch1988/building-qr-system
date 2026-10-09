@@ -13,9 +13,10 @@
 //
 // The text of a row is what an agent reads in /schema. Every number it quotes from server/config.js is written from the constant
 // (never typed), as in server/schemaDoc.js: tests/agent-docs.test.js reads this file for typed numbers too.
-import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_REFUSAL_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH } from './config.js'
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MAX_REFUSAL_PAGE_SIZE, MAX_AUDIT_PAGE_SIZE, FILTER_TEXT_MAX_LENGTH } from './config.js'
 import { SCAN_FILTERS } from './scans.js'
 import { REFUSAL_FILTERS } from './scanRefusals.js'
+import { AUDIT_FILTERS, AUDIT_GROUPS } from './auditRead.js'
 
 /**
  * One endpoint of the agent API.
@@ -105,6 +106,27 @@ export const AGENT_ENDPOINTS = Object.freeze([
     description:
       'Returns { building } with the name and the address of the building, as the committee typed them. A text the committee has ' +
       'not set is an empty string. See building_fields.',
+  }),
+  row({
+    id: 'listAudit',
+    summary: 'List the audit log',
+    method: 'GET',
+    path: '/agent/v1/audit',
+    filters: [...AUDIT_FILTERS],
+    envelope: ['entries', 'count', 'next_cursor'],
+    description:
+      'Query: from, to (YYYY-MM-DD = a calendar day in Israel time, or an ISO date-time that carries Z or an offset; they bound the ' +
+      'time of the entry), ' +
+      `group (${AUDIT_GROUPS.join('|')}: the part of the action before the dot), ` +
+      'actor_id (a uuid: the committee member who did it), ' +
+      `entity, entity_id (both text, cut to ${FILTER_TEXT_MAX_LENGTH} characters: what the entry is about, for example entity=point with the id of a point), ` +
+      `limit (default ${DEFAULT_PAGE_SIZE}, up to ${MAX_AUDIT_PAGE_SIZE} entries: more than that is cut to ${MAX_AUDIT_PAGE_SIZE}, not refused), ` +
+      'cursor (from next_cursor). ' +
+      'Returns { entries, count, next_cursor }: the audit log of the committee, newest first. An entry is one change that the committee ' +
+      '(or the daily job, or a command of the owner) made, or one sign-in or sign-out of a committee member, with who did it, what it was ' +
+      'about and a detail. The log is append-only: an entry is never changed or deleted, so a correction is a new entry. count is the ' +
+      'number of entries in this page (not the total), next_cursor is null on the last page. A detail holds only the keys that audit_actions ' +
+      'lists for its action, and never a secret. See audit_fields, audit_actions, audit_groups and audit_detail.',
   }),
   row({
     id: 'getSchema',
