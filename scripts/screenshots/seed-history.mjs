@@ -1,6 +1,7 @@
-// Adds a week of visits to the scratch schema of the screenshots, so that the History tab has rows to show. Run by the spec of
-// the screenshots (scripts/screenshots/screenshots.spec.mjs) after the sample seed (scripts/dev-seed.mjs, which makes the
-// providers and the points and has no scans), never by hand and never against a real table.
+// Adds a week of visits to the scratch schema of the screenshots, so that the History tab has rows to show, and makes every
+// sample point one that checks the location. Run by the spec of the screenshots (scripts/screenshots/screenshots.spec.mjs)
+// after the sample seed (scripts/dev-seed.mjs, which makes the providers and the points and has no scans), never by hand and
+// never against a real table.
 // Usage: node scripts/screenshots/seed-history.mjs <schema>
 //
 // The visits go through recordScan, the function that records a real one, with the time of the visit passed in, so they are
@@ -22,7 +23,7 @@ const { getPool, query } = await import('../../server/db.js')
 const { assertNotProduction } = await import('../../server/dbGuard.js')
 const { recordScan } = await import('../../server/scans.js')
 const { TIMEZONE } = await import('../../server/config.js')
-const { SOURCE_ONLINE } = await import('../../shared/contract.js')
+const { SOURCE_ONLINE, GPS_MODE_REQUIRED } = await import('../../shared/contract.js')
 
 try {
   await assertNotProduction(getPool())
@@ -30,6 +31,12 @@ try {
   console.error(err.message)
   process.exit(1)
 }
+
+// The committee app saves every point as one that checks the location (src/admin/views/PointsView.jsx), so the pictures show the
+// points as a new installation has them. The sample seed keeps its other modes on purpose: the server still serves a point that an
+// older installation saved without the check, and the end-to-end tests cover that. Every sample point has a pin, which the mode
+// needs. Before the check for scans below, so that a second run of this script makes the same points.
+await query('update points set gps_mode = $1 where gps_mode <> $1', [GPS_MODE_REQUIRED])
 
 const { rows: existing } = await query('select count(*)::int n from scans')
 if (existing[0].n > 0) {
