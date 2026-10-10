@@ -53,6 +53,8 @@ function answerLikeTheServer() {
 const start = () => render(<ErrorBoundary><WorkerApp /></ErrorBoundary>)
 const crashTitle = () => screen.queryByRole('heading', { name: he['crash.title'] })
 const signInHeading = () => screen.findByRole('heading', { name: he['login.title'] })
+// The heading is drawn at once, the names only when the list of providers has been answered: a test that needs a name waits for it.
+const ploniInTheList = () => screen.findByRole('button', { name: new RegExp(ploni.contact_name) })
 const greeting = () => screen.getByRole('heading', { name: /^שלום,/ })
 const sessionChecked = () => api.mock.calls.some(([path, options]) => path === '/session' && !options?.method)
 const stored = () => window.localStorage.getItem(KEY)
@@ -73,7 +75,7 @@ describe('a stored session that has no usable provider details', () => {
     start()
 
     expect(await signInHeading()).toBeTruthy()
-    expect(screen.getByRole('button', { name: new RegExp(ploni.contact_name) })).toBeTruthy()
+    expect(await ploniInTheList()).toBeTruthy()
     expect(crashTitle()).toBeNull()
     expect(stored()).toBeNull()
     expect(sessionChecked()).toBe(false) // nobody is signed in, so there is nothing to check
@@ -106,7 +108,7 @@ describe('a stored session that has no usable provider details', () => {
     start()
     await signInHeading()
 
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(ploni.contact_name) }))
+    fireEvent.click(await ploniInTheList())
     fireEvent.change(screen.getByLabelText(he['login.passwordLabel'], { selector: 'input' }), { target: { value: 'sample-pass-1' } })
     fireEvent.click(screen.getByRole('button', { name: he['login.submit'] }))
 
@@ -173,7 +175,7 @@ describe('a sign-in answer that cannot be used', () => {
     start()
     await signInHeading()
 
-    fireEvent.click(screen.getByRole('button', { name: new RegExp(ploni.contact_name) }))
+    fireEvent.click(await ploniInTheList())
     fireEvent.change(screen.getByLabelText(he['login.passwordLabel'], { selector: 'input' }), { target: { value: 'sample-pass-1' } })
     fireEvent.click(screen.getByRole('button', { name: he['login.submit'] }))
 
