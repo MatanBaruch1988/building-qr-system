@@ -100,48 +100,15 @@ test('the tab bar of the phone fits a 360 px screen: each label on one line and 
 // sign-in for every tab, because the moment is only there after one. (tests/components/admin-tab.test.jsx makes the moment
 // happen on purpose; this checks it in a real browser.)
 //
-// The one wait is at the end of each round, for the answers to what that round asked of the server. A screen asks for its lists from
-// effects that run after it is drawn, so a heading on the screen does not mean that its requests have started, and WebKit refuses a
-// request that starts while the page is being replaced ("Fetch API cannot load ... due to access control checks", which the console
-// guard of fixtures.js counts). The next round's sign-in loads the page again, so it must not begin before the last round's requests are
-// on their way (the same wait as `shellLoaded` in e2e/error-boundary.spec.js). It comes at the end because the moment above must not be
-// touched: nothing may wait between the sign-in and the address, and the answers are registered before the sign-in, not waited for.
-
-// The GETs of /api/admin/<name> that a round makes, by name, so that the test knows which answers to wait for. Right after a sign-in the
-// shell reads the building's name (Shell in src/pages/AdminApp.jsx) and the first tab, Points, lists its points and its providers
-// (PointsView); the tab that the address then opens makes its own (the views in src/admin/views). A name that is listed twice is two
-// requests, as `providers` is on the Providers tab: the sign-in's and the tab's.
-const SIGN_IN_ASKS = ['building', 'points', 'providers']
-const TAB_ASKS = {
-  points: [], // the tab that a sign-in opens already: the address changes nothing
-  providers: ['providers'],
-  history: ['points', 'providers', 'scans'],
-  agent: ['api-keys'],
-  committee: ['building', 'admins'], // the audit log under it asks only once it is opened
-}
-
-/**
- * The answers to the GETs of /api/admin/<name> that start from now on, one answer per name in `names` (a name listed twice waits for two
- * answers). Like `page.waitForResponse`, it must be called before the action that makes the requests.
- */
-function adminAnswers(page, names) {
-  const wanted = new Map()
-  for (const name of names) wanted.set(name, (wanted.get(name) ?? 0) + 1)
-  return Promise.all([...wanted].map(([name, times]) => {
-    let seen = 0
-    return page.waitForResponse((response) =>
-      response.request().method() === 'GET' && new URL(response.url()).pathname === `/api/admin/${name}` && ++seen >= times)
-  }))
-}
-
+// The next round's sign-in loads the page again, and the `page` fixture lets the last round's requests finish before it does (e2e/fixtures.js).
+// That wait is in `page.goto`, not in `adminSignIn`, and it is skipped for the goto below, which changes only the fragment of the address,
+// so nothing waits between the sign-in and the address.
 test('a tab that is opened by its address right after signing in opens', async ({ page }) => {
   for (const [tab, title] of TABS) {
     await page.context().clearCookies() // signed out again: the next sign-in is a first one
-    const answered = adminAnswers(page, [...SIGN_IN_ASKS, ...TAB_ASKS[tab]])
     await adminSignIn(page) // returns as soon as the first screen is there
     await page.goto(`/admin#${tab}`)
     await expect(page.getByRole('heading', { level: 1, name: title }), tab).toBeVisible()
-    await answered // the next round signs in by loading the page again: its requests must have started by then
   }
 })
 

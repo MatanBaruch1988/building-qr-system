@@ -26,11 +26,9 @@ test('a provider whose session the server ended is reported after the next sign-
     sessionEnded && route.request().method() === 'GET'
       ? route.fulfill({ status: 401, json: { error: { code: 'invalid_session', message: 'Session expired' } } })
       : route.continue())
-  const homeLoaded = Promise.all([page.waitForResponse('**/api/my/scans'), page.waitForResponse('**/api/my/device-status')])
   await page.goto('/')
   await signIn(page, PEOPLE.ploni)
   await expect(page.getByRole('heading', { name: /^שלום,/ })).toBeVisible()
-  await homeLoaded // the home screen's requests have started before the page is loaded again: WebKit reports one that starts during a reload as an uncaught error
 
   // The server ended the session: the app finds out when it asks at the next start.
   sessionEnded = true
@@ -66,6 +64,8 @@ test('a committee member whose session the server ended is reported after the ne
     sessionEnded
       ? route.fulfill({ status: 401, json: { error: { code: 'admin_required', message: 'Admin session expired' } } })
       : route.continue())
+  // The sign-in's own request for the providers must be answered by the server before it ends the session, so that the 401 meets the call
+  // of the Providers tab below and not that one.
   const shellLoaded = Promise.all([page.waitForResponse('**/api/admin/points'), page.waitForResponse('**/api/admin/providers')])
   await adminSignIn(page)
   await shellLoaded
