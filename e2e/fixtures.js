@@ -259,6 +259,14 @@ function replacesTheDocument(current, target, base) {
 }
 
 /**
+ * Waits until the page has settled, the same wait as before a navigation (see above). For a test that checks what the page shows once
+ * the answers to its requests have arrived and been drawn, for example that a screen did NOT break: right after a heading appears,
+ * that check could pass before the answer that would break it.
+ * @param {import('@playwright/test').Page} page
+ */
+export const pageSettled = (page) => settle(page, 'the next check')
+
+/**
  * Makes `page.goto` and `page.reload` of this page settle the page first (see above). Same arguments, same results.
  * @param {import('@playwright/test').Page} page
  * @param {string | undefined} baseURL

@@ -7,7 +7,7 @@
 //
 // Both are set up the way they happen on a phone: a value in the phone's storage, and one answer of the server routed by the
 // test. The unit and component tests (tests/components/session.test.js, tests/components/stored-session.test.jsx) cover every shape.
-import { test, expect, he, PEOPLE, signIn, allowConsoleErrors } from './fixtures.js'
+import { test, expect, he, PEOPLE, signIn, allowConsoleErrors, pageSettled } from './fixtures.js'
 import { PROVIDER_TOKEN_PREFIX } from '../shared/contract.js'
 
 // The service worker is not what is tested here, and a page that it controls can send a request round the test's route.
@@ -31,6 +31,7 @@ for (const [what, session] of [
     for (const start of ['the first start', 'the next start']) {
       await page.reload()
       await expect(page.getByRole('heading', { name: he['login.title'] }), start).toBeVisible()
+      await pageSettled(page) // the answers of this start have arrived and been drawn, so a screen that they break would show by now
       await expect(page.getByRole('heading', { name: he['crash.title'] }), start).toHaveCount(0)
       expect(await storedSession(page), start).toBeNull()
     }
