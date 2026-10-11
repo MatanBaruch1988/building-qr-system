@@ -7,7 +7,7 @@
 //
 // Both are set up the way they happen on a phone: a value in the phone's storage, and one answer of the server routed by the
 // test. The unit and component tests (tests/components/session.test.js, tests/components/stored-session.test.jsx) cover every shape.
-import { test, expect, he, PEOPLE, signIn, allowConsoleErrors } from './fixtures.js'
+import { test, expect, he, PEOPLE, signIn, allowConsoleErrors, pageSettled } from './fixtures.js'
 import { PROVIDER_TOKEN_PREFIX } from '../shared/contract.js'
 
 // The service worker is not what is tested here, and a page that it controls can send a request round the test's route.
@@ -20,39 +20,24 @@ const TOKEN = `${PROVIDER_TOKEN_PREFIX}${'a'.repeat(43)}` // shaped like a minte
 
 const storedSession = (page) => page.evaluate((key) => window.localStorage.getItem(key), STORAGE_KEY)
 
-// WebKit refuses a request that starts while the page is being replaced (a reload), and logs it as "Fetch API cannot load ... due
-// to access control checks", which the console guard of the fixtures fails the test on as a page error; a request that is already
-// on its way is cancelled without a word. The app asks for a screen's data from effects that run after the screen is drawn, so a
-// test waits until the screen's requests have started before it reloads: after a page load (the lists of the sign-in screen, the
-// session check), until the network is idle, and after a sign-in (which is not a page load: the network is "idle" already) until
-// the home screen's own request has been answered (the phone's status report starts just before it, in the same moment).
-const settled = (page) => page.waitForLoadState('networkidle')
-
-async function signInAndSettle(page, person) {
-  const visits = page.waitForResponse((response) => response.url().endsWith('/api/my/scans'))
-  await signIn(page, person)
-  await visits
-}
-
 for (const [what, session] of [
   ['no provider details', { token: TOKEN }],
   ['provider details that are null', { token: TOKEN, provider: null }],
 ]) {
   test(`a stored session with ${what} shows the sign-in list, not the broken-screen message, and is gone for the next start`, async ({ page }) => {
     await page.goto('/')
-    await settled(page)
     await page.evaluate(([key, value]) => window.localStorage.setItem(key, value), [STORAGE_KEY, JSON.stringify(session)])
 
     for (const start of ['the first start', 'the next start']) {
       await page.reload()
       await expect(page.getByRole('heading', { name: he['login.title'] }), start).toBeVisible()
-      await settled(page)
+      await pageSettled(page) // the answers of this start have arrived and been drawn, so a screen that they break would show by now
       await expect(page.getByRole('heading', { name: he['crash.title'] }), start).toHaveCount(0)
       expect(await storedSession(page), start).toBeNull()
     }
 
     // Signing in again works, and now the session is one that the app can read back.
-    await signInAndSettle(page, PEOPLE.ploni)
+    await signIn(page, PEOPLE.ploni)
     await expect(page.getByRole('heading', { name: HOME })).toContainText(PEOPLE.ploni.name)
     await page.reload()
     await expect(page.getByRole('heading', { name: HOME })).toContainText(PEOPLE.ploni.name)
@@ -62,7 +47,7 @@ for (const [what, session] of [
 
 test('a session check that answers without provider details keeps the person signed in, on the details they already have', async ({ page }) => {
   await page.goto('/')
-  await signInAndSettle(page, PEOPLE.ploni)
+  await signIn(page, PEOPLE.ploni)
   await expect(page.getByRole('heading', { name: HOME })).toContainText(PEOPLE.ploni.name)
   const before = await storedSession(page)
 
@@ -87,7 +72,7 @@ test('a session check that answers without provider details keeps the person sig
 test('a session that the server has revoked still signs the person out to the sign-in list', async ({ page }) => {
   allowConsoleErrors(page, /status of 401/) // the browser notes the 401 that this test provokes
   await page.goto('/')
-  await signInAndSettle(page, PEOPLE.ploni)
+  await signIn(page, PEOPLE.ploni)
   await expect(page.getByRole('heading', { name: HOME })).toContainText(PEOPLE.ploni.name)
 
   await page.route(SESSION_CHECK, (route) =>
